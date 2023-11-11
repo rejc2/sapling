@@ -346,7 +346,7 @@ InodeCatalogOptions EdenMount::getInodeCatalogOptions(
   return options;
 }
 
-FOLLY_NODISCARD folly::Future<folly::Unit> EdenMount::initialize(
+FOLLY_NODISCARD ImmediateFuture<folly::Unit> EdenMount::initialize(
     OverlayChecker::ProgressCallback&& progressCallback,
     const std::optional<SerializedInodeMap>& takeover,
     const std::optional<MountProtocol>& takeoverMountProtocol) {
@@ -365,12 +365,8 @@ FOLLY_NODISCARD folly::Future<folly::Unit> EdenMount::initialize(
       "EdenMount::initialize");
   return serverState_->getFaultInjector()
       .checkAsync("mount", getPath().view())
-      .semi()
-      .via(getServerThreadPool().get())
       .thenValue([this, parent](auto&&) {
-        return objectStore_->getRootTree(parent, context)
-            .semi()
-            .via(&folly::QueuedImmediateExecutor::instance());
+        return objectStore_->getRootTree(parent, context);
       })
       .thenValue(
           [this,
@@ -431,9 +427,7 @@ FOLLY_NODISCARD folly::Future<folly::Unit> EdenMount::initialize(
         // TODO: It would be nice if the .eden inode was created before
         // allocating inode numbers for the Tree's entries. This would give the
         // .eden directory inode number 2.
-        return setupDotEden(std::move(initTreeNode))
-            .semi()
-            .via(&folly::QueuedImmediateExecutor::instance());
+        return setupDotEden(std::move(initTreeNode));
       })
       .thenTry([this](auto&& result) {
         if (result.hasException()) {
@@ -786,7 +780,7 @@ ImmediateFuture<SetPathObjectIdResultAndTimes> EdenMount::setPathsToObjectIds(
   }
   objects.clear();
 
-  for (auto& [path, objects] : parentToObjectsMap) {
+  for (auto& [path, objs] : parentToObjectsMap) {
     const folly::stop_watch<> stopWatch;
     auto setPathObjectIdTime = std::make_shared<SetPathObjectIdTimes>();
 
@@ -806,16 +800,16 @@ ImmediateFuture<SetPathObjectIdResultAndTimes> EdenMount::setPathsToObjectIds(
 
     // A special case is set root to a tree. Then setPathObjectId is essentially
     // checkout
-    bool setOnRoot = path.empty() && objects.size() == 1 &&
-        objects.at(0).path.empty() &&
-        facebook::eden::ObjectType::TREE == objects.at(0).type;
+    bool setOnRoot = path.empty() && objs.size() == 1 &&
+        objs.at(0).path.empty() &&
+        facebook::eden::ObjectType::TREE == objs.at(0).type;
 
     auto getTargetTreeInodeFuture =
         ensureDirectoryExists(path, ctx->getFetchContext());
 
     std::vector<ImmediateFuture<shared_ptr<TreeEntry>>> getTreeEntryFutures;
     if (!setOnRoot) {
-      for (auto& object : objects) {
+      for (auto& object : objs) {
         ImmediateFuture<shared_ptr<TreeEntry>> getTreeEntryFuture =
             objectStore_->getTreeEntryForObjectId(
                 object.id,
@@ -826,10 +820,10 @@ ImmediateFuture<SetPathObjectIdResultAndTimes> EdenMount::setPathsToObjectIds(
     }
 
     auto getRootTreeFuture = setOnRoot
-        ? objectStore_->getTree(objects.at(0).id, ctx->getFetchContext())
+        ? objectStore_->getTree(objs.at(0).id, ctx->getFetchContext())
         : collectAllSafe(std::move(getTreeEntryFutures))
               .thenValue(
-                  [objects = std::move(objects),
+                  [objs = std::move(objs),
                    caseSensitive = getCheckoutConfig()->getCaseSensitive()](
                       std::vector<shared_ptr<TreeEntry>> entries) {
                     // Make up a fake ObjectId for this tree.
@@ -840,7 +834,7 @@ ImmediateFuture<SetPathObjectIdResultAndTimes> EdenMount::setPathsToObjectIds(
                     Tree::container treeEntries{caseSensitive};
                     for (size_t i = 0; i < entries.size(); ++i) {
                       treeEntries.emplace(
-                          PathComponent{objects.at(i).path.basename()},
+                          PathComponent{objs.at(i).path.basename()},
                           std::move(*entries.at(i)));
                     }
 

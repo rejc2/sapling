@@ -251,11 +251,11 @@ struct SetPathObjectIdObjectAndPath {
         "path={}, objectId={}, type={}",
         path.value(),
         id.asString(),
-        convertTypeToString(type));
+        convertTypeToString());
   }
 
  private:
-  std::string_view convertTypeToString(ObjectType type) const {
+  std::string_view convertTypeToString() const {
     switch (type) {
       case ObjectType::TREE:
         return "tree";
@@ -351,7 +351,7 @@ class EdenMount : public std::enable_shared_from_this<EdenMount> {
    *
    * If takeover data is specified, it is used to initialize the inode map.
    */
-  FOLLY_NODISCARD folly::Future<folly::Unit> initialize(
+  FOLLY_NODISCARD ImmediateFuture<folly::Unit> initialize(
       OverlayChecker::ProgressCallback&& progressCallback = [](auto) {},
       const std::optional<SerializedInodeMap>& takeover = std::nullopt,
       const std::optional<MountProtocol>& takeoverMountProtocol = std::nullopt);

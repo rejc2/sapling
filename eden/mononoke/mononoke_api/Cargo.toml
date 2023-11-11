@@ -23,6 +23,7 @@ bonsai_hg_mapping = { version = "0.1.0", path = "../bonsai_hg_mapping" }
 bonsai_svnrev_mapping = { version = "0.1.0", path = "../bonsai_svnrev_mapping" }
 bonsai_tag_mapping = { version = "0.1.0", path = "../bonsai_tag_mapping" }
 bookmarks = { version = "0.1.0", path = "../bookmarks" }
+bookmarks_cache = { version = "0.1.0", path = "../bookmarks/bookmarks_cache" }
 bookmarks_movement = { version = "0.1.0", path = "../bookmarks/bookmarks_movement" }
 borrowed = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 bounded_traversal = { version = "0.1.0", path = "../common/bounded_traversal" }
@@ -70,8 +71,10 @@ mononoke_repos = { version = "0.1.0", path = "../mononoke_repos" }
 mononoke_types = { version = "0.1.0", path = "../mononoke_types" }
 mutable_counters = { version = "0.1.0", path = "../mutable_counters" }
 mutable_renames = { version = "0.1.0", path = "../mutable_renames" }
+packfile = { version = "0.1.0", path = "../git/packfile" }
 pathmatcher = { version = "0.1.0", path = "../../scm/lib/pathmatcher" }
 phases = { version = "0.1.0", path = "../phases" }
+protocol = { version = "0.1.0", path = "../git/protocol" }
 pushrebase = { version = "0.1.0", path = "../pushrebase" }
 pushrebase_client = { version = "0.1.0", path = "../pushrebase/client" }
 pushrebase_mutation_mapping = { version = "0.1.0", path = "../pushrebase_mutation_mapping" }

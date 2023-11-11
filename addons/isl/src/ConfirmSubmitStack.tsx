@@ -7,6 +7,7 @@
 
 import type {CommitInfo} from './types';
 import type {MutableRefObject} from 'react';
+import type {Snapshot} from 'recoil';
 
 import {Commit} from './Commit';
 import {FlexSpacer} from './ComponentUtils';
@@ -22,6 +23,7 @@ import {VSCodeDivider, VSCodeButton, VSCodeTextField} from '@vscode/webview-ui-t
 import {useState} from 'react';
 import {atom, useRecoilCallback, useRecoilState, useRecoilValue} from 'recoil';
 import {useAutofocusRef} from 'shared/hooks';
+import {unwrap} from 'shared/utils';
 
 import './ConfirmSubmitStack.css';
 
@@ -37,10 +39,20 @@ export type SubmitConfirmationReponse =
 
 type SubmitType = 'submit' | 'submit-all' | 'resubmit';
 
+export function shouldShowSubmitStackConfirmation(snapshot: Snapshot): boolean {
+  const provider = snapshot.getLoadable(codeReviewProvider).valueMaybe();
+  const shouldShowConfirmation = snapshot.getLoadable(confirmShouldSubmitEnabledAtom).valueMaybe();
+  return (
+    shouldShowConfirmation === true &&
+    // if you can't submit as draft, no need to show the interstitial
+    provider?.supportSubmittingAsDraft != null
+  );
+}
+
 /**
  * Show a modal to confirm if you want to bulk submit a given stack of commits.
  * Allows you to set if you want to submit as a draft or not,
- * and provide an update message (TODO).
+ * and provide an update message.
  *
  * If your code review provider does not support submitting as draft,
  * this function returns true immediately.
@@ -51,25 +63,20 @@ export function useShowConfirmSubmitStack() {
   useRecoilValue(confirmShouldSubmitEnabledAtom); // ensure this config is loaded ahead of clicking this
 
   return useRecoilCallback(({snapshot}) => async (mode: SubmitType, stack: Array<CommitInfo>) => {
-    const provider = snapshot.getLoadable(codeReviewProvider).valueMaybe();
-    const shouldShowConfirmation = snapshot
-      .getLoadable(confirmShouldSubmitEnabledAtom)
-      .valueMaybe();
-    if (
-      !shouldShowConfirmation ||
-      provider?.supportSubmittingAsDraft == null // if you can't submit as draft, no need to show the interstitial
-    ) {
+    if (!shouldShowSubmitStackConfirmation(snapshot)) {
       const draft = snapshot.getLoadable(submitAsDraft).valueMaybe();
       return {submitAsDraft: draft ?? false};
     }
 
-    const replace = {$numCommits: String(stack.length)};
+    const provider = snapshot.getLoadable(codeReviewProvider).valueMaybe();
+
+    const replace = {$numCommits: String(stack.length), $cmd: unwrap(provider).submitCommandName()};
     const title =
       mode === 'submit'
-        ? t('Submit $numCommits commits for review?', {replace})
+        ? t('Submitting $numCommits commits for review with $cmd', {replace})
         : mode === 'resubmit'
-        ? t('Resubmit $numCommits commits that already have diffs for review?', {replace})
-        : t('Submit all $numCommits commits in this stack for review?', {replace});
+        ? t('Submitting new versions of $numCommits commits for review with $cmd', {replace})
+        : t('Submitting all $numCommits commits in this stack for review with $cmd', {replace});
     const response = await showModal<SubmitConfirmationReponse>({
       type: 'custom',
       title,

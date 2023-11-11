@@ -63,6 +63,7 @@ use tokio::task;
 use unodes::RootUnodeManifestId;
 
 pub use crate::git_repo::create_git_repo_on_disk;
+use crate::logging::run_and_log_stats_to_scuba;
 pub use crate::partial_commit_graph::build_partial_commit_graph_for_export;
 use crate::partial_commit_graph::ChangesetParents;
 pub use crate::partial_commit_graph::ExportPathInfo;
@@ -122,6 +123,7 @@ pub async fn rewrite_partial_changesets(
             let blobstore = source_repo_ctx.blob_repo().repo_blobstore_arc();
             async move {
                 task::spawn(async move {
+                    let ctx = source_repo_ctx.ctx();
                     let export_paths = get_export_paths_for_changeset(&cs, &export_paths).await?;
                     let bcs = cs
                         .id()
@@ -152,12 +154,16 @@ pub async fn rewrite_partial_changesets(
                         return Err(anyhow!("No relevant file changes in changeset"));
                     };
 
-                    let renamed_implicit_deletes = get_renamed_implicit_deletes(
-                        source_repo_ctx.ctx(),
-                        file_changes,
-                        bcs.parents(),
-                        multi_mover,
-                        source_repo_ctx.repo(),
+                    let renamed_implicit_deletes = run_and_log_stats_to_scuba(
+                        ctx,
+                        "Getting renamed implicit deletes",
+                        get_renamed_implicit_deletes(
+                            source_repo_ctx.ctx(),
+                            file_changes,
+                            bcs.parents(),
+                            multi_mover,
+                            source_repo_ctx.repo(),
+                        ),
                     )
                     .await?;
 
@@ -184,39 +190,51 @@ pub async fn rewrite_partial_changesets(
                     let ctx: &CoreContext = source_repo_ctx.ctx();
                     let multi_mover = build_multi_mover_for_changeset(ctx.logger(), &export_paths)?;
                     let (new_bcs, remapped_parents, export_paths_not_created) =
-                        create_bonsai_for_new_repo(
-                            &source_repo_ctx,
-                            multi_mover,
-                            changeset_parents,
-                            remapped_parents,
-                            changeset,
-                            &export_paths,
-                            export_paths_not_created,
-                            implicit_deletes,
+                        run_and_log_stats_to_scuba(
+                            ctx,
+                            "Creating bonsai for temp repo",
+                            create_bonsai_for_new_repo(
+                                &source_repo_ctx,
+                                multi_mover,
+                                changeset_parents,
+                                remapped_parents,
+                                changeset,
+                                &export_paths,
+                                export_paths_not_created,
+                                implicit_deletes,
+                            ),
                         )
                         .await?;
 
                     let new_bcs_id = new_bcs.get_changeset_id();
 
-                    upload_commits(
-                        source_repo_ctx.ctx(),
-                        vec![new_bcs],
-                        source_repo_ctx.repo(),
-                        temp_repo_ctx.repo(),
+                    run_and_log_stats_to_scuba(
+                        ctx,
+                        "Upload commits to temp repo",
+                        upload_commits(
+                            source_repo_ctx.ctx(),
+                            vec![new_bcs],
+                            source_repo_ctx.repo(),
+                            temp_repo_ctx.repo(),
+                        ),
                     )
                     .await?;
 
-                    temp_repo_ctx
-                        .repo()
-                        .repo_derived_data()
-                        .derive::<RootGitDeltaManifestId>(ctx, new_bcs_id)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "Error in deriving RootGitDeltaManifestId for Bonsai commit {:?}",
-                                new_bcs_id
-                            )
-                        })?;
+                    run_and_log_stats_to_scuba(
+                        ctx,
+                        "Deriving RootGitDeltaManifestId",
+                        temp_repo_ctx
+                            .repo()
+                            .repo_derived_data()
+                            .derive::<RootGitDeltaManifestId>(ctx, new_bcs_id),
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Error in deriving RootGitDeltaManifestId for Bonsai commit {:?}",
+                            new_bcs_id
+                        )
+                    })?;
 
                     if let Some(progress_bar) = mb_progress_bar {
                         progress_bar.inc(1);
@@ -301,7 +319,13 @@ async fn create_bonsai_for_new_repo<'a>(
             // Since we're building a history using all changesets that
             // affect the exported directories, any file being copied
             // should always exist in the new parent.
-            //
+
+            // Get all the export paths under which the modified file is.
+            let matched_export_paths = export_paths
+                .iter()
+                .filter(|p| p.is_prefix_of(new_path))
+                .collect::<HashSet<_>>();
+
             // If this isn't done, it might not be possible to rewrite the
             // commit to the new repo, because the changeset referenced in
             // its `copy_from` field will not have been remapped.
@@ -321,6 +345,7 @@ async fn create_bonsai_for_new_repo<'a>(
                 // This is copying from a path that's being exported, so we can
                 // reference the new parent in the `copy_from` field.
                 let is_old_path_exported = export_paths.iter().any(|p| p.is_prefix_of(old_path));
+
                 let new_parent_cs_id = orig_parent_ids.first();
 
                 if new_parent_cs_id.is_some() && is_old_path_exported {
@@ -339,15 +364,9 @@ async fn create_bonsai_for_new_repo<'a>(
 
                     // Check if the file being copied is creating any export
                     // path.
-                    let created_export_paths = export_paths_not_created
-                        .iter()
-                        .filter(|p| p.is_prefix_of(new_path))
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    // Remove the paths from the `export_paths_not_created` set.
-                    let created_export_paths = created_export_paths
-                        .iter()
-                        .map(|p| export_paths_not_created.take(p).unwrap())
+                    let exp_paths_not_created_refs = export_paths_not_created.iter().collect();
+                    let created_export_paths = matched_export_paths
+                        .intersection(&exp_paths_not_created_refs)
                         .collect::<Vec<_>>();
 
                     for exp_p in created_export_paths {
@@ -372,6 +391,13 @@ async fn create_bonsai_for_new_repo<'a>(
                     *tracked_fc = tracked_fc.with_new_copy_from(None);
                 };
             };
+            // If any of the matched export paths from the set of the
+            // ones that haven't shown up yet (weren't created), to avoid
+            // printing false positive warnings to the user about
+            // `copy_from` references.
+            matched_export_paths.into_iter().for_each(|p| {
+                export_paths_not_created.take(p);
+            });
         };
     });
 

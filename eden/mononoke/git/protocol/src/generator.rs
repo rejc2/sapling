@@ -14,8 +14,8 @@ use async_stream::try_stream;
 use blobstore::Loadable;
 use bonsai_git_mapping::BonsaiGitMappingRef;
 use bonsai_tag_mapping::BonsaiTagMappingRef;
-use bookmarks::Bookmark;
 use bookmarks::BookmarkCategory;
+use bookmarks::BookmarkKey;
 use bookmarks::BookmarkKind;
 use bookmarks::BookmarkPagination;
 use bookmarks::BookmarkPrefix;
@@ -50,6 +50,7 @@ use crate::types::DeltaInclusion;
 use crate::types::PackItemStreamRequest;
 use crate::types::PackItemStreamResponse;
 use crate::types::RequestedRefs;
+use crate::types::RequestedSymrefs;
 use crate::types::TagInclusion;
 
 const HEAD_REF: &str = "HEAD";
@@ -66,13 +67,16 @@ pub trait Repo = RepoIdentityRef
     + Sync;
 
 /// Get the bookmarks (branches, tags) and their corresponding commits
-/// for the given repo based on the request parameters
+/// for the given repo based on the request parameters. If the request
+/// specifies a predefined mapping of an existing or new bookmark to a
+/// commit, include that in the output as well
 async fn bookmarks(
     ctx: &CoreContext,
     repo: &impl Repo,
     request: &PackItemStreamRequest,
-) -> Result<FxHashMap<Bookmark, ChangesetId>> {
-    repo.bookmarks()
+) -> Result<FxHashMap<BookmarkKey, ChangesetId>> {
+    let mut bookmarks = repo
+        .bookmarks()
         .list(
             ctx.clone(),
             Freshness::MostRecent,
@@ -88,21 +92,32 @@ async fn bookmarks(
             async move {
                 let result = match refs {
                     RequestedRefs::Included(refs) if refs.contains(&name) => {
-                        Some((bookmark, cs_id))
+                        Some((bookmark.into_key(), cs_id))
                     }
                     RequestedRefs::Excluded(refs) if !refs.contains(&name) => {
-                        Some((bookmark, cs_id))
+                        Some((bookmark.into_key(), cs_id))
                     }
-                    RequestedRefs::IncludedWithValue(refs) => {
-                        refs.get(&name).map(|cs_id| (bookmark, cs_id.clone()))
-                    }
+                    RequestedRefs::IncludedWithValue(refs) => refs
+                        .get(&name)
+                        .map(|cs_id| (bookmark.into_key(), cs_id.clone())),
                     _ => None,
                 };
                 anyhow::Ok(result)
             }
         })
         .try_collect::<FxHashMap<_, _>>()
-        .await
+        .await?;
+    // In case the requested refs include specified refs with value and those refs are not
+    // bookmarks known at the server, we need to manually include them in the output
+    if let RequestedRefs::IncludedWithValue(ref ref_value_map) = request.requested_refs {
+        for (ref_name, ref_value) in ref_value_map {
+            bookmarks.insert(
+                BookmarkKey::with_name(ref_name.as_str().try_into()?),
+                ref_value.clone(),
+            );
+        }
+    }
+    Ok(bookmarks)
 }
 
 /// Get the count of tree, blob and commit objects that will be included in the packfile/bundle
@@ -112,7 +127,7 @@ async fn bookmarks(
 async fn object_count(
     ctx: &CoreContext,
     repo: &impl Repo,
-    bookmarks: &FxHashMap<Bookmark, ChangesetId>,
+    bookmarks: &FxHashMap<BookmarkKey, ChangesetId>,
     request: &PackItemStreamRequest,
 ) -> Result<(usize, FxHashSet<ObjectId>)> {
     // Get all the commits that are reachable from the bookmarks
@@ -197,13 +212,13 @@ async fn object_count(
 async fn refs_to_include(
     ctx: &CoreContext,
     repo: &impl Repo,
-    bookmarks: &FxHashMap<Bookmark, ChangesetId>,
+    bookmarks: &FxHashMap<BookmarkKey, ChangesetId>,
     tag_inclusion: TagInclusion,
 ) -> Result<FxHashMap<String, ObjectId>> {
     stream::iter(bookmarks.iter())
         .map(|(bookmark, cs_id)| async move {
-            if bookmark.key().is_tag() && tag_inclusion == TagInclusion::AsIs {
-                let tag_name = bookmark.key().name().to_string();
+            if bookmark.is_tag() && tag_inclusion == TagInclusion::AsIs {
+                let tag_name = bookmark.name().to_string();
                 let entry = repo
                     .bonsai_tag_mapping()
                     .get_entry_by_tag_name(tag_name.clone())
@@ -216,7 +231,7 @@ async fn refs_to_include(
                     })?;
                 if let Some(entry) = entry {
                     let git_objectid = entry.tag_hash.to_object_id()?;
-                    let ref_name = format!("refs/{}", bookmark.key);
+                    let ref_name = format!("refs/{}", bookmark);
                     return anyhow::Ok((ref_name, git_objectid));
                 }
             };
@@ -239,7 +254,7 @@ async fn refs_to_include(
                         git_sha1.to_hex()
                     )
                 })?;
-            let ref_name = format!("refs/{}", bookmark.key);
+            let ref_name = format!("refs/{}", bookmark);
             anyhow::Ok((ref_name, git_objectid))
         })
         .boxed()
@@ -250,40 +265,74 @@ async fn refs_to_include(
 
 /// The HEAD ref in Git doesn't have a direct counterpart in Mononoke bookmarks and is instead
 /// stored in the git_symbolic_refs. Fetch the mapping and add them to the list of refs to include
-async fn include_head_ref(
+async fn include_symrefs(
     repo: &impl Repo,
+    requested_symrefs: RequestedSymrefs,
     refs_to_include: &mut FxHashMap<String, ObjectId>,
 ) -> Result<()> {
-    // Get the branch that the HEAD symref points to
-    let head_ref = repo
-        .git_symbolic_refs()
-        .get_ref_by_symref(HEAD_REF.to_string())
-        .await
-        .with_context(|| {
-            format!(
-                "Error in getting HEAD reference for repo {:?}",
-                repo.repo_identity().name()
-            )
-        })?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "HEAD reference not found for repo {:?}",
-                repo.repo_identity().name()
-            )
-        })?;
-    // Get the commit id pointed by the HEAD reference
-    let head_commit_id = refs_to_include
-        .get(&head_ref.ref_name_with_type())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "HEAD reference points to branch/tag {} which does not exist. Known refs: {:?}",
-                &head_ref.ref_name_with_type(),
-                refs_to_include.keys()
-            )
-        })?;
+    let symref_commit_mapping = match requested_symrefs {
+        RequestedSymrefs::IncludeHead => {
+            // Get the branch that the HEAD symref points to
+            let head_ref = repo
+                .git_symbolic_refs()
+                .get_ref_by_symref(HEAD_REF.to_string())
+                .await
+                .with_context(|| {
+                    format!(
+                        "Error in getting HEAD reference for repo {:?}",
+                        repo.repo_identity().name()
+                    )
+                })?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "HEAD reference not found for repo {:?}",
+                        repo.repo_identity().name()
+                    )
+                })?;
+            // Get the commit id pointed by the HEAD reference
+            let head_commit_id = refs_to_include
+                .get(&head_ref.ref_name_with_type())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "HEAD reference points to branch/tag {} which does not exist. Known refs: {:?}",
+                        &head_ref.ref_name_with_type(),
+                        refs_to_include.keys()
+                    )
+                })?;
+            FxHashMap::from_iter([(head_ref.symref_name, head_commit_id.clone())])
+        }
+        RequestedSymrefs::IncludeAll => {
+            // Get all the symrefs with the branches/tags that they point to
+            let symref_entries = repo
+                .git_symbolic_refs()
+                .list_all_symrefs()
+                .await
+                .with_context(|| {
+                    format!(
+                        "Error in getting all symrefs for repo {:?}",
+                        repo.repo_identity().name()
+                    )
+                })?;
+            // Get the commit ids pointed by each symref
+            symref_entries.into_iter().map(|entry| {
+                let ref_commit_id = refs_to_include
+                    .get(&entry.ref_name_with_type())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "{} reference points to branch/tag {} which does not exist. Known refs: {:?}",
+                            &entry.symref_name,
+                            &entry.ref_name_with_type(),
+                            refs_to_include.keys()
+                        )
+                    })?;
+                Ok((entry.symref_name, ref_commit_id.clone()))
+            }).collect::<Result<FxHashMap<_, _>>>()?
+        }
+        RequestedSymrefs::ExcludeAll => FxHashMap::default(),
+    };
 
-    // Add the HEAD reference -> commit id mapping
-    refs_to_include.insert(head_ref.symref_name.clone(), head_commit_id.clone());
+    // Add the symref -> commit mapping to the refs_to_include map
+    refs_to_include.extend(symref_commit_mapping.into_iter());
     Ok(())
 }
 
@@ -307,7 +356,7 @@ async fn packfile_entry(
             // Can't use the delta if no delta variant is present in the entry. Additionally, if this object has been
             // duplicated across multiple commits in the pack, then we can't use it as a delta due to the potential of
             // a delta cycle
-            let mut use_delta = !entry.is_delta() && !is_duplicated;
+            let mut use_delta = entry.is_delta() && !is_duplicated;
             // Get the delta with the shortest size. In case of shallow clones, we would also want to validate if the
             // base of the delta is present in the pack or at the client.
             // TODO(rajshar): Implement delta support in shallow clones
@@ -318,7 +367,7 @@ async fn packfile_entry(
             let shortest_delta = entry.deltas.first();
             // Only use the delta if the size of the delta is less than inclusion_threshold% the size of the actual object
             use_delta &= shortest_delta.map_or(false, |delta| {
-                (delta.instructions_uncompressed_size as f64)
+                (delta.instructions_compressed_size as f64)
                     < (entry.full.size as f64) * inclusion_threshold as f64
             });
             use_delta
@@ -421,7 +470,7 @@ async fn blob_and_tree_packfile_items<'a>(
 async fn blob_and_tree_packfile_stream<'a>(
     ctx: &'a CoreContext,
     repo: &'a impl Repo,
-    bookmarks: &FxHashMap<Bookmark, ChangesetId>,
+    bookmarks: &FxHashMap<BookmarkKey, ChangesetId>,
     request: &PackItemStreamRequest,
     duplicated_objects: FxHashSet<ObjectId>,
 ) -> Result<BoxStream<'a, Result<PackfileItem>>> {
@@ -434,6 +483,18 @@ async fn blob_and_tree_packfile_stream<'a>(
         )
         .await
         .context("Error in getting ancestors difference")?;
+
+    // If the output stream can contain only offset deltas, then the commits must be ordered from root to
+    // head since the base of each delta should appear before the delta object. The ancestors difference
+    // stream will return the commits in head to root order so we need to reverse it. Note that this impacts
+    // performance and forces us to hold the entire commit range in memory.
+    let target_commits = if request.delta_inclusion.include_only_offset_deltas() {
+        let mut collected_commits = target_commits.try_collect::<Vec<_>>().await?;
+        collected_commits.reverse();
+        stream::iter(collected_commits.into_iter().map(anyhow::Ok)).boxed()
+    } else {
+        target_commits
+    };
 
     let delta_inclusion = request.delta_inclusion;
     let duplicated_objects = Arc::new(duplicated_objects);
@@ -458,7 +519,7 @@ async fn blob_and_tree_packfile_stream<'a>(
 async fn commit_packfile_stream<'a>(
     ctx: &'a CoreContext,
     repo: &'a impl Repo,
-    bookmarks: &FxHashMap<Bookmark, ChangesetId>,
+    bookmarks: &FxHashMap<BookmarkKey, ChangesetId>,
     request: &PackItemStreamRequest,
 ) -> Result<BoxStream<'a, Result<PackfileItem>>> {
     let target_commits = repo
@@ -507,7 +568,7 @@ async fn commit_packfile_stream<'a>(
 async fn tag_packfile_stream<'a>(
     ctx: &'a CoreContext,
     repo: &'a impl Repo,
-    bookmarks: &FxHashMap<Bookmark, ChangesetId>,
+    bookmarks: &FxHashMap<BookmarkKey, ChangesetId>,
 ) -> Result<(BoxStream<'a, Result<PackfileItem>>, usize)> {
     // Since we need the count of items, we would have to consume the stream either for counting or collecting the items.
     // This is fine, since unlike commits, blobs and trees there will only be thousands of tags in the worst case.
@@ -516,8 +577,8 @@ async fn tag_packfile_stream<'a>(
             // If the bookmark is actually a tag but there is no mapping in bonsai_tag_mapping table for it, then it
             // means that its a simple tag and won't be included in the packfile as an object. If a mapping exists, then
             // it will be included in the packfile as a raw Git object
-            if bookmark.key().is_tag() {
-                let tag_name = bookmark.key().name().to_string();
+            if bookmark.is_tag() {
+                let tag_name = bookmark.name().to_string();
                 repo.bonsai_tag_mapping()
                     .get_entry_by_tag_name(tag_name.clone())
                     .await
@@ -581,8 +642,8 @@ pub async fn generate_pack_item_stream<'a>(
         .await
         .context("Error while determining refs to include in the pack")?;
 
-    // STEP 2.5: Adding the HEAD reference -> commit id mapping to refs_to_include map
-    include_head_ref(repo, &mut refs_to_include)
+    // STEP 2.5: Add symrefs to the refs_to_include map based on the request parameters
+    include_symrefs(repo, request.requested_symrefs, &mut refs_to_include)
         .await
         .context("Error while adding HEAD ref to included set of refs")?;
 

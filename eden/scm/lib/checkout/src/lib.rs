@@ -12,7 +12,6 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
 use std::path::Path;
-#[cfg(windows)]
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -23,6 +22,7 @@ use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::format_err;
 use anyhow::Context;
+use anyhow::Error;
 use anyhow::Result;
 use async_runtime::try_block_unless_interrupted as block_on;
 use futures::stream;
@@ -39,12 +39,13 @@ use manifest_tree::TreeManifest;
 use minibytes::Bytes;
 use parking_lot::Mutex;
 use pathmatcher::AlwaysMatcher;
+use pathmatcher::DynMatcher;
 use pathmatcher::Matcher;
 use pathmatcher::UnionMatcher;
 use progress_model::ProgressBar;
 use progress_model::Registry;
 use repo::repo::Repo;
-use storemodel::ReadFileContents;
+use storemodel::FileStore;
 use tracing::debug;
 use tracing::instrument;
 use tracing::warn;
@@ -83,8 +84,6 @@ use status::Status;
 use tokio::runtime::Handle;
 
 const VFS_BATCH_SIZE: usize = 100;
-
-type ArcMatcher = Arc<dyn Matcher + Sync + Send>;
 
 /// Contains lists of files to be removed / updated during checkout.
 pub struct CheckoutPlan {
@@ -130,6 +129,7 @@ pub struct CheckoutStats {
     updated: AtomicUsize,
     meta_updated: AtomicUsize,
     written_bytes: AtomicUsize,
+    pub remove_failed: Vec<(RepoPathBuf, Error)>,
 }
 
 const DEFAULT_CONCURRENCY: usize = 16;
@@ -192,10 +192,11 @@ impl CheckoutPlan {
     pub fn add_progress(&mut self, path: &Path) -> Result<()> {
         let vfs = &self.checkout.vfs;
         let progress = if path.exists() {
+            debug!(?path, "loading progress");
             match CheckoutProgress::load(path, vfs.clone()) {
                 Ok(p) => p,
-                Err(e) => {
-                    debug!("Failed to load CheckoutProgress with {:?}", e);
+                Err(err) => {
+                    warn!(?err, "failed loading progress");
                     CheckoutProgress::new(path, vfs.clone())?
                 }
             }
@@ -222,27 +223,26 @@ impl CheckoutPlan {
     /// This function fails fast and returns error when first checkout operation fails.
     /// Pending storage futures are dropped when error is returned
     #[instrument(skip_all, err)]
-    pub fn apply_store(&self, store: &dyn ReadFileContents) -> Result<CheckoutStats> {
+    pub fn apply_store(&self, store: &dyn FileStore) -> Result<CheckoutStats> {
         let vfs = &self.checkout.vfs;
-        debug!(
-            "Skipping checking out {} files since they're already written",
-            self.update_content.len() - self.filtered_update_content.len()
-        );
+
+        let skipped_count = self.update_content.len() - self.filtered_update_content.len();
+        debug!(skipped_count, "skipped files based on progress");
+
         let total = self.filtered_update_content.len() + self.remove.len() + self.update_meta.len();
         let bar = &ProgressBar::new("Updating", total as u64, "files");
         Registry::main().register_progress_bar(bar);
         let async_vfs = &AsyncVfsWriter::spawn_new(vfs.clone(), 16);
 
         block_on(async move {
-            let stats = CheckoutStats::default();
-            let stats_ref = &stats;
+            let mut stats = CheckoutStats::default();
 
             let remove_files = stream::iter(self.remove.clone().into_iter())
                 .chunks(VFS_BATCH_SIZE)
                 .map(|paths| Self::remove_files(async_vfs, &stats, paths, bar));
             let remove_files = remove_files.buffer_unordered(self.checkout.concurrency);
 
-            Self::process_work_stream(remove_files).await?;
+            stats.remove_failed = Self::process_vec_work_stream(remove_files).await?;
 
             let actions: HashMap<_, _> = self
                 .filtered_update_content
@@ -251,7 +251,7 @@ impl CheckoutPlan {
                 .collect();
             let keys: Vec<_> = actions.keys().cloned().collect();
 
-            let data_stream = store.read_file_contents(keys).await;
+            let data_stream = store.get_content_stream(keys).await;
 
             let update_content = data_stream.map(|result| -> Result<_> {
                 let (data, key) = result?;
@@ -264,6 +264,7 @@ impl CheckoutPlan {
             });
 
             let progress_ref = self.progress.as_ref();
+            let stats_ref = &stats;
             let update_content = update_content
                 .chunks(VFS_BATCH_SIZE)
                 .map(|actions| async move {
@@ -305,12 +306,12 @@ impl CheckoutPlan {
         })
     }
 
-    pub async fn apply_store_dry_run(&self, store: &dyn ReadFileContents) -> Result<(usize, u64)> {
+    pub async fn apply_store_dry_run(&self, store: &dyn FileStore) -> Result<(usize, u64)> {
         let keys = self
             .filtered_update_content
             .iter()
             .map(|(p, u)| Key::new(p.clone(), u.content_hgid.clone()));
-        let mut stream = store.read_file_contents(keys.collect()).await;
+        let mut stream = store.get_content_stream(keys.collect()).await;
         let (mut count, mut size) = (0, 0);
         while let Some(result) = stream.next().await {
             let (bytes, _) = result?;
@@ -334,7 +335,7 @@ impl CheckoutPlan {
     pub fn check_unknown_files(
         &self,
         manifest: &impl Manifest,
-        store: &dyn ReadFileContents,
+        store: &dyn FileStore,
         tree_state: &mut TreeState,
         status: &Status,
     ) -> Result<Vec<RepoPathBuf>> {
@@ -403,7 +404,7 @@ impl CheckoutPlan {
 
         block_on(async move {
             let check_content = store
-                .read_file_contents(check_content)
+                .get_content_stream(check_content)
                 .await
                 .chunks(VFS_BATCH_SIZE)
                 .map(|v| {
@@ -494,9 +495,10 @@ impl CheckoutPlan {
 
         if let Some(progress) = progress {
             progress.lock().record_writes(paths);
-            fail::fail_point!("checkout-post-progress", |_| { bail!("oh no!") });
         }
         bar.increase_position(count as u64);
+
+        fail::fail_point!("checkout-post-progress", |_| { bail!("oh no!") });
 
         Ok(())
     }
@@ -506,12 +508,12 @@ impl CheckoutPlan {
         stats: &CheckoutStats,
         paths: Vec<RepoPathBuf>,
         bar: &Arc<ProgressBar>,
-    ) -> Result<()> {
+    ) -> Result<Vec<(RepoPathBuf, Error)>> {
         let count = paths.len();
-        async_vfs.remove_batch(paths).await?;
+        let failed = async_vfs.remove_batch(paths).await?;
         stats.removed.fetch_add(count, Ordering::Relaxed);
         bar.increase_position(count as u64);
-        Ok(())
+        Ok(failed)
     }
 
     async fn set_exec_on_file(
@@ -802,6 +804,12 @@ pub fn checkout(
     let (sparse_matcher, sparse_change) =
         create_sparse_matchers(repo, wc.vfs(), &current_mf.read(), &target_mf.read())?;
 
+    let progress_path: Option<PathBuf> = if repo.config().get_or_default("checkout", "resumable")? {
+        Some(wc.dot_hg_path().join("updateprogress"))
+    } else {
+        None
+    };
+
     // 1. Create the plan
     let plan = create_plan(
         wc.vfs(),
@@ -810,6 +818,7 @@ pub fn checkout(
         &target_mf.read(),
         &sparse_matcher,
         sparse_change,
+        progress_path,
     )?;
 
     // 2. Check if status is dirty
@@ -848,8 +857,18 @@ pub fn checkout(
         );
     }
 
+    let updatestate_path = wc.dot_hg_path().join("updatestate");
+
+    util::file::atomic_write(&updatestate_path, |f| {
+        write!(f, "{}", target_commit.to_hex())
+    })?;
+
     // 3. Execute the plan
-    plan.apply_store(&repo.file_store()?)?;
+    let apply_result = plan.apply_store(&repo.file_store()?)?;
+
+    for (path, err) in apply_result.remove_failed {
+        let _ = write!(io.error(), "update failed to remove {}: {:#}!\n", path, err);
+    }
 
     // 4. Update the treestate parents, dirstate
     wc.set_parents(&mut [target_commit].iter())?;
@@ -862,6 +881,8 @@ pub fn checkout(
         None,
     )?;
 
+    util::file::unlink_if_exists(&updatestate_path)?;
+
     Ok(plan.stats())
 }
 
@@ -870,7 +891,7 @@ fn create_sparse_matchers(
     vfs: &VFS,
     current_mf: &TreeManifest,
     target_mf: &TreeManifest,
-) -> Result<(ArcMatcher, Option<(ArcMatcher, ArcMatcher)>)> {
+) -> Result<(DynMatcher, Option<(DynMatcher, DynMatcher)>)> {
     let dot_path = repo.dot_hg_path().to_owned();
     if util::file::exists(dot_path.join("sparse"))?.is_none() {
         return Ok((Arc::new(AlwaysMatcher::new()), None));
@@ -902,7 +923,7 @@ fn create_sparse_matchers(
         (matcher, 0)
     });
 
-    let sparse_matcher: ArcMatcher = Arc::new(UnionMatcher::new(vec![
+    let sparse_matcher: DynMatcher = Arc::new(UnionMatcher::new(vec![
         current_sparse.clone(),
         target_sparse.clone(),
     ]));
@@ -921,7 +942,8 @@ fn create_plan(
     current_mf: &TreeManifest,
     target_mf: &TreeManifest,
     matcher: &dyn Matcher,
-    sparse_change: Option<(ArcMatcher, ArcMatcher)>,
+    sparse_change: Option<(DynMatcher, DynMatcher)>,
+    progress_path: Option<PathBuf>,
 ) -> Result<CheckoutPlan> {
     let diff = Diff::new(current_mf, target_mf, &matcher)?;
     let mut actions = ActionMap::from_diff(diff)?;
@@ -931,10 +953,11 @@ fn create_plan(
             actions.with_sparse_profile_change(old_sparse, new_sparse, current_mf, target_mf)?;
     }
     let checkout = Checkout::from_config(vfs.clone(), &config)?;
-    let plan = checkout.plan_action_map(actions);
-    // if let Some(progress_path) = progress_path {
-    //     plan.add_progress(progress_path.as_path()).map_pyerr(py)?;
-    // }
+    let mut plan = checkout.plan_action_map(actions);
+
+    if let Some(progress_path) = progress_path {
+        plan.add_progress(&progress_path)?;
+    }
 
     Ok(plan)
 }
@@ -1300,18 +1323,22 @@ mod test {
     struct DummyFileContentStore;
 
     #[async_trait::async_trait]
-    impl ReadFileContents for DummyFileContentStore {
-        async fn read_file_contents(&self, keys: Vec<Key>) -> BoxStream<Result<(Bytes, Key)>> {
+    impl FileStore for DummyFileContentStore {
+        async fn get_content_stream(&self, keys: Vec<Key>) -> BoxStream<Result<(Bytes, Key)>> {
             stream::iter(keys)
                 .map(|key| Ok((hgid_file(&key.hgid).into(), key)))
                 .boxed()
         }
 
-        async fn read_rename_metadata(
+        async fn get_rename_stream(
             &self,
             _keys: Vec<Key>,
         ) -> BoxStream<anyhow::Result<(Key, Option<Key>)>> {
             stream::empty().boxed()
+        }
+
+        fn get_local_content(&self, _key: &Key) -> anyhow::Result<Option<minibytes::Bytes>> {
+            Ok(None)
         }
     }
 

@@ -17,6 +17,7 @@ use std::sync::atomic::Ordering::AcqRel;
 use std::time::Duration;
 use std::time::SystemTime;
 
+use clientinfo::CLIENT_INFO_HEADER;
 use curl::easy::Easy2;
 use curl::easy::HttpVersion;
 use curl::easy::List;
@@ -539,7 +540,7 @@ impl Request {
 
     pub fn set_client_info(&mut self, client_info: &Option<String>) -> &mut Self {
         if let Some(info) = client_info {
-            self.set_header("X-Client-Info", info);
+            self.set_header(CLIENT_INFO_HEADER, info);
         }
         self
     }
@@ -750,15 +751,28 @@ impl Request {
             None => {}
         }
 
-        // Windows enables ssl revocation checking by default, which doesn't work inside the
-        // datacenter.
         #[cfg(windows)]
-        {
-            use curl::easy::SslOpt;
-            let mut ssl_opts = SslOpt::new();
-            ssl_opts.no_revoke(true);
-            easy.ssl_options(&ssl_opts)?;
-        }
+        unsafe {
+            // Call directly since curl crate doesn't expose CURLSSLOPT_NATIVE_CA option.
+            let rc = curl_sys::curl_easy_setopt(
+                easy.raw(),
+                curl_sys::CURLOPT_SSL_OPTIONS,
+                // Windows enables ssl revocation checking by default, which doesn't work inside the
+                // datacenter.
+                curl_sys::CURLSSLOPT_NO_REVOKE |
+                // When using openssl, this imports CAs from Windows cert store.
+                curl_sys::CURLSSLOPT_NATIVE_CA,
+            );
+            if rc == curl_sys::CURLE_OK {
+                Ok(())
+            } else {
+                let mut err = curl::Error::new(rc);
+                if let Some(msg) = easy.take_error_buf() {
+                    err.set_extra(msg);
+                }
+                Err(err)
+            }
+        }?;
 
         if let Some(cainfo) = self.cainfo {
             easy.cainfo(cainfo)?;
@@ -1196,7 +1210,10 @@ mod tests {
 
         // Make sure convert_cert defaults to cfg!(windows) and gets
         // passed along to request.
-        assert_eq!(cfg!(windows), client.get(url.clone()).convert_cert);
+        assert_eq!(
+            curl::Version::get().ssl_version() == Some("Schannel"),
+            client.get(url.clone()).convert_cert
+        );
 
         let client = HttpClient::from_config(Config {
             convert_cert: true,

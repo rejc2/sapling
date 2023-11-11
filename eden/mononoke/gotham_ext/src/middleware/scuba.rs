@@ -27,16 +27,12 @@ use scuba_ext::ScubaValue;
 use time_ext::DurationExt;
 
 use super::HeadersDuration;
-use super::RequestLoad;
 use crate::middleware::MetadataState;
 use crate::middleware::Middleware;
 use crate::middleware::PostResponseCallbacks;
 use crate::middleware::PostResponseInfo;
 use crate::response::HeadersMeta;
 use crate::state_ext::StateExt;
-
-/// HTTP header used to correlate the request with the client-side logging
-const CLIENT_CORRELATOR: &str = "x-client-correlator";
 
 /// Common HTTP-related Scuba columns that the middlware will set automatically.
 /// Applications using the middleware are encouraged to follow a similar pattern
@@ -67,8 +63,6 @@ pub enum HttpScubaKey {
     ClientCorrelator,
     /// The client identities received for the client, if any.
     ClientIdentities,
-    /// The request load when this request was admitted.
-    RequestLoad,
     /// A unique ID identifying this request.
     RequestId,
     /// How long it took to send headers.
@@ -100,7 +94,6 @@ impl AsRef<str> for HttpScubaKey {
             ClientIp => "client_ip",
             ClientCorrelator => "client_correlator",
             ClientIdentities => "client_identities",
-            RequestLoad => "request_load",
             RequestId => "request_id",
             HeadersDurationMs => "headers_duration_ms",
             DurationMs => "duration_ms",
@@ -218,15 +211,6 @@ fn populate_scuba(scuba: &mut MononokeScubaSampleBuilder, state: &mut State) {
             header::USER_AGENT,
             |header| header.to_string(),
         );
-
-        // TODO(rajshar): Remove this once the ClientRequestInfo pieces are deployed in Prod
-        add_header(
-            scuba,
-            headers,
-            HttpScubaKey::ClientCorrelator,
-            CLIENT_CORRELATOR,
-            |header| header.to_string(),
-        );
     }
 
     if let Some(metadata_state) = MetadataState::try_borrow_from(state) {
@@ -241,10 +225,6 @@ fn populate_scuba(scuba: &mut MononokeScubaSampleBuilder, state: &mut State) {
         scuba.sample_for_identities(identities);
         let identities: Vec<_> = identities.iter().map(|i| i.to_string()).collect();
         scuba.add(HttpScubaKey::ClientIdentities, identities);
-    }
-
-    if let Some(request_load) = RequestLoad::try_borrow_from(state) {
-        scuba.add(HttpScubaKey::RequestLoad, request_load.0);
     }
 
     scuba.add(HttpScubaKey::RequestId, state.short_request_id());
@@ -397,6 +377,9 @@ impl<H: ScubaHandler> Middleware for ScubaMiddleware<H> {
 
             if let Some(uri) = Uri::try_borrow_from(state) {
                 if uri.path() == "/health_check" {
+                    return;
+                }
+                if uri.path() == "/proxygen/health_check" {
                     return;
                 }
             }

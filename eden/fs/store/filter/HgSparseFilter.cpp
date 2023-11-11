@@ -9,8 +9,8 @@
 #include "eden/fs/model/Hash.h"
 #include "eden/fs/service/ThriftUtil.h"
 #include "eden/fs/store/filter/Filter.h"
-#include "eden/scm/lib/edenfs-ffi/src/ffi.h"
-#include "eden/scm/lib/edenfs-ffi/src/lib.rs.h" // @manual
+#include "eden/scm/lib/edenfs_ffi/src/ffi.h"
+#include "eden/scm/lib/edenfs_ffi/src/lib.rs.h" // @manual
 
 #include <folly/futures/Future.h>
 #include <exception>
@@ -44,6 +44,11 @@ FilterCoverage determineFilterCoverage(
 ImmediateFuture<FilterCoverage> HgSparseFilter::getFilterCoverageForPath(
     RelativePathPiece path,
     folly::StringPiece id) const {
+  // If filterId is "null", Mercurial is reporting that no filters are active
+  if (id == kNullFilterId) {
+    return FilterCoverage::RECURSIVELY_UNFILTERED;
+  }
+
   // We check if the filter is cached. If so, we can avoid fetching the Filter
   // Profile from Mercurial.
   {

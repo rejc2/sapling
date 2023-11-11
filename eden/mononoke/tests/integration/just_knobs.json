@@ -1,6 +1,7 @@
 {
   "bools": {
     "scm/mononoke:bssm_enable_optimized_derivation": false,
+    "scm/mononoke:derived_data_disable_derivation_workers": false,
     "scm/mononoke:derived_data_disable_remote_derivation": false,
     "scm/mononoke:lfs_k_consistent_hash_routing": false,
     "scm/mononoke:mononoke_force_local_pushrebase": false,
@@ -10,5 +11,14 @@
     "scm/mononoke:sql_disable_auto_retries": false,
     "scm/mononoke:static-backend": false
   },
-  "ints": {}
+  "ints": {
+    "scm/mononoke_timeouts:repo_client_clone_timeout_secs": 14400,
+    "scm/mononoke_timeouts:repo_client_default_timeout_secs": 900,
+    "scm/mononoke_timeouts:repo_client_getbundle_timeout_secs": 1800,
+    "scm/mononoke_timeouts:repo_client_getpack_timeout_secs": 18000,
+    "scm/mononoke_timeouts:repo_client_bookmarks_timeout_secs": 180,
+    "scm/mononoke:repo_client_gettreepack_buffer_size": 1000,
+    "scm/mononoke:repo_client_max_nodes_in_known_method": 100000,
+    "scm/mononoke:repo_client_concurrent_blob_uploads": 1000
+  }
 }

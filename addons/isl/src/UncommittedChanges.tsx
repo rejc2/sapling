@@ -12,12 +12,13 @@ import type {ChangedFile, ChangedFileType, MergeConflicts, RepoRelativePath} fro
 import type {MutableRefObject, ReactNode} from 'react';
 import type {Comparison} from 'shared/Comparison';
 
-import {Banner} from './Banner';
+import {Banner, BannerKind} from './Banner';
 import {
   ChangedFileDisplayTypePicker,
   type ChangedFilesDisplayType,
   changedFilesDisplayType,
 } from './ChangedFileDisplayTypePicker';
+import {Collapsable} from './Collapsable';
 import {
   commitFieldsBeingEdited,
   commitMessageTemplate,
@@ -31,6 +32,11 @@ import {
 } from './CommitInfoView/CommitMessageFields';
 import {OpenComparisonViewButton} from './ComparisonView/OpenComparisonViewButton';
 import {ErrorNotice} from './ErrorNotice';
+import {
+  generatedStatusToLabel,
+  generatedStatusDescription,
+  useGeneratedFileStatuses,
+} from './GeneratedFile';
 import {PartialFileSelectionWithMode} from './PartialFileSelection';
 import {SuspenseBoundary} from './SuspenseBoundary';
 import {DOCUMENTATION_DELAY, Tooltip} from './Tooltip';
@@ -63,9 +69,15 @@ import {
   uncommittedChangesFetchError,
   useRunOperation,
 } from './serverAPIState';
+import {succeedableRevset, GeneratedStatus} from './types';
 import {usePromise} from './usePromise';
-import {VSCodeButton, VSCodeCheckbox, VSCodeTextField} from '@vscode/webview-ui-toolkit/react';
-import React, {useEffect, useRef, useState} from 'react';
+import {
+  VSCodeBadge,
+  VSCodeButton,
+  VSCodeCheckbox,
+  VSCodeTextField,
+} from '@vscode/webview-ui-toolkit/react';
+import React, {useMemo, useEffect, useRef, useState} from 'react';
 import {atom, useRecoilCallback, useRecoilValue} from 'recoil';
 import {labelForComparison, revsetForComparison, ComparisonType} from 'shared/Comparison';
 import {useContextMenu} from 'shared/ContextMenu';
@@ -73,7 +85,7 @@ import {Icon} from 'shared/Icon';
 import {isMac} from 'shared/OperatingSystem';
 import {useDeepMemo} from 'shared/hooks';
 import {minimalDisambiguousPaths} from 'shared/minimalDisambiguousPaths';
-import {basename, notEmpty, partition} from 'shared/utils';
+import {basename, group, notEmpty, partition} from 'shared/utils';
 
 import './UncommittedChanges.css';
 
@@ -189,12 +201,13 @@ const sortKeyForStatus: Record<VisualChangedFileType, number> = {
 /**
  * Display a list of changed files.
  *
- * If filesSubset is too long, but filesSubset.length === totalFiles, pagination buttons
+ * (Case 1) If filesSubset is too long, but filesSubset.length === totalFiles, pagination buttons
  * are shown. This happens for uncommitted changes, where we have the entire list of files.
  *
- * If filesSubset.length < totalFiles, no pagination buttons are shown.
+ * (Case 2) If filesSubset.length < totalFiles, no pagination buttons are shown.
  * It's expected that filesSubset is already truncated to fit.
- * This happens for committed lists of changes, where we don't have the entire list of files.
+ * This happens initially for committed lists of changes, where we don't have the entire list of files.
+ * Note that we later fetch the remaining files, to end up in (Case 1) again.
  *
  * In either case, a banner is shown to warn that not all files are shown.
  */
@@ -207,19 +220,41 @@ export function ChangedFiles(props: {
 }) {
   const displayType = useRecoilValue(changedFilesDisplayType);
   const {filesSubset, totalFiles, ...rest} = props;
-  const MAX_FILES_TO_SHOW = 25;
+  const PAGE_SIZE = 25;
+  const PAGE_FETCH_COUNT = 16;
   const [pageNum, setPageNum] = useState(0);
-  const isLastPage = pageNum >= Math.floor((totalFiles - 1) / MAX_FILES_TO_SHOW);
-  const rangeStart = pageNum * MAX_FILES_TO_SHOW;
-  const rangeEnd = Math.min(filesSubset.length, (pageNum + 1) * MAX_FILES_TO_SHOW);
-  const filesToShow = filesSubset.slice(rangeStart, rangeEnd);
-  const hasAdditionalPages = filesSubset.length > MAX_FILES_TO_SHOW;
+  const isLastPage = pageNum >= Math.floor((totalFiles - 1) / PAGE_SIZE);
+  const rangeStart = pageNum * PAGE_SIZE;
+  const rangeEnd = Math.min(filesSubset.length, (pageNum + 1) * PAGE_SIZE);
+  const hasAdditionalPages = filesSubset.length > PAGE_SIZE;
+
+  // We paginate files, but also paginate our fetches for generated statuses
+  // at a larger granularity. This allows all manual files within that window
+  // to be sorted to the front. This wider pagination is neceessary so we can control
+  // how many files we query for generated statuses.
+  const fetchPage = Math.floor(pageNum - (pageNum % PAGE_FETCH_COUNT));
+  const fetchRangeStart = fetchPage * PAGE_SIZE;
+  const fetchRangeEnd = (fetchPage + PAGE_FETCH_COUNT) * PAGE_SIZE;
+  const filesToQueryGeneratedStatus = useMemo(
+    () => filesSubset.slice(fetchRangeStart, fetchRangeEnd).map(f => f.path),
+    [filesSubset, fetchRangeStart, fetchRangeEnd],
+  );
+
+  const generatedStatuses = useGeneratedFileStatuses(filesToQueryGeneratedStatus);
+  const filesToSort = filesSubset.slice(fetchRangeStart, fetchRangeEnd);
+  filesToSort.sort((a, b) => {
+    const genStatA = generatedStatuses[a.path] ?? 0;
+    const genStatB = generatedStatuses[b.path] ?? 0;
+    return genStatA - genStatB;
+  });
+  const filesToShow = filesToSort.slice(rangeStart - fetchRangeStart, rangeEnd - fetchRangeStart);
+
   const processedFiles = useDeepMemo(() => processCopiesAndRenames(filesToShow), [filesToShow]);
 
   useEffect(() => {
     // If the list of files is updated to have fewer files, we need to reset
     // the pageNum state to be in the proper range again.
-    const lastPageIndex = Math.floor((totalFiles - 1) / MAX_FILES_TO_SHOW);
+    const lastPageIndex = Math.floor((totalFiles - 1) / PAGE_SIZE);
     if (pageNum > lastPageIndex) {
       setPageNum(Math.max(0, lastPageIndex));
     }
@@ -270,10 +305,22 @@ export function ChangedFiles(props: {
           )}
         </Banner>
       ) : null}
+      {totalFiles > PAGE_SIZE * PAGE_FETCH_COUNT && (
+        <Banner key="too-many-files" icon={<Icon icon="warning" />} kind={BannerKind.warning}>
+          <T replace={{$maxFiles: PAGE_SIZE * PAGE_FETCH_COUNT}}>
+            There are more than $maxFiles files, some files may appear out of order
+          </T>
+        </Banner>
+      )}
       {displayType === 'tree' ? (
         <FileTree {...rest} files={processedFiles} displayType={displayType} />
       ) : (
-        <LinearFileList {...rest} files={processedFiles} displayType={displayType} />
+        <LinearFileList
+          {...rest}
+          files={processedFiles}
+          displayType={displayType}
+          generatedStatuses={generatedStatuses}
+        />
       )}
     </div>
   );
@@ -282,18 +329,53 @@ export function ChangedFiles(props: {
 function LinearFileList(props: {
   files: Array<UIChangedFile>;
   displayType: ChangedFilesDisplayType;
+  generatedStatuses: Record<RepoRelativePath, GeneratedStatus>;
   comparison: Comparison;
   selection?: UseUncommittedSelection;
   place?: Place;
 }) {
-  const {files, ...rest} = props;
+  const {files, generatedStatuses, ...rest} = props;
+
+  const groupedByGenerated = group(files, file => generatedStatuses[file.path]);
+
+  function GeneratedFilesCollapsableSection(status: GeneratedStatus) {
+    const group = groupedByGenerated[status] ?? [];
+    if (group.length === 0) {
+      return null;
+    }
+    return (
+      <Collapsable
+        title={
+          <T
+            replace={{
+              $count: <VSCodeBadge>{group.length}</VSCodeBadge>,
+            }}>
+            {status === GeneratedStatus.PartiallyGenerated
+              ? 'Partially Generated Files $count'
+              : 'Generated Files $count'}
+          </T>
+        }
+        startExpanded={status === GeneratedStatus.PartiallyGenerated}>
+        {group.map(file => (
+          <File key={file.path} {...rest} file={file} generatedStatus={status} />
+        ))}
+      </Collapsable>
+    );
+  }
 
   return (
     <div className="changed-files-list-container">
       <div className="changed-files-list">
-        {files.map(file => (
-          <File key={file.path} {...rest} file={file} />
+        {groupedByGenerated[GeneratedStatus.Manual]?.map(file => (
+          <File
+            key={file.path}
+            {...rest}
+            file={file}
+            generatedStatus={generatedStatuses[file.path] ?? GeneratedStatus.Manual}
+          />
         ))}
+        {GeneratedFilesCollapsableSection(GeneratedStatus.PartiallyGenerated)}
+        {GeneratedFilesCollapsableSection(GeneratedStatus.Generated)}
       </div>
     </div>
   );
@@ -360,16 +442,20 @@ function File({
   comparison,
   selection,
   place,
+  generatedStatus,
 }: {
   file: UIChangedFile;
   displayType: ChangedFilesDisplayType;
   comparison: Comparison;
   selection?: UseUncommittedSelection;
   place?: Place;
+  generatedStatus?: GeneratedStatus;
 }) {
   // Renamed files are files which have a copy field, where that path was also removed.
   // Visually show renamed files as if they were modified, even though sl treats them as added.
   const [statusName, icon] = nameAndIconForFileStatus[file.visualStatus];
+
+  const generated = generatedStatusToLabel(generatedStatus);
 
   const contextMenu = useContextMenu(() => {
     const options = [
@@ -399,10 +485,12 @@ function File({
   // needing to go through the menu to change the rendering type.
   const isHoldingAlt = useRecoilValue(holdingAltAtom);
 
+  const tooltip = file.tooltip + '\n\n' + generatedStatusDescription(generatedStatus);
+
   return (
     <>
       <div
-        className={`changed-file file-${statusName}`}
+        className={`changed-file file-${statusName} file-${generated}`}
         data-testid={`changed-file-${file.path}`}
         onContextMenu={contextMenu}
         key={file.path}
@@ -419,7 +507,7 @@ function File({
             platform.openFile(file.path);
           }}>
           <Icon icon={icon} />
-          <Tooltip title={file.tooltip} delayMs={2_000} placement="right">
+          <Tooltip title={tooltip} delayMs={2_000} placement="right">
             <span
               className="changed-file-path-text"
               onCopy={e => {
@@ -896,11 +984,11 @@ function FileActions({
 
   if (platform.openDiff != null && !conflictStatuses.has(file.status)) {
     actions.push(
-      <Tooltip title={t('Open diff view')} key="revert" delayMs={1000}>
+      <Tooltip title={t('Open diff view')} key="open-diff-view" delayMs={1000}>
         <VSCodeButton
           className="file-show-on-hover"
           appearance="icon"
-          data-testid="file-revert-button"
+          data-testid="file-open-diff-button"
           onClick={() => {
             platform.openDiff?.(file.path, comparison);
           }}>
@@ -910,7 +998,11 @@ function FileActions({
     );
   }
 
-  if (revertableStatues.has(file.status) && comparison.type !== ComparisonType.Committed) {
+  if (
+    (revertableStatues.has(file.status) && comparison.type !== ComparisonType.Committed) ||
+    // special case: reverting does actually work for added files in the head commit
+    (comparison.type === ComparisonType.HeadChanges && file.status === 'A')
+  ) {
     actions.push(
       <Tooltip
         title={
@@ -944,7 +1036,7 @@ function FileActions({
                     [file.path],
                     comparison.type === ComparisonType.UncommittedChanges
                       ? undefined
-                      : revsetForComparison(comparison),
+                      : succeedableRevset(revsetForComparison(comparison)),
                   ),
                 );
               });

@@ -185,7 +185,7 @@ def untar(tar_path, dest_dir) -> Dict[str, str]:
                 os.rename(dest_dir, to_delete_dir)
                 shutil.rmtree(to_delete_dir, ignore_errors=True)
                 os.makedirs(dest_dir, exist_ok=True)
-            if sys.version_info > (3, 11):
+            if hasattr(tarfile, "data_filter"):
                 tar.extractall(dest_dir, filter="data")
             else:
                 tar.extractall(dest_dir)
@@ -218,7 +218,8 @@ def get_isl_args_cwd(ui) -> Tuple[List[str], str]:
     # find "isl-dist.tar.xz"
     candidates = ui.configlist("web", "isl-dist-path") + ["isl-dist.tar.xz"]
     isl_tar_path = resolve_path(
-        candidates, lambda p: os.path.join(os.path.dirname(sys.executable), p)
+        candidates,
+        lambda p: os.path.join(os.path.dirname(os.path.realpath(sys.executable)), p),
     )
     if isl_tar_path is None:
         raise error.Abort(_("ISL is not available with this @prog@ install"))

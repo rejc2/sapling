@@ -26,6 +26,7 @@ import type {
 } from 'isl/src/types';
 import type {ExportStack, ImportedStack} from 'shared/types/stack';
 
+import {generatedFilesDetector} from './GeneratedFiles';
 import {Internal} from './Internal';
 import {Repository} from './Repository';
 import {repositoryCache} from './RepositoryCache';
@@ -561,6 +562,44 @@ export default class ServerToClientAPI {
           });
         break;
       }
+      case 'fetchLatestCommit': {
+        repo
+          .lookupCommits([data.revset])
+          .then(commits => {
+            this.postMessage({
+              type: 'fetchedLatestCommit',
+              revset: data.revset,
+              info: {value: commits.values().next().value},
+            });
+          })
+          .catch(err => {
+            this.postMessage({
+              type: 'fetchedLatestCommit',
+              revset: data.revset,
+              info: {error: err as Error},
+            });
+          });
+        break;
+      }
+      case 'fetchAllCommitChangedFiles': {
+        repo
+          .getAllChangedFiles(data.hash)
+          .then(files => {
+            this.postMessage({
+              type: 'fetchedAllCommitChangedFiles',
+              hash: data.hash,
+              result: {value: files},
+            });
+          })
+          .catch(err => {
+            this.postMessage({
+              type: 'fetchedAllCommitChangedFiles',
+              hash: data.hash,
+              result: {error: err as Error},
+            });
+          });
+        break;
+      }
       case 'fetchCommitCloudState': {
         repo.getCommitCloudState(cwd).then(state => {
           this.postMessage({
@@ -568,6 +607,14 @@ export default class ServerToClientAPI {
             state: {value: state},
           });
         });
+        break;
+      }
+      case 'fetchGeneratedStatuses': {
+        generatedFilesDetector
+          .queryFilesGenerated(repo.logger, repo.info.repoRoot, data.paths)
+          .then(results => {
+            this.postMessage({type: 'fetchedGeneratedStatuses', results});
+          });
         break;
       }
       case 'typeahead': {
@@ -584,6 +631,15 @@ export default class ServerToClientAPI {
       }
       case 'fetchDiffSummaries': {
         repo.codeReviewProvider?.triggerDiffSummariesFetch(data.diffIds ?? repo.getAllDiffIds());
+        break;
+      }
+      case 'fetchAvatars': {
+        repo.codeReviewProvider?.fetchAvatars?.(data.authors)?.then(avatars => {
+          this.postMessage({
+            type: 'fetchedAvatars',
+            avatars,
+          });
+        });
         break;
       }
       case 'getSuggestedReviewers': {

@@ -35,10 +35,10 @@ use pypathmatcher::extract_matcher;
 use pypathmatcher::extract_option_matcher;
 use pystatus::status as PyStatus;
 use pytreestate::treestate as PyTreeState;
-use storemodel::ReadFileContents;
+use storemodel::FileStore;
 use vfs::VFS;
 
-type ArcReadFileContents = Arc<dyn ReadFileContents>;
+type ArcFileStore = Arc<dyn FileStore>;
 
 pub fn init_module(py: Python, package: &str) -> PyResult<PyModule> {
     let name = [package, "checkout"].join(".");
@@ -116,7 +116,7 @@ py_class!(class checkoutplan |py| {
     def check_unknown_files(
         &self,
         manifest: &treemanifest,
-        store: ImplInto<ArcReadFileContents>,
+        store: ImplInto<ArcFileStore>,
         state: &PyTreeState,
         status: &PyStatus,
     ) -> PyResult<Vec<String>> {
@@ -141,16 +141,17 @@ py_class!(class checkoutplan |py| {
         Ok(conflicts)
     }
 
-    def apply(&self, store: ImplInto<ArcReadFileContents>) -> PyResult<PyNone> {
+    def apply(&self, store: ImplInto<ArcFileStore>) -> PyResult<Vec<(PyPathBuf, PyObject)>> {
         let plan = self.plan(py);
         let store = store.into();
-        py.allow_threads(||
-            plan.apply_store(store.as_ref())
-        ).map_pyerr(py)?;
-        Ok(PyNone)
+        Ok(py.allow_threads(|| plan.apply_store(store.as_ref())).map_pyerr(py)?
+           .remove_failed
+           .into_iter()
+           .map(|e| (e.0.into(), Err::<(), _>(e.1).map_pyerr(py).unwrap_err().instance(py)))
+           .collect())
     }
 
-    def apply_dry_run(&self, store: ImplInto<ArcReadFileContents>) -> PyResult<(usize, u64)> {
+    def apply_dry_run(&self, store: ImplInto<ArcFileStore>) -> PyResult<(usize, u64)> {
         let plan = self.plan(py);
         let store = store.into();
         py.allow_threads(|| try_block_unless_interrupted(

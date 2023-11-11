@@ -14,8 +14,8 @@
 #include <string>
 
 #include "eden/fs/store/filter/Filter.h"
-#include "eden/scm/lib/edenfs-ffi/src/ffi.h"
-#include "eden/scm/lib/edenfs-ffi/src/lib.rs.h" // @manual
+#include "eden/scm/lib/edenfs_ffi/src/ffi.h"
+#include "eden/scm/lib/edenfs_ffi/src/lib.rs.h" // @manual
 
 namespace facebook::eden {
 
@@ -29,7 +29,7 @@ class HgSparseFilter : public Filter {
     profiles_ = std::make_shared<folly::Synchronized<MercurialMatcherMap>>(
         std::in_place);
   }
-  ~HgSparseFilter() override {}
+  ~HgSparseFilter() override = default;
 
   /*
    * Checks whether a path is filtered by the given filter.

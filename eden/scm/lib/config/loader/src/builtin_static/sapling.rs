@@ -22,6 +22,10 @@ restack:doc=automatically restack commits
  "    the stack linear again."
 sl=smartlog -T '{sl}'
 ssl=smartlog -T '{ssl}'
+top=next --top
+top:doc=check out the top commit in the current stack
+bottom=prev --bottom
+bottom:doc=check out the bottom commit in the current stack
 
 [annotate]
 default-flags=user short-date
@@ -119,6 +123,7 @@ graph.renderer=lines
 nativecheckout=True
 numworkerswriter=2
 network-doctor=True
+windows-symlinks=True
 
 [extensions]
 absorb=
@@ -151,7 +156,6 @@ myparent=
 obsshelve=
 patchrmdir=!
 progressfile=
-pullcreatemarkers=
 pushrebase=!
 rage=!
 rebase=

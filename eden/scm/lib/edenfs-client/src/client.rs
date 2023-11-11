@@ -24,6 +24,7 @@ use tokio_uds_compat::UnixStream;
 use types::HgId;
 use types::RepoPathBuf;
 
+use crate::filter::FilterGenerator;
 use crate::types::CheckoutConflict;
 use crate::types::CheckoutMode;
 use crate::types::EdenError;
@@ -32,13 +33,27 @@ use crate::types::FileStatus;
 /// EdenFS client for Sapling CLI integration.
 pub struct EdenFsClient {
     eden_config: EdenConfig,
+    filter_generator: Option<FilterGenerator>,
 }
 
 impl EdenFsClient {
-    /// Construct the client from the working directory root.
+    /// Construct a client and FilterGenerator using the supplied working dir
+    /// root. The latter is used to pass a FilterId to each thrift call.
     pub fn from_wdir(wdir_root: &Path) -> anyhow::Result<Self> {
+        let dot_dir = wdir_root.join(identity::must_sniff_dir(wdir_root)?.dot_dir());
         let eden_config = EdenConfig::from_root(wdir_root)?;
-        Ok(Self { eden_config })
+        let filter_generator = FilterGenerator::new(dot_dir);
+        Ok(Self {
+            eden_config,
+            filter_generator: Some(filter_generator),
+        })
+    }
+
+    pub fn get_active_filter_id(&self, commit: HgId) -> Result<Option<String>, anyhow::Error> {
+        match &self.filter_generator {
+            Some(gen) => gen.active_filter_id(commit),
+            None => Ok(None),
+        }
     }
 
     /// Get the EdenFS root path. This is usually the working directory root.
@@ -75,6 +90,7 @@ impl EdenFsClient {
         list_ignored: bool,
     ) -> anyhow::Result<BTreeMap<RepoPathBuf, FileStatus>> {
         let thrift_client = block_on(self.get_thrift_client())?;
+        let filter_id = self.get_active_filter_id(commit.clone())?;
         let thrift_result = extract_error(block_on(thrift_client.getScmStatusV2(
             &edenfs::GetScmStatusParams {
                 mountPoint: self.root_vec(),
@@ -82,7 +98,7 @@ impl EdenFsClient {
                 listIgnored: list_ignored,
                 cri: Some(self.get_client_request_info()),
                 rootIdOptions: Some(edenfs::RootIdOptions {
-                    filterId: None,
+                    filterId: filter_id,
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -103,6 +119,17 @@ impl EdenFsClient {
         Ok(result)
     }
 
+    /// Get the raw journal position. Useful to check whether there are file changes.
+    pub fn get_journal_position(&self) -> anyhow::Result<(i64, i64)> {
+        let thrift_client = block_on(self.get_thrift_client())?;
+        let position = extract_error(block_on(
+            thrift_client.getCurrentJournalPosition(&self.root_vec()),
+        ))?;
+        let position = (position.mountGeneration, position.sequenceNumber);
+        tracing::debug!("journal position {:?}", position);
+        Ok(position)
+    }
+
     /// Set the working copy (dirstate) parents.
     pub fn set_parents(&self, p1: HgId, p2: Option<HgId>, p1_tree: HgId) -> anyhow::Result<()> {
         let thrift_client = block_on(self.get_thrift_client())?;
@@ -111,12 +138,13 @@ impl EdenFsClient {
             parent2: p2.map(|n| n.into_byte_array().into()),
             ..Default::default()
         };
+        let filter_id: Option<String> = self.get_active_filter_id(p1.clone())?;
         let root_vec = self.root_vec();
         let params = edenfs::ResetParentCommitsParams {
             hgRootManifest: Some(p1_tree.into_byte_array().into()),
             cri: Some(self.get_client_request_info()),
             rootIdOptions: Some(edenfs::RootIdOptions {
-                filterId: None,
+                filterId: filter_id,
                 ..Default::default()
             }),
             ..Default::default()
@@ -139,11 +167,12 @@ impl EdenFsClient {
     ) -> anyhow::Result<Vec<CheckoutConflict>> {
         let tree_vec = tree.into_byte_array().into();
         let thrift_client = block_on(self.get_thrift_client())?;
+        let filter_id: Option<String> = self.get_active_filter_id(node.clone())?;
         let params = edenfs::CheckOutRevisionParams {
             hgRootManifest: Some(tree_vec),
             cri: Some(self.get_client_request_info()),
             rootIdOptions: Some(edenfs::RootIdOptions {
-                filterId: None,
+                filterId: filter_id,
                 ..Default::default()
             }),
             ..Default::default()
@@ -167,7 +196,7 @@ impl EdenFsClient {
 
 /// Extract EdenError from Thrift generated enums.
 /// For example, turn GetScmStatusV2Error::ex(EdenError) into this crate's EdenError.
-fn extract_error<V, E: std::error::Error + Send + Sync + 'static>(
+pub(crate) fn extract_error<V, E: std::error::Error + Send + Sync + 'static>(
     result: std::result::Result<V, E>,
 ) -> anyhow::Result<V> {
     match result {

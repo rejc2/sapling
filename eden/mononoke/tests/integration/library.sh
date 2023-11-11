@@ -164,11 +164,19 @@ function random_int() {
 function sslcurlas {
   local name="$1"
   shift
-  curl --noproxy localhost --cert "$TEST_CERTDIR/$name.crt" --cacert "$TEST_CERTDIR/root-ca.crt" --key "$TEST_CERTDIR/$name.key" "$@"
+  curl --noproxy localhost -H 'x-client-info: {"request_info": {"entry_point": "CurlTest", "correlator": "test"}}' --cert "$TEST_CERTDIR/$name.crt" --cacert "$TEST_CERTDIR/root-ca.crt" --key "$TEST_CERTDIR/$name.key" "$@"
 }
 
 function sslcurl {
   sslcurlas proxy "$@"
+}
+
+function sslcurl_noclientinfo_test {
+  curl --noproxy localhost --cert "$TEST_CERTDIR/proxy.crt" --cacert "$TEST_CERTDIR/root-ca.crt" --key "$TEST_CERTDIR/proxy.key" "$@"
+}
+
+function curltest {
+  curl -H 'x-client-info: {"request_info": {"entry_point": "CurlTest", "correlator": "test"}}' "$@"
 }
 
 function mononoke {
@@ -2094,7 +2102,7 @@ if [ -z "$HAS_FB" ]; then
   }
 
   function format_single_scuba_sample_strip_server_info {
-      jq -S 'del(.[].server_tier, .[].tw_task_id, .[].tw_handle)'
+      jq -S 'del(.[].server_tier, .[].tw_task_id, .[].tw_handle, .[].datacenter, .[].region, .[].region_datacenter_prefix)'
   }
 fi
 

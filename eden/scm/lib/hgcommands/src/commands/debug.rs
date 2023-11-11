@@ -21,6 +21,7 @@ commands! {
     mod refreshconfig;
     mod fsync;
     mod http;
+    mod metrics;
     mod networkdoctor;
     mod structuredprogress;
     mod python;
@@ -34,6 +35,7 @@ commands! {
     mod segmentpull;
     mod store;
     mod top;
+    mod wait;
 }
 
 define_flags! {

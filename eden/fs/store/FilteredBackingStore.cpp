@@ -275,7 +275,6 @@ FilteredBackingStore::filterImpl(
               }
               // Recursively filtered objects don't need to be handled. They are
               // simply omitted from the PathMap.
-              continue;
             }
 
             // The result is a PathMap containing only unfiltered or
@@ -395,7 +394,7 @@ std::unordered_set<std::string> FilteredBackingStore::stopRecordingFetch() {
   return backingStore_->stopRecordingFetch();
 }
 
-folly::SemiFuture<folly::Unit> FilteredBackingStore::importManifestForRoot(
+ImmediateFuture<folly::Unit> FilteredBackingStore::importManifestForRoot(
     const RootId& rootId,
     const Hash20& manifest,
     const ObjectFetchContextPtr& context) {

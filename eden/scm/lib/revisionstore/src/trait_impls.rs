@@ -19,7 +19,6 @@ use futures::Stream;
 use futures::StreamExt;
 use hgstore::strip_metadata;
 use minibytes::Bytes;
-use storemodel::ReadFileContents;
 use tokio::runtime::Handle;
 use types::Key;
 
@@ -37,11 +36,11 @@ pub struct ArcFileStore(pub Arc<FileStore>);
 pub struct ArcRemoteDataStore<T: ?Sized>(pub Arc<T>);
 
 #[async_trait]
-impl<T> ReadFileContents for ArcRemoteDataStore<T>
+impl<T> storemodel::FileStore for ArcRemoteDataStore<T>
 where
     T: RemoteDataStore + 'static + ?Sized,
 {
-    async fn read_file_contents(&self, keys: Vec<Key>) -> BoxStream<Result<(Bytes, Key)>> {
+    async fn get_content_stream(&self, keys: Vec<Key>) -> BoxStream<Result<(Bytes, Key)>> {
         stream_data_from_remote_data_store(self.0.clone(), keys)
             .map(|result| match result {
                 Ok((data, key, _copy_from)) => Ok((data, key)),
@@ -50,7 +49,7 @@ where
             .boxed()
     }
 
-    async fn read_rename_metadata(
+    async fn get_rename_stream(
         &self,
         keys: Vec<Key>,
     ) -> BoxStream<anyhow::Result<(Key, Option<Key>)>> {
@@ -60,12 +59,16 @@ where
                 Err(err) => Err(err),
             })
             .boxed()
+    }
+
+    fn get_local_content(&self, _key: &Key) -> anyhow::Result<Option<minibytes::Bytes>> {
+        Ok(None)
     }
 }
 
 #[async_trait]
-impl ReadFileContents for ArcFileStore {
-    async fn read_file_contents(&self, keys: Vec<Key>) -> BoxStream<Result<(Bytes, Key)>> {
+impl storemodel::FileStore for ArcFileStore {
+    async fn get_content_stream(&self, keys: Vec<Key>) -> BoxStream<Result<(Bytes, Key)>> {
         stream_data_from_scmstore(self.0.clone(), keys)
             .map(|result| match result {
                 Ok((data, key, _copy_from)) => Ok((data, key)),
@@ -74,7 +77,7 @@ impl ReadFileContents for ArcFileStore {
             .boxed()
     }
 
-    async fn read_rename_metadata(
+    async fn get_rename_stream(
         &self,
         keys: Vec<Key>,
     ) -> BoxStream<anyhow::Result<(Key, Option<Key>)>> {
@@ -84,6 +87,10 @@ impl ReadFileContents for ArcFileStore {
                 Err(err) => Err(err),
             })
             .boxed()
+    }
+
+    fn get_local_content(&self, key: &Key) -> anyhow::Result<Option<minibytes::Bytes>> {
+        self.0.get_file_content_impl(key, FetchMode::LocalOnly)
     }
 
     fn refresh(&self) -> Result<()> {

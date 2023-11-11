@@ -11,6 +11,7 @@ import type {CommitMessageFields, FieldConfig, FieldsBeingEdited} from './types'
 import type {Dispatch, SetStateAction} from 'react';
 
 import {Banner} from '../Banner';
+import {ChangedFilesWithFetching} from '../ChangedFilesWithFetching';
 import serverAPI from '../ClientToServerAPI';
 import {Commit} from '../Commit';
 import {OpenComparisonViewButton} from '../ComparisonView/OpenComparisonViewButton';
@@ -20,8 +21,9 @@ import {numPendingImageUploads} from '../ImageUpload';
 import {OperationDisabledButton} from '../OperationDisabledButton';
 import {SubmitUpdateMessageInput} from '../SubmitUpdateMessageInput';
 import {Subtle} from '../Subtle';
+import {latestSuccessorUnlessExplicitlyObsolete} from '../SuccessionTracker';
 import {Tooltip} from '../Tooltip';
-import {ChangedFiles, UncommittedChanges} from '../UncommittedChanges';
+import {UncommittedChanges} from '../UncommittedChanges';
 import {tracker} from '../analytics';
 import {
   allDiffSummaries,
@@ -42,6 +44,7 @@ import platform from '../platform';
 import {CommitPreview, uncommittedChangesWithPreviews} from '../previews';
 import {selectedCommits} from '../selection';
 import {latestHeadCommit, repositoryInfo, useRunOperation} from '../serverAPIState';
+import {succeedableRevset} from '../types';
 import {useModal} from '../useModal';
 import {assert, firstLine, firstOfIterable} from '../utils';
 import {CommitInfoField} from './CommitInfoField';
@@ -344,18 +347,7 @@ export function CommitInfoDetails({commit}: {commit: CommitInfo}) {
                   <T>Open All Files</T>
                 </VSCodeButton>
               </div>
-              <ChangedFiles
-                filesSubset={commit.filesSample}
-                totalFiles={commit.totalFileCount}
-                comparison={
-                  commit.isHead
-                    ? {type: ComparisonType.HeadChanges}
-                    : {
-                        type: ComparisonType.Committed,
-                        hash: commit.hash,
-                      }
-                }
-              />
+              <ChangedFilesWithFetching commit={commit} />{' '}
             </div>
           </Section>
         )}
@@ -432,7 +424,7 @@ function ShowingRemoteMessageBanner({
         onClick: () => {
           runOperation(
             new AmendMessageOperation(
-              commit.hash,
+              succeedableRevset(commit.hash),
               commitMessageFieldsToString(schema, latestFields),
             ),
           );
@@ -579,6 +571,8 @@ function ActionsBar({
   const showCommitOrAmend =
     commit.isHead && (isCommitMode || anythingToCommit || !isAnythingBeingEdited);
 
+  const onCommitFormSubmit = platform.onCommitFormSubmit;
+
   return (
     <div className="commit-info-actions-bar" data-testid="commit-info-actions-bar">
       {isCommitMode || commit.diffId == null ? null : (
@@ -673,7 +667,10 @@ function ActionsBar({
                     return;
                   }
                 }
-                const operation = new AmendMessageOperation(commit.hash, stringifiedMessage);
+                const operation = new AmendMessageOperation(
+                  latestSuccessorUnlessExplicitlyObsolete(commit),
+                  stringifiedMessage,
+                );
                 clearEditedCommitMessage(/* skip confirmation */ true);
                 return operation;
               }}>
@@ -704,6 +701,10 @@ function ActionsBar({
               contextKey={`submit-${commit.isHead ? 'head' : commit.hash}`}
               disabled={!canSubmitWithCodeReviewProvider || areImageUploadsOngoing}
               runOperation={async () => {
+                if (onCommitFormSubmit !== undefined) {
+                  onCommitFormSubmit();
+                }
+
                 let amendOrCommitOp;
                 if (anythingToCommit) {
                   // TODO: we should also amend if there are pending commit message changes, and change the button

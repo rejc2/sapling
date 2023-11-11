@@ -145,6 +145,7 @@ mod tests {
             commit_author: "commit_author".to_string(),
             commit_message: "commit_message".to_string(),
             datetime: DateTime::now(),
+            mark_not_synced_mapping: None,
             imported_cs_id: None,
             shifted_bcs_ids: None,
             gitimport_bcs_ids: None,
@@ -566,10 +567,12 @@ mod tests {
                 RepositoryId::new(1) => SmallRepoPermanentConfig {
                     bookmark_prefix: AsciiString::from_str("large_repo_bookmark/")
                         .unwrap(),
+                    common_pushrebase_bookmarks_map: HashMap::new(),
                 },
                 RepositoryId::new(2) => SmallRepoPermanentConfig {
                     bookmark_prefix: AsciiString::from_str("large_repo_bookmark_2/")
                         .unwrap(),
+                    common_pushrebase_bookmarks_map: HashMap::new(),
                 },
             },
             large_repo_id: commit_sync_config.large_repo_id,

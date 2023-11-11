@@ -28,12 +28,15 @@ dag = { version = "0.1.0", path = "../dag" }
 debugtop = { version = "0.1.0", path = "../debugtop" }
 eagerepo = { version = "0.1.0", path = "../eagerepo" }
 edenapi = { version = "0.1.0", path = "../edenapi" }
+edenfs-client = { version = "0.1.0", path = "../edenfs-client", optional = true }
 exchange = { version = "0.1.0", path = "../exchange" }
 fail = { version = "0.4", features = ["failpoints"] }
 flate2 = { version = "1.0.26", features = ["rust_backend"], default-features = false }
 formatter = { version = "0.1.0", path = "../formatter" }
+fs-err = "2.6.0"
 fsyncglob = { version = "0.1.0", path = "../fsyncglob" }
 hg-http = { version = "0.1.0", path = "../hg-http" }
+hg-metrics = { version = "0.1.0", path = "../hg-metrics" }
 hgplain = { version = "0.1.0", path = "../util/hgplain" }
 hgtime = { version = "0.1.0", path = "../hgtime" }
 hostname = "0.3"
@@ -83,5 +86,5 @@ zstd = { version = "0.13", features = ["experimental", "zstdmt"] }
 
 [features]
 default = []
-eden = ["clidispatch/eden", "pyedenclient/eden"]
+eden = ["clidispatch/eden", "edenfs-client", "pyedenclient/eden"]
 fb = ["configloader/fb", "identity/fb"]

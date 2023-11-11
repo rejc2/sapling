@@ -13,7 +13,7 @@ use futures::stream::StreamExt;
 use hgstore::separate_metadata;
 use hgstore::strip_metadata;
 use storemodel::types;
-use storemodel::ReadFileContents;
+use storemodel::FileStore;
 use storemodel::TreeFormat;
 use storemodel::TreeStore;
 use types::HgId;
@@ -25,8 +25,8 @@ use crate::EagerRepoStore;
 // storemodel traits
 
 #[async_trait]
-impl ReadFileContents for EagerRepoStore {
-    async fn read_file_contents(
+impl FileStore for EagerRepoStore {
+    async fn get_content_stream(
         &self,
         keys: Vec<Key>,
     ) -> BoxStream<anyhow::Result<(minibytes::Bytes, Key)>> {
@@ -41,7 +41,7 @@ impl ReadFileContents for EagerRepoStore {
         futures::stream::iter(iter).boxed()
     }
 
-    async fn read_rename_metadata(
+    async fn get_rename_stream(
         &self,
         keys: Vec<Key>,
     ) -> BoxStream<anyhow::Result<(Key, Option<Key>)>> {
@@ -54,6 +54,14 @@ impl ReadFileContents for EagerRepoStore {
             Ok((k, copy_from))
         });
         futures::stream::iter(iter).boxed()
+    }
+
+    fn get_local_content(&self, key: &Key) -> anyhow::Result<Option<minibytes::Bytes>> {
+        let id = key.hgid;
+        match self.get_content(id)? {
+            Some(data) => Ok(Some(separate_metadata(&data)?.0)),
+            None => Ok(None),
+        }
     }
 
     fn refresh(&self) -> anyhow::Result<()> {

@@ -38,7 +38,7 @@ use revisionstore::EdenApiFileStore;
 use revisionstore::EdenApiTreeStore;
 use revsets::errors::RevsetLookupError;
 use revsets::utils as revset_utils;
-use storemodel::ReadFileContents;
+use storemodel::FileStore;
 use storemodel::StoreInfo;
 use storemodel::StoreOutput;
 use storemodel::TreeStore;
@@ -81,7 +81,7 @@ pub struct Repo {
     metalog: Option<Arc<RwLock<MetaLog>>>,
     eden_api: OnceCell<Arc<dyn EdenApi>>,
     dag_commits: Option<Arc<RwLock<Box<dyn DagCommits + Send + 'static>>>>,
-    file_store: Option<Arc<dyn ReadFileContents>>,
+    file_store: Option<Arc<dyn FileStore>>,
     file_scm_store: Option<Arc<scmstore::FileStore>>,
     tree_store: Option<Arc<dyn TreeStore>>,
     tree_scm_store: Option<Arc<scmstore::TreeStore>>,
@@ -228,6 +228,14 @@ impl Repo {
             &self.store_path.join("requires"),
             Lazy::force(&SUPPORTED_STORE_REQUIREMENTS),
         )?;
+        Ok(())
+    }
+
+    /// Invalidate all repo state.
+    pub fn invalidate_all(&mut self) -> Result<()> {
+        self.invalidate_dag_commits()?;
+        self.invalidate_stores()?;
+        self.invalidate_metalog();
         Ok(())
     }
 
@@ -462,7 +470,7 @@ impl Repo {
         format
     }
 
-    pub fn file_store(&mut self) -> Result<Arc<dyn ReadFileContents>> {
+    pub fn file_store(&mut self) -> Result<Arc<dyn FileStore>> {
         if let Some(fs) = &self.file_store {
             return Ok(Arc::new(fs.clone()));
         }
@@ -599,7 +607,8 @@ impl Repo {
     }
 
     #[cfg(feature = "wdir")]
-    pub fn working_copy(&mut self, path: &Path) -> Result<WorkingCopy, errors::InvalidWorkingCopy> {
+    pub fn working_copy(&mut self) -> Result<WorkingCopy, errors::InvalidWorkingCopy> {
+        let path = &self.path;
         let is_eden = self.requirements.contains("eden");
         let fsmonitor_ext = self.config.get("extensions", "fsmonitor");
         let fsmonitor_mode = self.config.get_nonempty("fsmonitor", "mode");
@@ -704,7 +713,7 @@ impl Repo {
     /// Return Some((file_store, tree_store)) if they are constructed.
     fn try_construct_file_tree_store(
         &mut self,
-    ) -> Result<Option<(Arc<dyn ReadFileContents>, Arc<dyn TreeStore>)>> {
+    ) -> Result<Option<(Arc<dyn FileStore>, Arc<dyn TreeStore>)>> {
         let info: &dyn StoreInfo = self;
         match factory::call_constructor::<_, Box<dyn StoreOutput>>(info) {
             Err(e) => {

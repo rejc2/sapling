@@ -109,20 +109,31 @@ TreePtr fromRawTree(
 
 } // namespace
 
+std::optional<Hash20> HgDatapackStore::getManifestNode(
+    const ObjectId& commitId) {
+  auto manifestNode = store_.getManifestNode(commitId.getBytes());
+  if (!manifestNode.has_value()) {
+    XLOGF(DBG2, "Error while getting manifest node from datapackstore");
+    return std::nullopt;
+  }
+  return Hash20(*std::move(manifestNode));
+}
+
 void HgDatapackStore::getTreeBatch(const ImportRequestsList& importRequests) {
   auto preparedRequests =
       prepareRequests<HgImportRequest::TreeImport>(importRequests, "Tree");
   auto importRequestsMap = std::move(preparedRequests.first);
   auto requests = std::move(preparedRequests.second);
   auto hgObjectIdFormat = config_->getEdenConfig()->hgObjectIdFormat.getValue();
-  const auto& filteredPaths =
+  const auto filteredPaths =
       config_->getEdenConfig()->hgFilteredPaths.getValue();
 
   store_.getTreeBatch(
       folly::range(requests),
       false,
       // store_.getTreeBatch is blocking, hence we can take these by reference.
-      [&](size_t index,
+      [&, filteredPaths](
+          size_t index,
           folly::Try<std::shared_ptr<sapling::Tree>> content) mutable {
         if (config_->getEdenConfig()->hgTreeFetchFallback.getValue() &&
             content.hasException()) {
@@ -153,7 +164,7 @@ void HgDatapackStore::getTreeBatch(const ImportRequestsList& importRequests) {
                     treeRequest->hash,
                     treeRequest->proxyHash.path(),
                     hgObjectIdFormat,
-                    filteredPaths)};
+                    *filteredPaths)};
               });
         }
 
@@ -187,10 +198,10 @@ TreePtr HgDatapackStore::getTree(
   if (tree) {
     auto hgObjectIdFormat =
         config_->getEdenConfig()->hgObjectIdFormat.getValue();
-    const auto& filteredPaths =
+    const auto filteredPaths =
         config_->getEdenConfig()->hgFilteredPaths.getValue();
     return fromRawTree(
-        tree.get(), edenTreeId, path, hgObjectIdFormat, filteredPaths);
+        tree.get(), edenTreeId, path, hgObjectIdFormat, *filteredPaths);
   }
   return nullptr;
 }
@@ -202,14 +213,14 @@ TreePtr HgDatapackStore::getTreeLocal(
   if (tree) {
     auto hgObjectIdFormat =
         config_->getEdenConfig()->hgObjectIdFormat.getValue();
-    const auto& filteredPaths =
+    const auto filteredPaths =
         config_->getEdenConfig()->hgFilteredPaths.getValue();
     return fromRawTree(
         tree.get(),
         edenTreeId,
         proxyHash.path(),
         hgObjectIdFormat,
-        filteredPaths);
+        *filteredPaths);
   }
 
   return nullptr;
@@ -257,8 +268,8 @@ void HgDatapackStore::getBlobBatch(const ImportRequestsList& importRequests) {
       });
 }
 
-BlobPtr HgDatapackStore::getBlobLocal(const HgProxyHash& hgInfo) {
-  auto content = store_.getBlob(hgInfo.byteHash(), true);
+BlobPtr HgDatapackStore::getBlob(const HgProxyHash& hgInfo, bool localOnly) {
+  auto content = store_.getBlob(hgInfo.byteHash(), localOnly);
   if (content) {
     return std::make_shared<BlobPtr::element_type>(std::move(*content));
   }

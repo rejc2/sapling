@@ -5,40 +5,48 @@
  * GNU General Public License version 2.
  */
 
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::SystemTime;
 
-use anyhow::anyhow;
 use anyhow::Result;
 use configmodel::Config;
+use configmodel::ConfigExt;
+use edenfs_client::EdenFsClient;
+use edenfs_client::FileStatus;
 use io::IO;
+use manifest_tree::TreeManifest;
 use parking_lot::Mutex;
+use parking_lot::RwLock;
 use pathmatcher::DynMatcher;
-use thrift_types::edenfs::ScmFileStatus;
 use treestate::treestate::TreeState;
 use types::hgid::NULL_ID;
-use types::RepoPathBuf;
-use vfs::VFS;
 
+use crate::filesystem::FileSystem;
 use crate::filesystem::PendingChange;
-use crate::filesystem::PendingChanges;
 
 pub struct EdenFileSystem {
-    root: PathBuf,
     treestate: Arc<Mutex<TreeState>>,
+    client: EdenFsClient,
+
+    // For wait_for_potential_change
+    journal_position: Cell<(i64, i64)>,
 }
 
 impl EdenFileSystem {
-    pub fn new(vfs: VFS, treestate: Arc<Mutex<TreeState>>) -> Result<Self> {
+    pub fn new(treestate: Arc<Mutex<TreeState>>, client: EdenFsClient) -> Result<Self> {
+        let journal_position = Cell::new(client.get_journal_position()?);
         Ok(EdenFileSystem {
             treestate,
-            root: vfs.root().to_path_buf(),
+            client,
+            journal_position,
         })
     }
 }
 
-impl PendingChanges for EdenFileSystem {
+impl FileSystem for EdenFileSystem {
     fn pending_changes(
         &self,
         _matcher: DynMatcher,
@@ -56,25 +64,45 @@ impl PendingChanges for EdenFileSystem {
             .next()
             .unwrap_or_else(|| Ok(NULL_ID))?;
 
-        let result = edenfs_client::status::get_status(&self.root, p1, include_ignored)?;
-        Ok(Box::new(result.status.entries.into_iter().map(
-            |(path, status)| {
-                {
-                    // TODO: Handle non-UTF8 encoded paths from Eden
-                    let repo_path = match RepoPathBuf::from_utf8(path) {
-                        Ok(repo_path) => repo_path,
-                        Err(err) => return Err(anyhow!(err)),
-                    };
+        let status_map = self.client.get_status(p1, include_ignored)?;
+        Ok(Box::new(status_map.into_iter().map(|(path, status)| {
+            tracing::trace!(%path, ?status, "eden status");
 
-                    tracing::trace!(%repo_path, ?status, "eden status");
+            match status {
+                FileStatus::Removed => Ok(PendingChange::Deleted(path)),
+                FileStatus::Ignored => Ok(PendingChange::Ignored(path)),
+                _ => Ok(PendingChange::Changed(path)),
+            }
+        })))
+    }
 
-                    match status {
-                        ScmFileStatus::REMOVED => Ok(PendingChange::Deleted(repo_path)),
-                        ScmFileStatus::IGNORED => Ok(PendingChange::Ignored(repo_path)),
-                        _ => Ok(PendingChange::Changed(repo_path)),
-                    }
-                }
-            },
-        )))
+    fn wait_for_potential_change(&self, config: &dyn Config) -> Result<()> {
+        let interval_ms = config
+            .get_or("workingcopy", "poll-interval-ms-edenfs", || 200)?
+            .max(50);
+        loop {
+            let new_journal_position = self.client.get_journal_position()?;
+            let old_journal_position = self.journal_position.get();
+            if old_journal_position != new_journal_position {
+                tracing::trace!(
+                    "edenfs journal position changed: {:?} -> {:?}",
+                    old_journal_position,
+                    new_journal_position
+                );
+                self.journal_position.set(new_journal_position);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(interval_ms));
+        }
+        Ok(())
+    }
+
+    fn sparse_matcher(
+        &self,
+        manifests: &[Arc<RwLock<TreeManifest>>],
+        _dot_dir: &'static str,
+    ) -> Result<Option<DynMatcher>> {
+        assert!(!manifests.is_empty());
+        Ok(None)
     }
 }

@@ -5,17 +5,21 @@
  * GNU General Public License version 2.
  */
 
+use std::env;
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use anyhow::Error;
 use anyhow::Ok;
 use anyhow::Result;
 use bookmarks_types::BookmarkKey;
+use cmdlib_logging::ScubaLoggingArgs;
 use commit_id::parse_commit_id;
+use derived_data_remote::RemoteDerivationArgs;
 use fbinit::FacebookInit;
 use futures::stream::TryStreamExt;
 use futures::stream::{self};
@@ -23,11 +27,14 @@ use futures::StreamExt;
 use gitexport_tools::build_partial_commit_graph_for_export;
 use gitexport_tools::create_git_repo_on_disk;
 use gitexport_tools::rewrite_partial_changesets;
+use gitexport_tools::run_and_log_stats_to_scuba;
 use gitexport_tools::ExportPathInfo;
 use gitexport_tools::MASTER_BOOKMARK;
 use mononoke_api::BookmarkFreshness;
 use mononoke_api::ChangesetContext;
 use mononoke_api::ChangesetId;
+use mononoke_api::CoreContext;
+use mononoke_api::Repo;
 use mononoke_api::RepoContext;
 use mononoke_app::fb303::AliveService;
 use mononoke_app::fb303::Fb303AppExtension;
@@ -37,8 +44,10 @@ use mononoke_types::NonRootMPath;
 use print_graph::print_graph;
 use print_graph::PrintGraphOptions;
 use repo_authorization::AuthorizationContext;
+use repo_factory::ReadOnlyStorage;
 use slog::info;
 use slog::trace;
+use slog::warn;
 use types::ExportPathsInfoArg;
 use types::HeadChangesetArg;
 
@@ -155,7 +164,24 @@ pub mod types {
 
 #[fbinit::main]
 fn main(fb: FacebookInit) -> Result<(), Error> {
+    let read_only_storage = ReadOnlyStorage(true);
+
+    let remove_derivation_args = RemoteDerivationArgs {
+        derive_remotely: true,
+        derive_remotely_tier: None,
+        derive_remotely_hostport: None,
+    };
+
+    let default_scuba_logging_args = ScubaLoggingArgs {
+        scuba_dataset: Some("mononoke_gitexport".to_string()),
+        no_default_scuba_dataset: false,
+        warm_bookmark_cache_scuba_dataset: None,
+    };
+
     let app: MononokeApp = MononokeAppBuilder::new(fb)
+        .with_arg_defaults(read_only_storage)
+        .with_arg_defaults(remove_derivation_args)
+        .with_arg_defaults(default_scuba_logging_args)
         .with_app_extension(Fb303AppExtension {})
         .build::<GitExportArgs>()?;
 
@@ -166,10 +192,51 @@ async fn async_main(app: MononokeApp) -> Result<(), Error> {
     let start_time = std::time::Instant::now();
 
     let args: GitExportArgs = app.args()?;
-    let logger = app.logger();
     let ctx = app.new_basic_context();
+    let metadata = ctx.session().metadata();
+    let session_id = metadata.session_id();
+    let logger = ctx.logger().clone();
 
-    let repo = app.open_repo(&args.hg_repo_args).await?;
+    let ctx = ctx.with_mutated_scuba(|mut scuba| {
+        scuba.add_metadata(metadata);
+        if let Result::Ok(unixname) = env::var("USER") {
+            scuba.add("unixname", unixname);
+        }
+        scuba
+    });
+    info!(logger, "Starting session with id {}", session_id);
+
+    run_and_log_stats_to_scuba(
+        &ctx.clone(),
+        "Gitexport execution",
+        async_main_impl(app, args, ctx),
+    )
+    .await?;
+
+    info!(
+        &logger,
+        "Finished export in {} seconds",
+        start_time.elapsed().as_secs()
+    );
+
+    Ok(())
+}
+
+async fn async_main_impl(
+    app: MononokeApp,
+    args: GitExportArgs,
+    ctx: CoreContext,
+) -> Result<(), Error> {
+    let logger = ctx.logger().clone();
+    let repo: Arc<Repo> = app.open_repo(&args.hg_repo_args).await?;
+
+    if !app.environment().readonly_storage.0 {
+        warn!(logger, "readonly_storage is DISABLED!");
+    };
+
+    if !app.environment().remote_derivation_options.derive_remotely {
+        warn!(logger, "Remote derivation is DISABLED!");
+    };
 
     let auth_ctx = AuthorizationContext::new_bypass_access_control();
     let repo_ctx: RepoContext = RepoContext::new(ctx, auth_ctx.into(), repo, None, None).await?;
@@ -222,22 +289,31 @@ async fn async_main(app: MononokeApp) -> Result<(), Error> {
         "Export paths and their HEAD commits: {0:#?}", export_path_infos
     );
 
-    let graph_info = build_partial_commit_graph_for_export(
-        logger,
-        export_path_infos.clone(),
-        args.oldest_commit_ts,
+    let graph_info = run_and_log_stats_to_scuba(
+        repo_ctx.ctx(),
+        "Build partial commit graph",
+        build_partial_commit_graph_for_export(
+            &logger,
+            export_path_infos.clone(),
+            args.oldest_commit_ts,
+        ),
     )
     .await?;
 
     trace!(logger, "changesets: {:#?}", &graph_info.changesets);
     trace!(logger, "changeset parents: {:#?}", &graph_info.parents_map);
 
-    let temp_repo_ctx = rewrite_partial_changesets(
-        app.fb,
-        repo_ctx,
-        graph_info,
-        export_path_infos,
-        args.implicit_delete_prefetch_buffer_size,
+    let ctx = repo_ctx.ctx().clone();
+    let temp_repo_ctx = run_and_log_stats_to_scuba(
+        &ctx,
+        "Rewrite all relevant commits",
+        rewrite_partial_changesets(
+            app.fb,
+            repo_ctx,
+            graph_info,
+            export_path_infos,
+            args.implicit_delete_prefetch_buffer_size,
+        ),
     )
     .await?;
 
@@ -259,18 +335,16 @@ async fn async_main(app: MononokeApp) -> Result<(), Error> {
         .await?;
     };
 
-    create_git_repo_on_disk(
-        temp_repo_ctx.ctx(),
-        temp_repo_ctx.repo(),
-        args.git_repo_path,
+    run_and_log_stats_to_scuba(
+        &ctx,
+        "Create git bundle",
+        create_git_repo_on_disk(
+            temp_repo_ctx.ctx(),
+            temp_repo_ctx.repo(),
+            args.git_repo_path,
+        ),
     )
     .await?;
-
-    info!(
-        logger,
-        "Finished export in {} seconds",
-        start_time.elapsed().as_secs()
-    );
 
     Ok(())
 }

@@ -12,7 +12,7 @@ import type {TrackEventName} from 'isl-server/src/analytics/eventNames';
 import type {TrackDataWithEventName} from 'isl-server/src/analytics/types';
 import type {GitHubDiffSummary} from 'isl-server/src/github/githubCodeReviewProvider';
 import type {Comparison} from 'shared/Comparison';
-import type {AllUndefined, ExclusiveOr, Json} from 'shared/typeUtils';
+import type {AllUndefined, Json} from 'shared/typeUtils';
 import type {Hash} from 'shared/types/common';
 import type {ExportStack, ImportedStack, ImportStack} from 'shared/types/stack';
 
@@ -188,6 +188,9 @@ export type ChangedFile = {
   copy?: RepoRelativePath;
 };
 
+export type SucceedableRevset = {type: 'succeedable-revset'; revset: Revset};
+export type ExactRevset = {type: 'exact-revset'; revset: Revset};
+
 /**
  * Most arguments to eden commands are literal `string`s, except:
  * - When specifying file paths, the server needs to know which args are files to convert them to be cwd-relative.
@@ -195,12 +198,14 @@ export type ChangedFile = {
  *   The server can re-write hashes using a revset that transforms into the latest successor instead.
  *   This allows you to act on the optimistic versions of commits in queued commands,
  *   without a race with the server telling you new versions of those hashes.
- *   TODO: what if you WANT to act on an obsolete commit?
+ * - If you want an exact commit that's already obsolete or should never be replaced with a succeeded version,
+ *   you can use an exact revset.
  */
 export type CommandArg =
   | string
   | {type: 'repo-relative-file'; path: RepoRelativePath}
-  | {type: 'succeedable-revset'; revset: Revset};
+  | ExactRevset
+  | SucceedableRevset;
 
 /**
  * What process to execute a given operation in, such as `sl`
@@ -222,8 +227,18 @@ export enum CommandRunner {
  * This enables queued commands to act on optimistic state without knowing
  * the optimistic commit's hashes directly.
  */
-export function SucceedableRevset(revset: Revset): CommandArg {
+export function succeedableRevset(revset: Revset): SucceedableRevset {
   return {type: 'succeedable-revset', revset};
+}
+
+/**
+ * {@link CommandArg} representing a hash or revset which should *not* be re-written
+ * to the latest successor of that revset when being run.
+ * This uses the revset directly in the command run. Useful if you want to specifically
+ * use an obsolete commit in an operation.
+ */
+export function exactRevset(revset: Revset): ExactRevset {
+  return {type: 'exact-revset', revset};
 }
 
 /* Subscriptions */
@@ -293,6 +308,16 @@ export type CommitCloudSyncState = {
   syncError?: Error;
   workspaceError?: Error;
 };
+
+/**
+ * A file can be auto-generated, partially auto-generated, or not generated (manual).
+ * Numbered according to expected visual sort order.
+ */
+export enum GeneratedStatus {
+  Manual = 0,
+  PartiallyGenerated = 1,
+  Generated = 2,
+}
 
 type ConflictInfo = {
   command: string;
@@ -430,6 +455,8 @@ export type ConfigName =
   | 'isl.show-stack-submit-confirmation'
   | 'isl.show-diff-number'
   | 'isl.render-compact'
+  | 'isl.download-commit-should-goto'
+  | 'isl.download-commit-rebase-type'
   | 'isl.experimental-features';
 
 /** local storage keys written by ISL */
@@ -437,9 +464,7 @@ export type LocalStorageName = 'isl.drawer-state' | 'isl.has-shown-getting-start
 
 export type ClientToServerMessage =
   | {type: 'heartbeat'; id: string}
-  | {
-      type: 'refresh';
-    }
+  | {type: 'refresh'}
   | {type: 'getConfig'; name: ConfigName}
   | {type: 'setConfig'; name: ConfigName; value: string}
   | {type: 'changeCwd'; cwd: string}
@@ -447,20 +472,21 @@ export type ClientToServerMessage =
   | {type: 'fileBugReport'; data: FileABugFields; uiState?: Json}
   | {type: 'runOperation'; operation: RunnableOperation}
   | {type: 'abortRunningOperation'; operationId: string}
+  | {type: 'fetchGeneratedStatuses'; paths: Array<RepoRelativePath>}
   | {type: 'fetchCommitMessageTemplate'}
   | {type: 'fetchShelvedChanges'}
+  | {type: 'fetchLatestCommit'; revset: string}
+  | {type: 'fetchAllCommitChangedFiles'; hash: Hash}
   | {type: 'typeahead'; kind: TypeaheadKind; query: string; id: string}
   | {type: 'requestRepoInfo'}
   | {type: 'requestApplicationInfo'}
+  | {type: 'fetchAvatars'; authors: Array<string>}
   | {type: 'fetchDiffSummaries'; diffIds?: Array<DiffId>}
   | {type: 'fetchCommitCloudState'}
   | {type: 'getSuggestedReviewers'; context: {paths: Array<string>}; key: string}
   | {type: 'updateRemoteDiffMessage'; diffId: DiffId; title: string; description: string}
   | {type: 'pageVisibility'; state: PageVisibility}
-  | {
-      type: 'requestComparison';
-      comparison: Comparison;
-    }
+  | {type: 'requestComparison'; comparison: Comparison}
   | {
       type: 'requestComparisonContextLines';
       id: {
@@ -507,12 +533,19 @@ export type ServerToClientMessage =
   | FileABugProgressMessage
   | {type: 'heartbeat'; id: string}
   | {type: 'gotConfig'; name: ConfigName; value: string | undefined}
+  | {
+      type: 'fetchedGeneratedStatuses';
+      results: Record<RepoRelativePath, GeneratedStatus>;
+    }
   | {type: 'fetchedCommitMessageTemplate'; template: string}
   | {type: 'fetchedShelvedChanges'; shelvedChanges: Result<Array<ShelvedChange>>}
+  | {type: 'fetchedLatestCommit'; info: Result<CommitInfo>; revset: string}
+  | {type: 'fetchedAllCommitChangedFiles'; hash: Hash; result: Result<Array<ChangedFile>>}
   | {type: 'typeaheadResult'; id: string; result: Array<TypeaheadResult>}
   | {type: 'applicationInfo'; info: ApplicationInfo}
   | {type: 'repoInfo'; info: RepoInfo; cwd?: string}
   | {type: 'repoError'; error: RepositoryError | undefined}
+  | {type: 'fetchedAvatars'; avatars: Map<string, string>}
   | {type: 'fetchedDiffSummaries'; summaries: Result<Map<DiffId, DiffSummary>>}
   | {type: 'fetchedCommitCloudState'; state: Result<CommitCloudSyncState>}
   | {type: 'gotSuggestedReviewers'; reviewers: Array<string>; key: string}

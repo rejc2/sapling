@@ -131,20 +131,12 @@ pub struct MononokeTunables {
     // this threshold will be logged to scuba
     blobstore_read_size_logging_threshold: TunableI64,
     hash_validation_percentage: TunableI64,
-    // Filter out commits that we already have in infinitepush. Shouldn't be needed if we have a
-    // client exchanging commits with us, but when processing bundled uploads (i.e. commit cloud
-    // filling), it might help a lot.
-    filter_pre_existing_commits_on_infinitepush: TunableBool,
     backfill_read_qps: TunableI64,
     backfill_write_qps: TunableI64,
     disable_commit_scribe_logging_scs: TunableBool,
     xrepo_sync_disable_all_syncs: TunableBool,
     xrepo_disable_commit_sync_lease: TunableBool,
 
-    // Use Background session class while deriving data. This makes derived data not write
-    // data to blobstore sync queue if a write was successful to the main blobstore.
-    derived_data_use_background_session_class: TunableBoolByRepo,
-    commit_cloud_use_background_session_class: TunableBool,
     multiplex_blobstore_background_session_timeout_ms: TunableI64,
 
     allow_change_xrepo_mapping_extra: TunableBool,
@@ -187,9 +179,6 @@ pub struct MononokeTunables {
     // How often to check if derived data is disabled or not
     derived_data_disabled_watcher_delay_secs: TunableU64,
 
-    // Stops deriving on derivation workers. Will not drain Derivation Queue
-    derived_data_disable_derivation_workers: TunableBool,
-
     // How long to wait before worker retries in case of an error
     // or empty Derivation queue (ms).
     derivation_worker_sleep_duration: TunableU64,
@@ -217,18 +206,6 @@ pub struct MononokeTunables {
     fastlog_disable_mutable_renames: TunableBoolByRepo,
     megarepo_api_dont_set_file_mutable_renames: TunableBool,
     megarepo_api_dont_set_directory_mutable_renames: TunableBool,
-
-    // Changing the value of this tunable forces all mononoke instances
-    // to reload segmented changelog. One can also specify jitter (or use default)
-    segmented_changelog_force_reload: TunableI64ByRepo,
-    segmented_changelog_force_reload_jitter_secs: TunableI64,
-
-    // Override default progress logging sampling rate for segmented changelog parts
-    segmented_changelog_idmap_log_sampling_rate: TunableI64,
-    segmented_changelog_tailer_log_sampling_rate: TunableI64,
-
-    // How many commits to walk back from the client heads before failing to rebuild SC
-    segmented_changelog_client_max_commits_to_traverse: TunableI64,
 
     // What timeout to use when doing filenode lookup.
     // Usually filenode lookup is used while generating hg changesets
@@ -336,19 +313,6 @@ pub struct MononokeTunables {
     // Enable derivation on service per repo
     enable_remote_derivation: TunableBoolByRepo,
 
-    // Enable streaming commit graph EdenAPI endpoint.
-    enable_streaming_commit_graph_edenapi_endpoint: TunableBool,
-
-    // Disable all prefetching in the commit graph
-    disable_commit_graph_prefetch: TunableBool,
-    // Disable memcache for commit graph prefetching
-    disable_commit_graph_memcache_for_prefetch: TunableBool,
-    // Max number of steps to make when prefetching
-    commit_graph_prefetch_step_limit: TunableI64,
-
-    // Interval between preloaded commit graph reloads in secs.
-    preloaded_commit_graph_reloading_interval_secs: TunableI64,
-
     // Disable the fix to use isolation level read committed
     disable_wal_read_committed: TunableBool,
 
@@ -359,9 +323,6 @@ pub struct MononokeTunables {
 
     // Skip backsyncing for empty commits (except mapping changes via extras and merges)
     cross_repo_skip_backsyncing_ordinary_empty_commits: TunableBoolByRepo,
-
-    // Assigning global revs with small gaps
-    global_rev_increment_with_gaps: TunableBool,
 
     // During cross-repo sync, mark a generated changeset as created by lossy conversion if it is
     // See [this post](https://fburl.com/workplace/l5job9po) for context

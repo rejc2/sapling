@@ -40,6 +40,7 @@ typedef IdType ManifestUnodeId (rust.newtype)
 typedef IdType DeletedManifestId (rust.newtype)
 typedef IdType DeletedManifestV2Id (rust.newtype)
 typedef IdType ShardedMapNodeId (rust.newtype)
+typedef IdType ShardedMapV2NodeId (rust.newtype)
 typedef IdType FsnodeId (rust.newtype)
 typedef IdType SkeletonManifestId (rust.newtype)
 typedef IdType MPathHash (rust.newtype)
@@ -247,9 +248,9 @@ struct ContentMetadataV2 {
   // whichever is the shortest. If is_utf8 is false, the
   // first_line is None
   11: optional string first_line;
-  // Is the file auto-generated? i.e. does it have the '@generated' tag
+  // Is the file auto-generated? i.e. does it have the '@'+'generated' tag
   12: optional bool is_generated;
-  // Is the file partially-generated? i.e. does it have the '@partially-generated' tag
+  // Is the file partially-generated? i.e. does it have the '@'+'partially-generated' tag
   13: optional bool is_partially_generated;
   // Blake3 hash of the file seeded with the global thrift constant in fbcode/blake3.thrift
   14: optional Blake3 seeded_blake3;
@@ -415,6 +416,51 @@ union ShardedMapNode {
   1: ShardedMapIntermediateNode intermediate;
   2: ShardedMapTerminalNode terminal;
 }
+
+const i32 SHARDED_MAP_V2_WEIGHT_LIMIT = 2000;
+
+typedef binary_bytes ShardedMapV2Value
+typedef binary_bytes ShardedMapV2RollupData
+
+struct ShardedMapV2StoredNode {
+  1: ShardedMapV2NodeId id;
+  2: i64 weight;
+  3: i64 size;
+  4: ShardedMapV2RollupData rollup_data;
+} (rust.exhaustive)
+
+union LoadableShardedMapV2Node {
+  1: ShardedMapV2Node inlined;
+  2: ShardedMapV2StoredNode stored;
+}
+
+// ShardedMapV2 is the same as ShardedMap except that it doesn't compress
+// small subtrees into terminal nodes, instead it relies purely on inlining
+// to solve the problem of having too many small blobs.
+//
+// Each ShardedMapV2Node has a conceptual weight which is defined as the sum of
+// weights of all its inlined children, plus the count of its non-inlined children,
+// plus one if it contains a value itself.
+//
+// To figure out which of a node's children are going to be inlined and which will
+// not:
+//    1) Recursively figure out inlining for each child's subtree.
+//    2) Assume that all children are going to not be inlined and calculate the weight.
+//    3) Iterate over children in order and for each check if inlining them will not make
+//    the weight of the node go beyond SHARDED_MAP_V2_WEIGHT_LIMIT. If so inline them,
+//    otherwise store them in a separate blob and store their id.
+//
+// This guarantees that the size of individual blobs will not grow too large, and
+// should avoid creating too many small blobs in most cases. In particular, subtrees that
+// would've have become a terminal node in ShardedMap will all be inlined in ShardedMapV2,
+// with the added upside that they could potentially be stored inlined in their parent.
+struct ShardedMapV2Node {
+  1: small_binary prefix;
+  2: optional ShardedMapV2Value value;
+  3: map<byte, LoadableShardedMapV2Node> (
+    rust.type = "sorted_vector_map::SortedVectorMap",
+  ) children;
+} (rust.exhaustive)
 
 struct DeletedManifestV2 {
   1: optional ChangesetId linknode;

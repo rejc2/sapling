@@ -17,7 +17,7 @@ use pathmatcher::ExactMatcher;
 use progress_model::ActiveProgressBar;
 use progress_model::ProgressBar;
 use storemodel::minibytes::Bytes;
-use storemodel::ReadFileContents;
+use storemodel::FileStore;
 use treestate::filestate::StateFlags;
 use types::Key;
 use types::RepoPathBuf;
@@ -28,7 +28,7 @@ use crate::metadata;
 use crate::metadata::HgModifiedTime;
 use crate::metadata::Metadata;
 
-pub type ArcReadFileContents = Arc<dyn ReadFileContents>;
+pub type ArcFileStore = Arc<dyn FileStore>;
 
 pub(crate) enum FileChangeResult {
     Yes(PendingChange),
@@ -71,7 +71,7 @@ pub(crate) struct FileChangeDetector {
     results: Vec<Result<ResolvedFileChangeResult>>,
     lookups: RepoPathMap<Metadata>,
     manifest: Arc<RwLock<TreeManifest>>,
-    store: ArcReadFileContents,
+    store: ArcFileStore,
     worker_count: usize,
     progress: ActiveProgressBar,
 }
@@ -81,7 +81,7 @@ impl FileChangeDetector {
         vfs: VFS,
         last_write: HgModifiedTime,
         manifest: Arc<RwLock<TreeManifest>>,
-        store: ArcReadFileContents,
+        store: ArcFileStore,
         worker_count: Option<usize>,
     ) -> Self {
         let case_sensitive = vfs.case_sensitive();
@@ -423,9 +423,9 @@ impl IntoIterator for FileChangeDetector {
         // switch this to use that (rather than pulling down the entire contents of each
         // file).
         async_runtime::block_on(async {
-            let _span = tracing::info_span!("read_file_contents").entered();
+            let _span = tracing::info_span!("get_content_stream").entered();
 
-            let mut results = self.store.read_file_contents(keys).await;
+            let mut results = self.store.get_content_stream(keys).await;
             while let Some(result) = results.next().await {
                 match result {
                     Ok((bytes, key)) => disk_send.send((key.path, bytes)).unwrap(),

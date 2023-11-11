@@ -21,6 +21,15 @@ PYTHON := python
 endif
 PYTHON3 := python3
 
+ifeq ($(OS),Windows_NT)
+  BUCK_DEV_BUILD_MODE := @fbcode//mode/win
+else
+  UNAME_S := $(shell uname -s)
+  ifeq ($(UNAME_S),Darwin)
+    BUCK_DEV_BUILD_MODE := @fbcode//mode/mac
+  endif
+endif
+
 PYTHON_MINOR_VERSION=$(shell $(shell $(PYTHON3) contrib/pick_python.py $(PYTHON3)) -c "import sys; print(sys.version_info.minor)")
 
 ifeq ($(RUST_DEBUG),1)
@@ -76,10 +85,9 @@ oss: HGNAME=$(SL_NAME)
 oss: local
 
 install-oss: oss
-	$(shell $(PYTHON3) contrib/pick_python.py $(PYTHON3)) setup.py $(PURE) \
-	  install --root="$(DESTDIR)/" --prefix="$(PREFIX)" \
-	  --install-lib="$(PREFIX)"/lib/python3.$(PYTHON_MINOR_VERSION)/site-packages \
-	  --install-scripts="$(PREFIX)/bin" --force
+	mkdir -p $(DESTDIR)/$(PREFIX)/bin
+	cp $(SL_NAME) $(DESTDIR)/$(PREFIX)/bin
+	cp isl-dist.tar.xz $(DESTDIR)/$(PREFIX)/bin
 
 local:
 	SAPLING_OSS_BUILD=$(OSS) HGNAME=$(HGNAME) \
@@ -202,6 +210,9 @@ i18n/hg.pot: $(PYFILES) $(DOCFILES) i18n/posplit i18n/hggettext
 	msgmerge --no-location --update $@.tmp $^
 	mv -f $@.tmp $@
 
+buck:
+	cp $(shell buck2 build $(BUCK_DEV_BUILD_MODE) fbcode//eden/scm:hg --show-full-simple-output) $(HGNAME)
+
 # Packaging targets
 
-.PHONY: help all local build cleanbutpackages clean install install-home install-getdeps getdepsbuild deb hg
+.PHONY: help all local build cleanbutpackages clean install install-home install-getdeps getdepsbuild deb hg buck

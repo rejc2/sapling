@@ -41,7 +41,6 @@ use mononoke_types::ChangesetIdPrefix;
 use mononoke_types::ChangesetIdsResolvedFromPrefix;
 use mononoke_types::RepositoryId;
 use stats::prelude::*;
-use tunables::tunables;
 use vec1::Vec1;
 
 #[cfg(test)]
@@ -151,9 +150,12 @@ impl EntityStore<CachedChangesetEdges> for CacheRequest<'_> {
 
     fn memcache(&self) -> &MemcacheHandler {
         if self.prefetch.is_include() {
-            if tunables()
-                .disable_commit_graph_memcache_for_prefetch()
-                .unwrap_or(false)
+            if justknobs::eval(
+                "scm/mononoke:disable_commit_graph_memcache_for_prefetch",
+                None,
+                None,
+            )
+            .unwrap_or_default()
             {
                 // If asked to prefetch, fetching from memcache is actually
                 // slower, so don't perform memcache look-ups.
@@ -257,7 +259,9 @@ impl CachingCommitGraphStorage {
     }
 
     fn request<'a>(&'a self, ctx: &'a CoreContext, prefetch: Prefetch) -> CacheRequest<'a> {
-        let prefetch = if tunables().disable_commit_graph_prefetch().unwrap_or(false) {
+        let prefetch = if justknobs::eval("scm/mononoke:disable_commit_graph_prefetch", None, None)
+            .unwrap_or_default()
+        {
             Prefetch::None
         } else {
             prefetch.include_hint()
@@ -275,7 +279,9 @@ impl CachingCommitGraphStorage {
         ctx: &'a CoreContext,
         prefetch: Prefetch,
     ) -> CacheRequest<'a> {
-        let prefetch = if tunables().disable_commit_graph_prefetch().unwrap_or(false) {
+        let prefetch = if justknobs::eval("scm/mononoke:disable_commit_graph_prefetch", None, None)
+            .unwrap_or_default()
+        {
             Prefetch::None
         } else {
             prefetch.include_hint()

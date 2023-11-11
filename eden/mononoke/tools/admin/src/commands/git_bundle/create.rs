@@ -31,6 +31,7 @@ use protocol::generator::generate_pack_item_stream;
 use protocol::types::DeltaInclusion;
 use protocol::types::PackItemStreamRequest;
 use protocol::types::RequestedRefs;
+use protocol::types::RequestedSymrefs;
 use protocol::types::TagInclusion;
 use walkdir::WalkDir;
 
@@ -80,8 +81,15 @@ pub struct FromRepoArgs {
     #[clap(long, short = 'o', value_name = "FILE")]
     output_location: PathBuf,
     /// Flag controlling whether the generated bundle can contains deltas or just full object
-    #[clap(long)]
+    #[clap(long, conflicts_with = "exclude_ref_deltas")]
     exclude_deltas: bool,
+    /// Flag controlling whether the generated bundle can contains ref deltas or just offset deltas
+    /// (for the delta objects)
+    #[clap(long, conflicts_with = "exclude_deltas")]
+    exclude_ref_deltas: bool,
+    /// The concurrency with which the stream objects will be prefetched while writing to the bundle
+    #[clap(long, default_value_t = 1000)]
+    concurrency: usize,
 }
 
 /// Args for creating a Git bundle from an on-disk Git repo
@@ -130,9 +138,14 @@ pub async fn create_from_mononoke_repo(
     let delta_inclusion = if create_args.exclude_deltas {
         DeltaInclusion::Exclude
     } else {
+        let form = if create_args.exclude_ref_deltas {
+            DeltaForm::OnlyOffset
+        } else {
+            DeltaForm::RefAndOffset
+        };
         DeltaInclusion::Include {
-            form: DeltaForm::RefAndOffset,
-            inclusion_threshold: 0.6,
+            form,
+            inclusion_threshold: 0.90,
         }
     };
     // If references are specified without values, just take the ref names
@@ -146,6 +159,7 @@ pub async fn create_from_mononoke_repo(
         RequestedRefs::all()
     };
     let request = PackItemStreamRequest::new(
+        RequestedSymrefs::IncludeHead,
         requested_refs,
         create_args.have_heads,
         delta_inclusion,
@@ -162,6 +176,7 @@ pub async fn create_from_mononoke_repo(
         response.included_refs.into_iter().collect(),
         prereqs,
         response.num_items as u32,
+        create_args.concurrency,
         DeltaForm::RefAndOffset, // Ref deltas are supported by Git when cloning from a bundle
     )
     .await?;
@@ -241,6 +256,7 @@ async fn create_from_on_disk_repo(path: PathBuf, output_file: tokio::fs::File) -
         refs_to_include.into_iter().collect(),
         None,
         object_count as u32,
+        1000,
         DeltaForm::RefAndOffset,
     )
     .await?;

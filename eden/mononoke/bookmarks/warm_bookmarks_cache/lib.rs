@@ -29,6 +29,7 @@ use bookmarks::Bookmarks;
 use bookmarks::BookmarksRef;
 use bookmarks::BookmarksSubscription;
 use bookmarks::Freshness;
+use bookmarks_cache::BookmarksCache;
 use bookmarks_types::Bookmark;
 use bookmarks_types::BookmarkKind;
 use bookmarks_types::BookmarkPagination;
@@ -53,6 +54,9 @@ use futures::stream::StreamExt;
 use futures::stream::TryStreamExt;
 use futures_stats::TimedFutureExt;
 use futures_watchdog::WatchdogExt;
+use git_types::MappedGitCommitId;
+use git_types::RootGitDeltaManifestId;
+use git_types::TreeHandle;
 use itertools::Itertools;
 use lock_ext::RwLockExt;
 use mercurial_derivation::MappedHgChangesetId;
@@ -253,7 +257,26 @@ impl WarmBookmarksCacheBuilder {
                 RootBasenameSuffixSkeletonManifest,
             >(&self.ctx, repo_derived_data.clone()));
         }
-
+        if types.contains(TreeHandle::NAME) {
+            self.warmers.push(create_derived_data_warmer::<TreeHandle>(
+                &self.ctx,
+                repo_derived_data.clone(),
+            ));
+        }
+        if types.contains(MappedGitCommitId::NAME) {
+            self.warmers
+                .push(create_derived_data_warmer::<MappedGitCommitId>(
+                    &self.ctx,
+                    repo_derived_data.clone(),
+                ));
+        }
+        if types.contains(RootGitDeltaManifestId::NAME) {
+            self.warmers
+                .push(create_derived_data_warmer::<RootGitDeltaManifestId>(
+                    &self.ctx,
+                    repo_derived_data.clone(),
+                ));
+        }
         Ok(())
     }
 
@@ -281,27 +304,6 @@ impl WarmBookmarksCacheBuilder {
         )
         .await
     }
-}
-
-#[async_trait]
-#[facet::facet]
-pub trait BookmarksCache: Send + Sync {
-    async fn get(
-        &self,
-        ctx: &CoreContext,
-        bookmark: &BookmarkKey,
-    ) -> Result<Option<ChangesetId>, Error>;
-
-    async fn list(
-        &self,
-        ctx: &CoreContext,
-        prefix: &BookmarkPrefix,
-        pagination: &BookmarkPagination,
-        limit: Option<u64>,
-    ) -> Result<Vec<(BookmarkKey, (ChangesetId, BookmarkKind))>, Error>;
-
-    /// Awaits the completion of any ongoing update.
-    async fn sync(&self, ctx: &CoreContext);
 }
 
 /// A drop-in replacement for warm bookmark cache that doesn't

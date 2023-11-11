@@ -227,7 +227,16 @@ impl<'a> AuthSection<'a> {
         }
 
         if let Some(best) = best {
-            Ok(Some(best.clone()))
+            tracing::debug!(%url, ?best, "best_auth_group");
+
+            let mut best = best.clone();
+            if best.cacerts.is_none() {
+                if let Some(cacerts) = self.config.get("web", "cacerts") {
+                    tracing::debug!(%url, %cacerts, "using web.cacerts bundle");
+                    best.cacerts = Some(cacerts.to_string().into());
+                }
+            }
+            Ok(Some(best))
         } else if !missing.is_empty() {
             let msg = self.config.get("help", "tlsauthhelp").unwrap_or_default();
             Err(MissingCerts {

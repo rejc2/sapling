@@ -20,7 +20,7 @@ bookmarks_movement = { version = "0.1.0", path = "../bookmarks/bookmarks_movemen
 borrowed = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 changeset_fetcher = { version = "0.1.0", path = "../blobrepo/changeset_fetcher" }
 changesets = { version = "0.1.0", path = "../changesets" }
-clap = { version = "4.3.5", features = ["derive", "env", "string", "unicode", "wrap_help"] }
+clap = { version = "4.4.7", features = ["derive", "env", "string", "unicode", "wrap_help"] }
 commit_graph = { version = "0.1.0", path = "../repo_attributes/commit_graph/commit_graph" }
 context = { version = "0.1.0", path = "../server/context" }
 cross_repo_sync = { version = "0.1.0", path = "../commit_rewriting/cross_repo_sync" }
@@ -49,7 +49,6 @@ mutable_counters = { version = "0.1.0", path = "../mutable_counters" }
 phases = { version = "0.1.0", path = "../phases" }
 pushrebase = { version = "0.1.0", path = "../pushrebase" }
 pushrebase_mutation_mapping = { version = "0.1.0", path = "../pushrebase_mutation_mapping" }
-question = "0.2.2"
 repo_blobstore = { version = "0.1.0", path = "../blobrepo/repo_blobstore" }
 repo_bookmark_attrs = { version = "0.1.0", path = "../repo_attributes/repo_bookmark_attrs" }
 repo_cross_repo = { version = "0.1.0", path = "../repo_attributes/repo_cross_repo" }

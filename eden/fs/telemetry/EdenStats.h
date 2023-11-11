@@ -353,15 +353,18 @@ struct LocalStoreStats : StatsGroup<LocalStoreStats> {
 struct HgBackingStoreStats : StatsGroup<HgBackingStoreStats> {
   Duration getTree{"store.hg.get_tree_us"};
   Duration fetchTree{"store.hg.fetch_tree_us"};
+  Counter fetchTreeRetrySuccess{"store.hg.fetch_tree_retry_success"};
   Duration importTreeDuration{"store.hg.import_tree_us"};
   Counter importTreeSuccess{"store.hg.import_tree_success"};
   Counter importTreeFailure{"store.hg.import_tree_failure"};
   Counter importTreeError{"store.hg.import_tree_error"};
   Duration getBlob{"store.hg.get_blob_us"};
   Duration fetchBlob{"store.hg.fetch_blob_us"};
+  Counter fetchBlobRetrySuccess{"store.hg.fetch_blob_retry_success"};
   Duration importBlobDuration{"store.hg.import_blob_us"};
   Counter importBlobSuccess{"store.hg.import_blob_success"};
   Counter importBlobFailure{"store.hg.import_blob_failure"};
+  Counter importBlobError{"store.hg.import_blob_error"};
   Duration getBlobMetadata{"store.hg.get_blob_metadata_us"};
   Duration fetchBlobMetadata{"store.hg.fetch_blob_metadata_us"};
   Counter loadProxyHash{"store.hg.load_proxy_hash"};

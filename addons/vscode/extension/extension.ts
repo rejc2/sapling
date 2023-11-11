@@ -5,9 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+import type {EnabledSCMApiFeature} from './types';
 import type {Logger} from 'isl-server/src/logger';
 
 import packageJson from '../package.json';
+import {DeletedFileContentProvider} from './DeletedFileContentProvider';
 import {registerSaplingDiffContentProvider} from './DiffContentProvider';
 import {Internal} from './Internal';
 import {VSCodeReposList} from './VSCodeRepo';
@@ -25,14 +27,24 @@ export async function activate(context: vscode.ExtensionContext) {
   const [outputChannel, logger] = createOutputChannelLogger();
   const extensionTracker = makeServerSideTracker(logger, VSCodePlatform, packageJson.version);
   try {
-    await ensureTranslationsLoaded(context);
+    const [, enabledSCMApiFeatures] = await Promise.all([
+      ensureTranslationsLoaded(context),
+      Internal.getEnabledSCMApiFeatures?.() ?? new Set<EnabledSCMApiFeature>(['blame', 'sidebar']),
+    ]);
+    logger.info('enabled features: ', [...enabledSCMApiFeatures].join(', '));
+    Internal.maybeOverwriteIslEnabledSetting?.(logger);
     context.subscriptions.push(registerISLCommands(context, logger));
     context.subscriptions.push(outputChannel);
-    const reposList = new VSCodeReposList(logger, extensionTracker);
+    const reposList = new VSCodeReposList(logger, extensionTracker, enabledSCMApiFeatures);
     context.subscriptions.push(reposList);
-    context.subscriptions.push(new InlineBlameProvider(reposList, logger, extensionTracker));
+    if (enabledSCMApiFeatures.has('blame')) {
+      context.subscriptions.push(new InlineBlameProvider(reposList, logger, extensionTracker));
+    }
     context.subscriptions.push(registerSaplingDiffContentProvider(logger));
+    context.subscriptions.push(new DeletedFileContentProvider());
+
     context.subscriptions.push(...registerCommands(extensionTracker));
+
     Internal?.registerInternalBugLogsProvider != null &&
       context.subscriptions.push(Internal.registerInternalBugLogsProvider(logger));
 

@@ -36,16 +36,14 @@ use types::RepoPath;
 
 #[async_trait]
 #[auto_impl::auto_impl(Arc)]
-pub trait ReadFileContents: Send + Sync + 'static {
+pub trait FileStore: Send + Sync + 'static {
     /// Read the content of specified files.
     ///
     /// The returned content should be just the file contents. This means:
     /// - The returned content does not contain the "copy from" header.
     /// - The returned content does not contain raw LFS content. LFS pointer
     ///   is resolved transparently.
-    /// - If the file content is redacted, it's an error instead of a placeholder
-    ///   of dummy data.
-    async fn read_file_contents(
+    async fn get_content_stream(
         &self,
         keys: Vec<Key>,
     ) -> BoxStream<anyhow::Result<(minibytes::Bytes, Key)>>;
@@ -53,10 +51,14 @@ pub trait ReadFileContents: Send + Sync + 'static {
     /// Read rename metadata of sepcified files.
     ///
     /// The result is a vector of (key, Option<rename_from_key>) pairs for success case.
-    async fn read_rename_metadata(
+    async fn get_rename_stream(
         &self,
         keys: Vec<Key>,
     ) -> BoxStream<anyhow::Result<(Key, Option<Key>)>>;
+
+    /// Read the content of the specified file without connecting to a remote server.
+    /// Return `None` if the file is available locally.
+    fn get_local_content(&self, key: &Key) -> anyhow::Result<Option<minibytes::Bytes>>;
 
     /// Refresh the store so it might pick up new contents written by other processes.
     fn refresh(&self) -> anyhow::Result<()> {
@@ -137,7 +139,7 @@ pub trait StoreInfo: 'static {
 /// Provide ways to obtain file and tree stores.
 pub trait StoreOutput: 'static {
     /// Obtain the file store.
-    fn file_store(&self) -> Arc<dyn ReadFileContents>;
+    fn file_store(&self) -> Arc<dyn FileStore>;
 
     /// Obtain the tree store.
     ///
@@ -146,9 +148,9 @@ pub trait StoreOutput: 'static {
     fn tree_store(&self) -> Arc<dyn TreeStore>;
 }
 
-impl<T: ReadFileContents + TreeStore> StoreOutput for Arc<T> {
-    fn file_store(&self) -> Arc<dyn ReadFileContents> {
-        self.clone() as Arc<dyn ReadFileContents>
+impl<T: FileStore + TreeStore> StoreOutput for Arc<T> {
+    fn file_store(&self) -> Arc<dyn FileStore> {
+        self.clone() as Arc<dyn FileStore>
     }
 
     fn tree_store(&self) -> Arc<dyn TreeStore> {

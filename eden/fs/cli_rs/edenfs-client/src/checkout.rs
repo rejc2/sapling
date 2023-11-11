@@ -282,14 +282,6 @@ impl CheckoutConfig {
         Ok(config)
     }
 
-    pub fn print_prefetch_profiles(&self) {
-        if let Some(profiles) = &self.profiles {
-            for s in profiles.active.iter() {
-                println!("{}", s);
-            }
-        }
-    }
-
     pub fn get_prefetch_profiles(&self) -> Result<&Vec<String>> {
         if let Some(profiles) = &self.profiles {
             Ok(&profiles.active)

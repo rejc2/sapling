@@ -694,15 +694,8 @@ Future<unique_ptr<InodeBase>> TreeInode::startLoadingInodeNoThrow(
   // It simplifies their logic to guarantee that we never throw an exception,
   // and always return a Future object.  Therefore we simply wrap
   // startLoadingInode() and convert any thrown exceptions into Future.
-  try {
-    return startLoadingInode(entry, name, fetchContext);
-  } catch (...) {
-    // It's possible that makeFuture() itself could throw, but this only
-    // happens on out of memory, in which case the whole process is pretty much
-    // hosed anyway.
-    return makeFuture<unique_ptr<InodeBase>>(
-        folly::exception_wrapper{std::current_exception()});
-  }
+  return folly::makeFutureWith(
+      [&] { return startLoadingInode(entry, name, fetchContext); });
 }
 
 template <typename T>
@@ -2501,12 +2494,11 @@ ImmediateFuture<Unit> TreeInode::diff(
     inode = gitignoreEntry->getInodePtr();
     if (!inode) {
       gitignoreInodeFuture = loadChildLocked(
-                                 contents->entries,
-                                 kIgnoreFilename,
-                                 *gitignoreEntry,
-                                 pendingLoads,
-                                 context->getFetchContext())
-                                 .semi();
+          contents->entries,
+          kIgnoreFilename,
+          *gitignoreEntry,
+          pendingLoads,
+          context->getFetchContext());
     }
   }
 
@@ -2695,14 +2687,12 @@ ImmediateFuture<Unit> TreeInode::computeDiff(
                     ignore.get(),
                     entryIgnored));
           } else if (inodeEntry->isMaterialized()) {
-            ImmediateFuture<InodePtr> inodeFuture =
-                self->loadChildLocked(
-                        contents->entries,
-                        name,
-                        *inodeEntry,
-                        pendingLoads,
-                        context->getFetchContext())
-                    .semi();
+            auto inodeFuture = self->loadChildLocked(
+                contents->entries,
+                name,
+                *inodeEntry,
+                pendingLoads,
+                context->getFetchContext());
             deferredEntries.emplace_back(
                 DeferredDiffEntry::createUntrackedEntry(
                     context,
@@ -2775,14 +2765,12 @@ ImmediateFuture<Unit> TreeInode::computeDiff(
       } else if (inodeEntry->isMaterialized()) {
         // This inode is not loaded but is materialized.
         // We'll have to load it to confirm if it is the same or different.
-        ImmediateFuture<InodePtr> inodeFuture =
-            self->loadChildLocked(
-                    contents->entries,
-                    componentPath,
-                    *inodeEntry,
-                    pendingLoads,
-                    context->getFetchContext())
-                .semi();
+        auto inodeFuture = self->loadChildLocked(
+            contents->entries,
+            componentPath,
+            *inodeEntry,
+            pendingLoads,
+            context->getFetchContext());
         deferredEntries.emplace_back(DeferredDiffEntry::createModifiedEntry(
             context,
             entryPath,
@@ -3658,7 +3646,7 @@ ImmediateFuture<InvalidationRequired> TreeInode::checkoutUpdateEntry(
       contents->entries.erase(it);
 
       if (newScmEntry) {
-        auto [it, inserted] = contents->entries.emplace(
+        auto [_it, inserted] = contents->entries.emplace(
             newScmEntry->first,
             modeFromTreeEntryType(filteredEntryType(
                 newScmEntry->second.getType(), windowsSymlinksEnabled)),
@@ -4079,7 +4067,7 @@ void TreeInode::saveOverlayPostCheckout(
   }
 }
 
-folly::Future<InodePtr> TreeInode::loadChildLocked(
+ImmediateFuture<InodePtr> TreeInode::loadChildLocked(
     DirContents& /* contents */,
     PathComponentPiece name,
     DirEntry& entry,
@@ -4087,8 +4075,7 @@ folly::Future<InodePtr> TreeInode::loadChildLocked(
     const ObjectFetchContextPtr& fetchContext) {
   XDCHECK(!entry.getInode());
 
-  folly::Promise<InodePtr> promise;
-  auto future = promise.getFuture();
+  auto [promise, future] = folly::makePromiseContract<InodePtr>();
   auto childNumber = entry.getInodeNumber();
   bool startLoad = getInodeMap()->startLoadingChildIfNotLoading(
       this, name, childNumber, entry.getInitialMode(), std::move(promise));
@@ -4098,7 +4085,7 @@ folly::Future<InodePtr> TreeInode::loadChildLocked(
         this, std::move(loadFuture), name, entry.getInodeNumber());
   }
 
-  return future;
+  return ImmediateFuture{std::move(future)};
 }
 
 namespace {
@@ -4617,7 +4604,7 @@ void TreeInode::doPrefetch(
       getMount()->getServerThreadPool().get(),
       [prefetchSet, lease = std::move(*prefetchLease)]() mutable {
         std::vector<IncompleteInodeLoad> pendingLoads;
-        std::vector<Future<Unit>> inodeFutures;
+        std::vector<ImmediateFuture<Unit>> inodeFutures;
         // The aliveness of this context is guaranteed by the `.thenTry`
         // capture at the end of this lambda
         auto& context = lease.getContext();
@@ -4665,11 +4652,12 @@ void TreeInode::doPrefetch(
           load.finish();
         }
 
-        return folly::collectAllUnsafe(inodeFutures)
+        return collectAll(std::move(inodeFutures))
             .thenTry([lease = std::move(lease)](auto&&) {
               XLOG(DBG4) << "finished prefetch for "
                          << lease.getTreeInode()->getLogPath();
-            });
+            })
+            .semi();
       });
 }
 

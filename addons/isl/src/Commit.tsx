@@ -10,21 +10,25 @@ import type {Snapshot} from 'recoil';
 import type {ContextMenuItem} from 'shared/ContextMenu';
 
 import {globalRecoil} from './AccessGlobalRecoil';
+import {Avatar} from './Avatar';
 import {BranchIndicator} from './BranchIndicator';
 import {hasUnsavedEditedCommitMessage} from './CommitInfoView/CommitInfoState';
 import {currentComparisonMode} from './ComparisonView/atoms';
 import {highlightedCommits} from './HighlightedCommits';
 import {InlineBadge} from './InlineBadge';
 import {Subtle} from './Subtle';
+import {latestSuccessorUnlessExplicitlyObsolete} from './SuccessionTracker';
 import {Tooltip} from './Tooltip';
 import {UncommitButton} from './UncommitButton';
 import {UncommittedChanges} from './UncommittedChanges';
 import {tracker} from './analytics';
-import {latestCommitMessage} from './codeReview/CodeReviewInfo';
+import {codeReviewProvider, latestCommitMessage} from './codeReview/CodeReviewInfo';
 import {DiffInfo} from './codeReview/DiffBadge';
+import {SyncStatus, syncStatusAtom} from './codeReview/syncStatus';
 import {islDrawerState} from './drawerState';
 import {isDescendant} from './getCommitTree';
 import {t, T} from './i18n';
+import {IconStack} from './icons/IconStack';
 import {getAmendToOperation, isAmendToAllowedForCommit} from './operationUtils';
 import {GotoOperation} from './operations/GotoOperation';
 import {HideOperation} from './operations/HideOperation';
@@ -46,6 +50,7 @@ import {
 import {useConfirmUnsavedEditsBeforeSplit} from './stackEdit/ui/ConfirmUnsavedEditsBeforeSplit';
 import {SplitButton} from './stackEdit/ui/SplitButton';
 import {editingStackIntentionHashes} from './stackEdit/ui/stackEditState';
+import {succeedableRevset} from './types';
 import {short} from './utils';
 import {VSCodeButton, VSCodeTag} from '@vscode/webview-ui-toolkit/react';
 import React, {memo, useEffect, useState} from 'react';
@@ -53,6 +58,7 @@ import {useRecoilCallback, useRecoilValue, useSetRecoilState} from 'recoil';
 import {ComparisonType} from 'shared/Comparison';
 import {useContextMenu} from 'shared/ContextMenu';
 import {Icon} from 'shared/Icon';
+import {useAutofocusRef} from 'shared/hooks';
 import {notEmpty} from 'shared/utils';
 
 function isDraggablePreview(previewType?: CommitPreview): boolean {
@@ -158,9 +164,11 @@ export const Commit = memo(
       tracker.track('SplitOpenFromCommitContextMenu');
     }
 
-    const makeContextMenuOptions = useRecoilCallback(({snapshot}) => () => {
+    const makeContextMenuOptions = useRecoilCallback(({snapshot, set}) => () => {
       const hasUncommittedChanges =
         (snapshot.getLoadable(uncommittedChangesWithPreviews).valueMaybe()?.length ?? 0) > 0;
+      const syncStatus = snapshot.getLoadable(syncStatusAtom).valueMaybe()?.get(commit.hash);
+
       const items: Array<ContextMenuItem> = [
         {
           label: <T replace={{$hash: short(commit?.hash)}}>Copy Commit Hash "$hash"</T>,
@@ -178,6 +186,23 @@ export const Commit = memo(
           label: <T>View Changes in Commit</T>,
           onClick: viewChangesCallback,
         });
+      }
+      if (
+        !isPublic &&
+        (syncStatus === SyncStatus.LocalIsNewer || syncStatus === SyncStatus.RemoteIsNewer)
+      ) {
+        const provider = snapshot.getLoadable(codeReviewProvider).valueMaybe();
+        if (provider?.supportsComparingSinceLastSubmit) {
+          items.push({
+            label: <T replace={{$provider: provider?.label ?? 'remote'}}>Compare with $provider</T>,
+            onClick: () => {
+              set(currentComparisonMode, {
+                comparison: {type: ComparisonType.SinceLastCodeReviewSubmit, hash: commit.hash},
+                visible: true,
+              });
+            },
+          });
+        }
       }
       if (!isPublic && !actionsPrevented) {
         items.push({type: 'divider'});
@@ -202,7 +227,10 @@ export const Commit = memo(
         });
         items.push({
           label: <T>Hide Commit and Descendants</T>,
-          onClick: () => setOperationBeingPreviewed(new HideOperation(commit.hash)),
+          onClick: () =>
+            setOperationBeingPreviewed(
+              new HideOperation(latestSuccessorUnlessExplicitlyObsolete(commit)),
+            ),
         });
       }
       return items;
@@ -235,11 +263,7 @@ export const Commit = memo(
             onClick={() => handlePreviewedOperation(/* cancel */ true)}>
             <T>Cancel</T>
           </VSCodeButton>
-          <VSCodeButton
-            appearance="primary"
-            onClick={() => handlePreviewedOperation(/* cancel */ false)}>
-            <T>Hide</T>
-          </VSCodeButton>
+          <ConfirmHideButton onClick={() => handlePreviewedOperation(/* cancel */ false)} />
         </React.Fragment>,
       );
     }
@@ -253,7 +277,9 @@ export const Commit = memo(
                 new GotoOperation(
                   // If the commit has a remote bookmark, use that instead of the hash. This is easier to read in the command history
                   // and works better with optimistic state
-                  commit.remoteBookmarks.length > 0 ? commit.remoteBookmarks[0] : commit.hash,
+                  commit.remoteBookmarks.length > 0
+                    ? succeedableRevset(commit.remoteBookmarks[0])
+                    : latestSuccessorUnlessExplicitlyObsolete(commit),
                 ),
               );
               event.stopPropagation(); // don't toggle selection by letting click propagate onto selection target.
@@ -300,7 +326,7 @@ export const Commit = memo(
             draggable={!isPublic && isDraggablePreview(previewType)}
             onClick={onClickToSelect}
             onDoubleClick={onDoubleClickToShowDrawer}>
-            <div className="commit-avatar" />
+            <Avatar username={commit.author} />
             {isPublic ? null : (
               <span className="commit-title">
                 <span>{title}</span>
@@ -329,7 +355,9 @@ export const Commit = memo(
             {isNarrow ? commitActions : null}
           </DraggableCommit>
           <DivIfChildren className="commit-second-row">
-            {commit.diffId && !isPublic ? <DiffInfo diffId={commit.diffId} /> : null}
+            {commit.diffId && !isPublic ? (
+              <DiffInfo commit={commit} hideActions={actionsPrevented || inlineProgress != null} />
+            ) : null}
             {commit.successorInfo != null ? (
               <SuccessorInfoToDisplay successorInfo={commit.successorInfo} />
             ) : null}
@@ -345,6 +373,15 @@ export const Commit = memo(
     );
   },
 );
+
+function ConfirmHideButton({onClick}: {onClick: () => unknown}) {
+  const ref = useAutofocusRef() as React.MutableRefObject<null>;
+  return (
+    <VSCodeButton ref={ref} appearance="primary" onClick={onClick}>
+      <T>Hide</T>
+    </VSCodeButton>
+  );
+}
 
 function CommitDate({date}: {date: Date}) {
   return (
@@ -372,7 +409,10 @@ function UnsavedEditedMessageIndicator({commit}: {commit: CommitInfo}) {
   return (
     <div className="unsaved-message-indicator" data-testid="unsaved-message-indicator">
       <Tooltip title={t('This commit has unsaved changes to its message')}>
-        <Icon icon="circle-large-filled" />
+        <IconStack>
+          <Icon icon="output" />
+          <Icon icon="circle-large-filled" />
+        </IconStack>
       </Tooltip>
     </div>
   );
@@ -503,10 +543,15 @@ function DraggableCommit({
               // if the dest commit has a remote bookmark, use that instead of the hash.
               // this is easier to understand in the command history and works better with optimistic state
               const destination =
-                commit.remoteBookmarks.length > 0 ? commit.remoteBookmarks[0] : commit.hash;
+                commit.remoteBookmarks.length > 0
+                  ? succeedableRevset(commit.remoteBookmarks[0])
+                  : latestSuccessorUnlessExplicitlyObsolete(commit);
               set(
                 operationBeingPreviewed,
-                new RebaseOperation(commitBeingDragged.hash, destination),
+                new RebaseOperation(
+                  latestSuccessorUnlessExplicitlyObsolete(commitBeingDragged),
+                  destination,
+                ),
               );
             }
           }

@@ -53,8 +53,8 @@ enum class ObjectComparison : uint8_t {
  */
 class BackingStore : public RootIdCodec, public ObjectIdCodec {
  public:
-  BackingStore() {}
-  virtual ~BackingStore() {}
+  BackingStore() = default;
+  virtual ~BackingStore() = default;
 
   /**
    * A BackingStore may support multiple object ID encodings. To help EdenFS
@@ -198,7 +198,7 @@ class BackingStore : public RootIdCodec, public ObjectIdCodec {
    * Hash is widened to variable-width, eliminating the need for proxy hashes,
    * this API should be removed.
    */
-  virtual folly::SemiFuture<folly::Unit> importManifestForRoot(
+  virtual ImmediateFuture<folly::Unit> importManifestForRoot(
       const RootId& /*rootId*/,
       const Hash20& /*manifest*/,
       const ObjectFetchContextPtr& /*context*/) {

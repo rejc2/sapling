@@ -27,7 +27,7 @@ use pathmatcher::ExactMatcher;
 use pathmatcher::UnionMatcher;
 pub use sparse::Root;
 use storemodel::futures::StreamExt;
-use storemodel::ReadFileContents;
+use storemodel::FileStore;
 use types::Key;
 use types::RepoPath;
 use types::RepoPathBuf;
@@ -40,7 +40,7 @@ pub fn repo_matcher(
     vfs: &VFS,
     dot_path: &Path,
     manifest: impl Manifest + Send + Sync + 'static,
-    store: Arc<dyn ReadFileContents>,
+    store: Arc<dyn FileStore>,
 ) -> anyhow::Result<Option<(DynMatcher, u64)>> {
     repo_matcher_with_overrides(vfs, dot_path, manifest, store, &disk_overrides(dot_path)?)
 }
@@ -49,7 +49,7 @@ pub fn repo_matcher_with_overrides(
     vfs: &VFS,
     dot_path: &Path,
     manifest: impl Manifest + Send + Sync + 'static,
-    store: Arc<dyn ReadFileContents>,
+    store: Arc<dyn FileStore>,
     overrides: &HashMap<String, String>,
 ) -> anyhow::Result<Option<(DynMatcher, u64)>> {
     let prof = match fs_err::read(dot_path.join("sparse")) {
@@ -88,7 +88,7 @@ pub fn repo_matcher_with_overrides(
 pub fn build_matcher(
     prof: &sparse::Root,
     manifest: impl Manifest + Send + Sync + 'static,
-    store: Arc<dyn ReadFileContents>,
+    store: Arc<dyn FileStore>,
     overrides: &HashMap<String, String>,
 ) -> anyhow::Result<(sparse::Matcher, DefaultHasher)> {
     let manifest = Arc::new(manifest);
@@ -128,7 +128,7 @@ pub fn build_matcher(
 
         let repo_path = RepoPathBuf::from_string(path.clone())?;
         let mut stream = store
-            .read_file_contents(vec![Key::new(repo_path.clone(), file_id.clone())])
+            .get_content_stream(vec![Key::new(repo_path.clone(), file_id.clone())])
             .await;
         match stream.next().await {
             Some(Ok((bytes, _key))) => {
@@ -515,8 +515,8 @@ inc
     }
 
     #[async_trait::async_trait]
-    impl ReadFileContents for StubCommit {
-        async fn read_file_contents(
+    impl FileStore for StubCommit {
+        async fn get_content_stream(
             &self,
             keys: Vec<Key>,
         ) -> BoxStream<anyhow::Result<(storemodel::minibytes::Bytes, Key)>> {
@@ -530,11 +530,18 @@ inc
             .boxed()
         }
 
-        async fn read_rename_metadata(
+        async fn get_rename_stream(
             &self,
             _keys: Vec<Key>,
         ) -> BoxStream<anyhow::Result<(Key, Option<Key>)>> {
             stream::empty().boxed()
+        }
+
+        fn get_local_content(
+            &self,
+            _key: &Key,
+        ) -> anyhow::Result<Option<storemodel::minibytes::Bytes>> {
+            Ok(None)
         }
     }
 }

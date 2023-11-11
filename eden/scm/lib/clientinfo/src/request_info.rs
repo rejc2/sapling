@@ -123,6 +123,16 @@ pub enum ClientEntryPoint {
     Walker,
     MegarepoTool,
     MegarepoBacksyncer,
+    MegarepoForwardsyncer,
+    MononokeAdmin,
+    GitImport,
+    RemoteGitImport,
+    EdenApiReplay,
+    MononokeHgSync,
+    CurlTest,
+    MirrorHgCommits,
+    StreamingClone,
+    ScmDaemon,
 }
 
 impl ClientRequestInfo {
@@ -188,6 +198,16 @@ impl Display for ClientEntryPoint {
             ClientEntryPoint::Walker => "walker",
             ClientEntryPoint::MegarepoTool => "megarepo_tool",
             ClientEntryPoint::MegarepoBacksyncer => "megarepo_backsyncer",
+            ClientEntryPoint::MegarepoForwardsyncer => "megarepo_forwardsyncer",
+            ClientEntryPoint::MononokeAdmin => "mononoke_admin",
+            ClientEntryPoint::GitImport => "git_import",
+            ClientEntryPoint::RemoteGitImport => "remote_git_import",
+            ClientEntryPoint::EdenApiReplay => "eden_api_replay",
+            ClientEntryPoint::MononokeHgSync => "hg_sync",
+            ClientEntryPoint::CurlTest => "curl_test",
+            ClientEntryPoint::MirrorHgCommits => "mirror_hg_commits",
+            ClientEntryPoint::StreamingClone => "streaming_clone",
+            ClientEntryPoint::ScmDaemon => "scm_daemon",
         };
         write!(f, "{}", out)
     }
@@ -206,11 +226,22 @@ impl TryFrom<&str> for ClientEntryPoint {
             "landservice" => Ok(ClientEntryPoint::LandService),
             "lfs" => Ok(ClientEntryPoint::LfsServer),
             "derived_data_service" => Ok(ClientEntryPoint::DerivedDataService),
+            "derivation_worker" => Ok(ClientEntryPoint::DerivationWorker),
             "isl" => Ok(ClientEntryPoint::InteractiveSmartlog),
             "scsc" => Ok(ClientEntryPoint::ScsClient),
             "walker" => Ok(ClientEntryPoint::Walker),
             "megarepo_tool" => Ok(ClientEntryPoint::MegarepoTool),
             "megarepo_backsyncer" => Ok(ClientEntryPoint::MegarepoBacksyncer),
+            "megarepo_forwardsyncer" => Ok(ClientEntryPoint::MegarepoForwardsyncer),
+            "mononoke_admin" => Ok(ClientEntryPoint::MononokeAdmin),
+            "git_import" => Ok(ClientEntryPoint::GitImport),
+            "remote_git_import" => Ok(ClientEntryPoint::RemoteGitImport),
+            "eden_api_replay" => Ok(ClientEntryPoint::EdenApiReplay),
+            "hg_sync" => Ok(ClientEntryPoint::MononokeHgSync),
+            "curl_test" => Ok(ClientEntryPoint::CurlTest),
+            "mirror_hg_commits" => Ok(ClientEntryPoint::MirrorHgCommits),
+            "streaming_clone" => Ok(ClientEntryPoint::StreamingClone),
+            "scm_daemon" => Ok(ClientEntryPoint::ScmDaemon),
             _ => Err(anyhow!("Invalid client entry point")),
         }
     }
@@ -223,7 +254,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_client_requst_info() {
+    fn test_client_request_info() {
         let mut cri = ClientRequestInfo::new(ClientEntryPoint::Sapling);
         assert_eq!(cri.main_id, None);
         assert_eq!(cri.entry_point, ClientEntryPoint::Sapling);
@@ -251,5 +282,114 @@ mod tests {
         let cri = get_client_request_info();
         assert_eq!(cri.entry_point, ClientEntryPoint::InteractiveSmartlog);
         assert_eq!(cri.correlator, correlator.to_owned());
+    }
+
+    #[test]
+    fn test_client_entry_point() {
+        assert_eq!(
+            Some(ClientEntryPoint::Sapling),
+            ClientEntryPoint::try_from(ClientEntryPoint::Sapling.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::EdenFs),
+            ClientEntryPoint::try_from(ClientEntryPoint::EdenFs.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::ScsServer),
+            ClientEntryPoint::try_from(ClientEntryPoint::ScsServer.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::ScmQuery),
+            ClientEntryPoint::try_from(ClientEntryPoint::ScmQuery.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::EdenApi),
+            ClientEntryPoint::try_from(ClientEntryPoint::EdenApi.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::LandService),
+            ClientEntryPoint::try_from(ClientEntryPoint::LandService.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::LfsServer),
+            ClientEntryPoint::try_from(ClientEntryPoint::LfsServer.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::DerivedDataService),
+            ClientEntryPoint::try_from(ClientEntryPoint::DerivedDataService.to_string().as_ref())
+                .ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::DerivationWorker),
+            ClientEntryPoint::try_from(ClientEntryPoint::DerivationWorker.to_string().as_ref())
+                .ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::InteractiveSmartlog),
+            ClientEntryPoint::try_from(ClientEntryPoint::InteractiveSmartlog.to_string().as_ref())
+                .ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::ScsClient),
+            ClientEntryPoint::try_from(ClientEntryPoint::ScsClient.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::Walker),
+            ClientEntryPoint::try_from(ClientEntryPoint::Walker.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::MegarepoTool),
+            ClientEntryPoint::try_from(ClientEntryPoint::MegarepoTool.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::MegarepoBacksyncer),
+            ClientEntryPoint::try_from(ClientEntryPoint::MegarepoBacksyncer.to_string().as_ref())
+                .ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::MegarepoForwardsyncer),
+            ClientEntryPoint::try_from(
+                ClientEntryPoint::MegarepoForwardsyncer.to_string().as_ref()
+            )
+            .ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::MononokeAdmin),
+            ClientEntryPoint::try_from(ClientEntryPoint::MononokeAdmin.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::GitImport),
+            ClientEntryPoint::try_from(ClientEntryPoint::GitImport.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::RemoteGitImport),
+            ClientEntryPoint::try_from(ClientEntryPoint::RemoteGitImport.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::EdenApiReplay),
+            ClientEntryPoint::try_from(ClientEntryPoint::EdenApiReplay.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::MononokeHgSync),
+            ClientEntryPoint::try_from(ClientEntryPoint::MononokeHgSync.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::CurlTest),
+            ClientEntryPoint::try_from(ClientEntryPoint::CurlTest.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::MirrorHgCommits),
+            ClientEntryPoint::try_from(ClientEntryPoint::MirrorHgCommits.to_string().as_ref()).ok()
+        );
+
+        assert_eq!(
+            Some(ClientEntryPoint::StreamingClone),
+            ClientEntryPoint::try_from(ClientEntryPoint::StreamingClone.to_string().as_ref()).ok()
+        );
+
+        assert_eq!(
+            Some(ClientEntryPoint::ScmDaemon),
+            ClientEntryPoint::try_from(ClientEntryPoint::ScmDaemon.to_string().as_ref()).ok()
+        );
     }
 }

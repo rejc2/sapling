@@ -982,11 +982,7 @@ impl<'r> Bundle2Resolver<'r> {
                     }
                 }
 
-                let changesets = if is_infinitepush
-                    && tunables()
-                        .filter_pre_existing_commits_on_infinitepush()
-                        .unwrap_or_default()
-                {
+                let changesets = if is_infinitepush {
                     let hg_cs_ids = changesets.iter().map(|(id, _)| *id).collect::<Vec<_>>();
 
                     let mapping = self
@@ -1030,9 +1026,12 @@ impl<'r> Bundle2Resolver<'r> {
 
                 let mut ctx = self.ctx.clone();
                 if is_infinitepush
-                    && tunables::tunables()
-                        .commit_cloud_use_background_session_class()
-                        .unwrap_or_default()
+                    && justknobs::eval(
+                        "scm/mononoke:commit_cloud_use_background_session_class",
+                        None,
+                        None,
+                    )
+                    .unwrap_or_default()
                 {
                     ctx.session_mut()
                         .override_session_class(SessionClass::BackgroundUnlessTooSlow);
