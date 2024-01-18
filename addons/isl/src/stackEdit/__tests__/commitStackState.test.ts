@@ -141,27 +141,79 @@ describe('CommitStackState', () => {
     expect([...stack.log(3)]).toStrictEqual([3, 2, 1, 0]);
   });
 
-  it('logs file history', () => {
-    const stack = new CommitStackState(exportStack1);
-    expect([...stack.logFile(3, 'x.txt')]).toStrictEqual([
-      [2, 'x.txt'],
-      [1, 'x.txt'],
-    ]);
-    expect([...stack.logFile(3, 'y.txt')]).toStrictEqual([[2, 'y.txt']]);
-    expect([...stack.logFile(3, 'z.txt')]).toStrictEqual([
-      [3, 'z.txt'],
-      [1, 'z.txt'],
-    ]);
-    // Changes in not requested commits (rev 0) are ignored.
-    expect([...stack.logFile(3, 'k.txt')]).toStrictEqual([]);
-  });
+  describe('log file history', () => {
+    // [rev, path] => [rev, path, file]
+    const extend = (stack: CommitStackState, revPathPairs: Array<[Rev, string]>) => {
+      return revPathPairs.map(([rev, path]) => {
+        const file = rev >= 0 ? stack.get(rev)?.files.get(path) : stack.bottomFiles.get(path);
+        expect(file).toBe(stack.getFile(rev, path));
+        return [rev, path, file];
+      });
+    };
 
-  it('logs file history following renames', () => {
-    const stack = new CommitStackState(exportStack1);
-    expect([...stack.logFile(3, 'y.txt', true)]).toStrictEqual([
-      [2, 'y.txt'],
-      [1, 'x.txt'],
-    ]);
+    it('logs file history', () => {
+      const stack = new CommitStackState(exportStack1);
+      expect([...stack.logFile(3, 'x.txt')]).toStrictEqual(
+        extend(stack, [
+          [2, 'x.txt'],
+          [1, 'x.txt'],
+        ]),
+      );
+      expect([...stack.logFile(3, 'y.txt')]).toStrictEqual(extend(stack, [[2, 'y.txt']]));
+      expect([...stack.logFile(3, 'z.txt')]).toStrictEqual(
+        extend(stack, [
+          [3, 'z.txt'],
+          [1, 'z.txt'],
+        ]),
+      );
+      // Changes in not requested commits (rev 0) are ignored.
+      expect([...stack.logFile(3, 'k.txt')]).toStrictEqual([]);
+    });
+
+    it('logs file history following renames', () => {
+      const stack = new CommitStackState(exportStack1);
+      expect([...stack.logFile(3, 'y.txt', true)]).toStrictEqual(
+        extend(stack, [
+          [2, 'y.txt'],
+          [1, 'x.txt'],
+        ]),
+      );
+    });
+
+    it('logs file history including the bottom', () => {
+      const stack = new CommitStackState(exportStack1);
+      ['x.txt', 'z.txt'].forEach(path => {
+        expect([...stack.logFile(1, path, true, true)]).toStrictEqual(
+          extend(stack, [
+            [1, path],
+            // rev 0 does not change x.txt or z.txt
+            [-1, path],
+          ]),
+        );
+      });
+    });
+
+    it('parentFile follows rename to bottomFile', () => {
+      const stack = new CommitStackState([
+        {
+          ...exportCommitDefault,
+          relevantFiles: {
+            'x.txt': {data: '11'},
+            'z.txt': {data: '22'},
+          },
+          files: {
+            'z.txt': {data: '33', copyFrom: 'x.txt'},
+          },
+          text: 'Commit Foo',
+        },
+      ]);
+      const file = stack.getFile(0, 'z.txt');
+      expect(stack.getUtf8Data(file)).toBe('33');
+      const [, , parentFileWithRename] = stack.parentFile(0, 'z.txt', true);
+      expect(stack.getUtf8Data(parentFileWithRename)).toBe('11');
+      const [, , parentFile] = stack.parentFile(0, 'z.txt', false);
+      expect(stack.getUtf8Data(parentFile)).toBe('22');
+    });
   });
 
   it('provides file contents at given revs', () => {
@@ -222,7 +274,7 @@ describe('CommitStackState', () => {
         // y.txt connects to x.txt's history.
         '0:./x.txt 1:A/x.txt(xx) 2:B/y.txt(yy)',
         // z.txt does not connect to x.txt's history (but still have one parent for diff).
-        '0:./z.txt 1:B/z.txt(zz)',
+        '0:./y.txt 1:B/z.txt(zz)',
       ]);
     });
 
@@ -257,6 +309,16 @@ describe('CommitStackState', () => {
         '0:./x.txt 1:A/x.txt(33) 2:B/y.txt(33)',
         // z.txt: modified by A, deleted by C.
         '0:./z.txt(11) 1:A/z.txt(22) 2:C/z.txt',
+      ]);
+    });
+
+    it('with rename tracking disabled', () => {
+      const stack = new CommitStackState(exportStack1).buildFileStacks({followRenames: false});
+      // no x.txt -> y.txt rename
+      expect(stack.describeFileStacks()).toStrictEqual([
+        '0:./x.txt 1:A/x.txt(33) 2:B/x.txt',
+        '0:./z.txt(11) 1:A/z.txt(22) 2:C/z.txt',
+        '0:./y.txt 1:B/y.txt(33)',
       ]);
     });
   });
@@ -916,7 +978,7 @@ describe('CommitStackState', () => {
 
       // Compare the old and new file stacks.
       // - x.txt deletion is now by commit 'C', not 'B'.
-      // - y.txt rename is lost (current limitation)
+      // - x.txt -> y.txt rename is preserved.
       expect(stack.describeFileStacks(true)).toEqual([
         '0:./x.txt 1:A/x.txt(33) 2:B/y.txt(33)',
         '0:./z.txt(11) 1:A/z.txt(22) 2:C/z.txt',
@@ -924,11 +986,12 @@ describe('CommitStackState', () => {
       expect(newStack.describeFileStacks(true)).toEqual([
         '0:./x.txt 1:A/x.txt(33) 2:B/x.txt(3) 3:C/x.txt',
         '0:./z.txt(11) 1:A/z.txt(22) 2:C/z.txt',
-        '0:./y.txt 1:B/y.txt(33)',
+        '0:A/x.txt(33) 1:B/y.txt(33)',
       ]);
     });
 
-    it('adds ABSENT flag if content becomes empty', () => {
+    it('does not add ABSENT flag if content becomes empty', () => {
+      // This was a herustics when `flags` are not handled properly. Now it is no longer needed.
       // y.txt was added by subStack rev 0 (B). We are moving it to be added by rev 1 (C).
       const fileIdx = unwrap(subStack.commitToFile.get(CommitIdx({rev: 0, path: 'y.txt'}))).fileIdx;
       const fileStack = unwrap(subStack.fileStacks.get(fileIdx));
@@ -941,7 +1004,7 @@ describe('CommitStackState', () => {
       // Check that y.txt in rev 2 (B) is absent, not just empty.
       const file = newStack.getFile(2, 'y.txt');
       expect(file.data).toBe('');
-      expect(file.flags).toBe(ABSENT_FILE.flags);
+      expect(file.flags).toBe('');
     });
   });
 });

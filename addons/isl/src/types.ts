@@ -71,6 +71,16 @@ export type DiffSummary = GitHubDiffSummary | InternalTypes['PhabricatorDiffSumm
  */
 export type DiffSignalSummary = 'running' | 'pass' | 'failed' | 'warning' | 'no-signal';
 
+/**
+ * Information about a land request, specific to each Code Review Provider.
+ */
+export type LandInfo = undefined | InternalTypes['PhabricatorLandInfo'];
+
+/**
+ * Information used to confirm a land from a given initiation LandInfo.
+ */
+export type LandConfirmationInfo = undefined | InternalTypes['PhabricatorLandConfirmationInfo'];
+
 /** An error causing the entire Repository to not be accessible */
 export type RepositoryError =
   | {
@@ -200,10 +210,12 @@ export type ExactRevset = {type: 'exact-revset'; revset: Revset};
  *   without a race with the server telling you new versions of those hashes.
  * - If you want an exact commit that's already obsolete or should never be replaced with a succeeded version,
  *   you can use an exact revset.
+ * - Specifying config values to override for just this command, so they can be processed separately.
  */
 export type CommandArg =
   | string
   | {type: 'repo-relative-file'; path: RepoRelativePath}
+  | {type: 'config'; key: string; value: string}
   | ExactRevset
   | SucceedableRevset;
 
@@ -422,6 +434,10 @@ export type PlatformSpecificServerToClientMessages =
       value: Json | undefined;
     };
 
+export type CodeReviewProviderSpecificClientToServerMessages =
+  | never
+  | InternalTypes['PhabricatorClientToServerMessages'];
+
 export type PageVisibility = 'focused' | 'visible' | 'hidden';
 
 export type FileABugFields = {title: string; description: string; repro: string};
@@ -457,10 +473,16 @@ export type ConfigName =
   | 'isl.render-compact'
   | 'isl.download-commit-should-goto'
   | 'isl.download-commit-rebase-type'
-  | 'isl.experimental-features';
+  | 'isl.experimental-features'
+  // which graph renderer to use (0: tree; 1: dag; 2: show both).
+  | 'isl.experimental-graph-renderer';
 
 /** local storage keys written by ISL */
-export type LocalStorageName = 'isl.drawer-state' | 'isl.has-shown-getting-started';
+export type LocalStorageName =
+  | 'isl.drawer-state'
+  | 'isl.ui-zoom'
+  | 'isl.has-shown-getting-started'
+  | 'isl.amend-autorestack';
 
 export type ClientToServerMessage =
   | {type: 'heartbeat'; id: string}
@@ -477,12 +499,15 @@ export type ClientToServerMessage =
   | {type: 'fetchShelvedChanges'}
   | {type: 'fetchLatestCommit'; revset: string}
   | {type: 'fetchAllCommitChangedFiles'; hash: Hash}
+  | {type: 'renderMarkup'; markup: string; id: number}
   | {type: 'typeahead'; kind: TypeaheadKind; query: string; id: string}
   | {type: 'requestRepoInfo'}
   | {type: 'requestApplicationInfo'}
   | {type: 'fetchAvatars'; authors: Array<string>}
-  | {type: 'fetchDiffSummaries'; diffIds?: Array<DiffId>}
   | {type: 'fetchCommitCloudState'}
+  | {type: 'fetchDiffSummaries'; diffIds?: Array<DiffId>}
+  | {type: 'fetchLandInfo'; topOfStack: DiffId}
+  | {type: 'confirmLand'; landConfirmationInfo: LandConfirmationInfo}
   | {type: 'getSuggestedReviewers'; context: {paths: Array<string>}; key: string}
   | {type: 'updateRemoteDiffMessage'; diffId: DiffId; title: string; description: string}
   | {type: 'pageVisibility'; state: PageVisibility}
@@ -509,6 +534,7 @@ export type ClientToServerMessage =
       title: string;
       comparison: Comparison;
     }
+  | CodeReviewProviderSpecificClientToServerMessages
   | PlatformSpecificClientToServerMessages;
 
 export type SubscriptionResultsData = {
@@ -547,7 +573,10 @@ export type ServerToClientMessage =
   | {type: 'repoError'; error: RepositoryError | undefined}
   | {type: 'fetchedAvatars'; avatars: Map<string, string>}
   | {type: 'fetchedDiffSummaries'; summaries: Result<Map<DiffId, DiffSummary>>}
+  | {type: 'fetchedLandInfo'; topOfStack: DiffId; landInfo: Result<LandInfo>}
+  | {type: 'confirmedLand'; result: Result<undefined>}
   | {type: 'fetchedCommitCloudState'; state: Result<CommitCloudSyncState>}
+  | {type: 'renderedMarkup'; html: string; id: number}
   | {type: 'gotSuggestedReviewers'; reviewers: Array<string>; key: string}
   | {type: 'updatedRemoteDiffMessage'; diffId: DiffId; error?: string}
   | {type: 'uploadFileResult'; id: string; result: Result<string>}

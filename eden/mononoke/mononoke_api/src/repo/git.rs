@@ -32,6 +32,7 @@ use packfile::pack::DeltaForm;
 use protocol::generator::generate_pack_item_stream;
 use protocol::types::DeltaInclusion;
 use protocol::types::PackItemStreamRequest;
+use protocol::types::PackfileItemInclusion;
 use protocol::types::RequestedRefs;
 use protocol::types::RequestedSymrefs;
 use protocol::types::TagInclusion;
@@ -92,13 +93,13 @@ impl RepoContext {
         Ok(())
     }
 
-    /// Upload serialized git objects
-    pub async fn upload_git_object(
+    /// Upload serialized git objects. Applies for all git object types except git blobs.
+    pub async fn upload_non_blob_git_object(
         &self,
         git_hash: &gix_hash::oid,
         raw_content: Vec<u8>,
     ) -> anyhow::Result<(), GitError> {
-        upload_git_object(
+        upload_non_blob_git_object(
             &self.ctx,
             self.inner_repo().repo_blobstore(),
             git_hash,
@@ -149,10 +150,27 @@ impl RepoContext {
     ) -> Result<Bytes, GitError> {
         repo_stack_git_bundle(self.ctx(), self.inner_repo(), head, base).await
     }
+
+    /// Upload the packfile base item corresponding to the raw git object with the
+    /// input git hash
+    pub async fn repo_upload_packfile_base_item(
+        &self,
+        git_hash: &gix_hash::oid,
+        raw_content: Vec<u8>,
+    ) -> anyhow::Result<(), GitError> {
+        upload_packfile_base_item(
+            &self.ctx,
+            self.inner_repo().repo_blobstore(),
+            git_hash,
+            raw_content,
+        )
+        .await
+    }
 }
 
-/// Free function for uploading serialized git objects
-pub async fn upload_git_object<B>(
+/// Free function for uploading serialized git objects. Applies to all
+/// git object types except git blobs.
+pub async fn upload_non_blob_git_object<B>(
     ctx: &CoreContext,
     blobstore: &B,
     git_hash: &gix_hash::oid,
@@ -161,7 +179,21 @@ pub async fn upload_git_object<B>(
 where
     B: Blobstore + Clone,
 {
-    git_types::upload_git_object(ctx, blobstore, git_hash, raw_content).await
+    git_types::upload_non_blob_git_object(ctx, blobstore, git_hash, raw_content).await
+}
+
+/// Free function for uploading packfile item for git base object
+pub async fn upload_packfile_base_item<B>(
+    ctx: &CoreContext,
+    blobstore: &B,
+    git_hash: &gix_hash::oid,
+    raw_content: Vec<u8>,
+) -> anyhow::Result<(), GitError>
+where
+    B: Blobstore + Clone,
+{
+    git_types::upload_packfile_base_item(ctx, blobstore, git_hash, raw_content).await?;
+    Ok(())
 }
 
 /// Free function for creating Mononoke counterpart of Git tree object
@@ -320,6 +352,7 @@ pub async fn repo_stack_git_bundle(
         already_present,
         DeltaInclusion::standard(),
         TagInclusion::AsIs,
+        PackfileItemInclusion::Generate,
     );
     let response = generate_pack_item_stream(ctx, repo, request)
         .await

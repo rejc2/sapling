@@ -12,22 +12,17 @@ use std::str::FromStr;
 
 use anyhow::anyhow;
 use anyhow::Context;
-use async_runtime::spawn;
-use async_runtime::spawn_blocking;
 use cxx::UniquePtr;
-use futures::StreamExt;
 use manifest::FileMetadata;
 use manifest::FsNodeMetadata;
 use manifest::Manifest;
-use manifest_tree::TreeManifest;
 use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use pathmatcher::DirectoryMatch;
 use repo::repo::Repo;
 use sparse::Matcher;
 use sparse::Root;
-use tokio::sync::Mutex;
 use types::HgId;
-use types::Key;
 use types::RepoPath;
 use types::RepoPathBuf;
 
@@ -112,7 +107,7 @@ mod ffi {
     }
 
     unsafe extern "C++" {
-        include!("eden/scm/lib/edenfs_ffi/src/ffi.h");
+        include!("eden/scm/lib/edenfs_ffi/include/ffi.h");
 
         #[namespace = "facebook::eden"]
         type MatcherPromise;
@@ -163,12 +158,12 @@ impl From<DirectoryMatch> for ffi::FilterDirectoryMatch {
 // As mentioned below, we return the MercurialMatcher via a promise to circumvent some async
 // limitations in CXX. This function wraps the bulk of the Sparse logic and provides a single
 // place for returning result/error info via the MatcherPromise.
-async fn profile_contents_from_repo(
+fn profile_contents_from_repo(
     id: FilterId,
     abs_repo_path: PathBuf,
     promise: UniquePtr<MatcherPromise>,
 ) {
-    match _profile_contents_from_repo(id, abs_repo_path).await {
+    match _profile_contents_from_repo(id, abs_repo_path) {
         Ok(res) => {
             set_matcher_promise_result(promise, res);
         }
@@ -179,73 +174,73 @@ async fn profile_contents_from_repo(
 }
 
 // Fetches the content of a filter file and turns it into a MercurialMatcher
-async fn _profile_contents_from_repo(
+fn _profile_contents_from_repo(
     id: FilterId,
     abs_repo_path: PathBuf,
 ) -> Result<Box<MercurialMatcher>, anyhow::Error> {
-    let mut repo_hash = REPO_HASHMAP.lock().await;
-    if !repo_hash.contains_key(&abs_repo_path) {
+    let mut repo_map = REPO_HASHMAP.lock();
+    if !repo_map.contains_key(&abs_repo_path) {
         // Load the repo and store it for later use
         let repo = Repo::load(&abs_repo_path, &[], &[]).with_context(|| {
             anyhow!("failed to load Repo object for {}", abs_repo_path.display())
         })?;
-        repo_hash.insert(abs_repo_path.clone(), repo);
+        repo_map.insert(abs_repo_path.clone(), repo);
     }
-    let repo = repo_hash
-        .get_mut(&abs_repo_path)
-        .expect("repo to be loaded");
-    let tree_store = repo
-        .tree_store()
-        .context("failed to get TreeStore from Repo object")?;
+    let repo = repo_map.get_mut(&abs_repo_path).context("loading repo")?;
+
+    // Create the tree manifest for the root tree of the repo
+    let tree_manifest = match repo.tree_resolver()?.get(&id.hg_id) {
+        Ok(manifest_id) => manifest_id,
+        Err(e) => {
+            // It's possible that the commit exists but was only recently
+            // created. Invalidate the in-memory commit graph and force a read
+            // from disk. Note: This can be slow, so only do it on error.
+            repo.invalidate_all()?;
+            repo.tree_resolver()?.get(&id.hg_id).with_context(|| {
+                anyhow!(
+                    "Failed to get root tree id for commit {:?}: {:?}",
+                    &id.hg_id,
+                    e
+                )
+            })?
+        }
+    };
+
     let repo_store = repo
         .file_store()
         .context("failed to get FileStore from Repo object")?;
 
-    // Create the tree manifest for the root tree of the repo
-    let manifest_id = repo
-        .get_root_tree_id(id.hg_id)
-        .await
-        .with_context(|| anyhow!("Failed to get root tree id for commit {:?}", &id.hg_id))?;
-    let tree_manifest = TreeManifest::durable(tree_store, manifest_id);
-
     // Get the metadata of the filter file and verify it's a valid file.
     let p = id.repo_path.clone();
 
-    let metadata = spawn_blocking(move || tree_manifest.get(&p)).await??;
-    let file_id = match metadata {
-        None => {
-            return Err(anyhow!("{:?} is not a valid filter file", id.repo_path));
-        }
-        Some(fs_node) => match fs_node {
-            FsNodeMetadata::File(FileMetadata { hgid, .. }) => hgid,
-            FsNodeMetadata::Directory(_) => {
-                return Err(anyhow!(
-                    "{:?} is a directory, not a valid filter file",
-                    id.repo_path
-                ));
+    let matcher = async_runtime::block_in_place(|| -> anyhow::Result<_> {
+        let metadata = tree_manifest.get(&p)?;
+        let file_id = match metadata {
+            None => {
+                return Err(anyhow!("{:?} is not a valid filter file", id.repo_path));
             }
-        },
-    };
+            Some(fs_node) => match fs_node {
+                FsNodeMetadata::File(FileMetadata { hgid, .. }) => hgid,
+                FsNodeMetadata::Directory(_) => {
+                    return Err(anyhow!(
+                        "{:?} is a directory, not a valid filter file",
+                        id.repo_path
+                    ));
+                }
+            },
+        };
 
-    // TODO(cuev): Is there a better way to do this?
-    let mut stream = repo_store
-        .get_content_stream(vec![Key::new(id.repo_path.clone(), file_id)])
-        .await;
-    match stream.next().await {
-        Some(Ok((bytes, _key))) => {
-            let bytes = bytes.into_vec();
-            let root = Root::from_bytes(bytes, id.repo_path.to_string()).unwrap();
-            let matcher = root.matcher(|_| async move { Ok(Some(vec![])) }).await?;
-            Ok(Box::new(MercurialMatcher { matcher }))
-        }
-        Some(Err(err)) => Err(err),
-        None => Err(anyhow!("no contents for filter file {}", &id.repo_path)),
-    }
+        let data = repo_store.get_content(&id.repo_path, file_id)?;
+        let mut root = Root::single_profile(data, id.repo_path.to_string())?;
+        root.set_version_override(Some("2".to_owned()));
+        let matcher = root.matcher(|_| Ok(Some(vec![])))?;
+        Ok(matcher)
+    })?;
+    Ok(Box::new(MercurialMatcher { matcher }))
 }
 
 // CXX doesn't allow async functions to be exposed to C++. This function wraps the bulk of the
-// Sparse Profile creation logic. We spawn a task to complete the async work, and then return the
-// value to C++ via a promise.
+// Sparse Profile creation logic.
 pub fn profile_from_filter_id(
     id: &str,
     checkout_path: &str,
@@ -268,10 +263,6 @@ pub fn profile_from_filter_id(
     // If we've already loaded a filter from this repo before, we can skip Repo
     // object creation. Otherwise, we need to pay the 1 time cost of creating
     // the Repo object.
-    spawn(profile_contents_from_repo(
-        filter_id,
-        abs_repo_path,
-        promise,
-    ));
+    profile_contents_from_repo(filter_id, abs_repo_path, promise);
     Ok(())
 }

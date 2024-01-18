@@ -10,10 +10,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use manifest::Manifest;
-use manifest_tree::ReadTreeManifest;
-use manifest_tree::TreeManifest;
 use parking_lot::Mutex;
-use parking_lot::RwLock;
 use pathmatcher::DifferenceMatcher;
 use pathmatcher::DynMatcher;
 use pathmatcher::ExactMatcher;
@@ -21,22 +18,11 @@ use status::StatusBuilder;
 use tracing::trace;
 use treestate::filestate::StateFlags;
 use treestate::treestate::TreeState;
-use types::HgId;
 use types::RepoPathBuf;
 
 use crate::filesystem::PendingChange;
 use crate::util::walk_treestate;
 use crate::walker::WalkError;
-
-struct FakeTreeResolver {
-    pub manifest: Arc<RwLock<TreeManifest>>,
-}
-
-impl ReadTreeManifest for FakeTreeResolver {
-    fn get(&self, _commit_id: &HgId) -> Result<Arc<RwLock<TreeManifest>>> {
-        Ok(self.manifest.clone())
-    }
-}
 
 /// Compute the status of the working copy relative to the current commit.
 #[allow(unused_variables)]
@@ -199,6 +185,7 @@ pub fn compute_status(
         &mut treestate,
         matcher.clone(),
         StateFlags::EXIST_NEXT,
+        StateFlags::empty(),
         StateFlags::EXIST_P1 | StateFlags::EXIST_P2,
         |path, state| {
             trace!(%path, "deleted (added file not in pending changes)");
@@ -213,6 +200,7 @@ pub fn compute_status(
         &mut treestate,
         matcher.clone(),
         StateFlags::EXIST_P2,
+        StateFlags::empty(),
         StateFlags::empty(),
         |path, state| {
             // If it's in P1 but we didn't see it earlier, that means it didn't change with
@@ -246,6 +234,7 @@ pub fn compute_status(
         &mut treestate,
         matcher.clone(),
         StateFlags::EXIST_P1,
+        StateFlags::empty(),
         StateFlags::EXIST_NEXT,
         |path, state| {
             trace!(%path, "removed (in p1, not in next, not in pending changes)");
@@ -260,6 +249,7 @@ pub fn compute_status(
         &mut treestate,
         matcher.clone(),
         StateFlags::COPIED | StateFlags::EXIST_NEXT,
+        StateFlags::empty(),
         StateFlags::empty(),
         |path, state| {
             trace!(%path, "modified (marked copy, not in pending changes)");

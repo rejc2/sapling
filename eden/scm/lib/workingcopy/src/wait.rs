@@ -9,11 +9,11 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::Duration;
 
 use configmodel::Config;
-use io::IO;
 use status::FileStatus;
+use termlogger::TermLogger;
 use types::hgid::NULL_ID;
 use types::RepoPathBuf;
 
@@ -45,9 +45,8 @@ impl Wait {
         let treestate_wait = treestate::Wait::from_dot_dir(dot_dir);
         let matcher = Arc::new(pathmatcher::AlwaysMatcher::new());
         let list_ignored = false;
-        let io = IO::null();
 
-        let status = wc.status(matcher, SystemTime::UNIX_EPOCH, list_ignored, config, &io)?;
+        let status = wc.status(matcher, list_ignored, config, &TermLogger::null())?;
 
         // Collect metadata of all changed files.
         let vfs = wc.vfs();
@@ -100,6 +99,18 @@ impl Wait {
         }
 
         loop {
+            // If the wlock is taken, wait for it to avoid "status" in the middle of a (slow)
+            // checkout. Note the check is racy (the "status" might still run when a slow checkout
+            // is in-progress).
+            // Consider making non-edenfs "status" error out if a slow checkout is in-progress,
+            // then turn the error to wait (ex. D50712012).
+            if let Err(e) = wc.locker.try_lock_working_copy(wc.dot_hg_path.clone()) {
+                if e.is_contended() {
+                    std::thread::sleep(Duration::from_secs(1));
+                    continue;
+                }
+            }
+
             let new_wait = Self::new(wc, &self.dot_dir, config)?;
             if new_wait.metadata_map == self.metadata_map {
                 // Not changed.

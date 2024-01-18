@@ -211,19 +211,18 @@ class UpdateTest(EdenHgTestCase):
         with self.assertRaises(hgrepo.HgError) as context:
             self.hg("update", ".^", "--merge")
         self.assertIn(
-            b"1 conflicts while merging foo/bar.txt! "
-            b"(edit, then use 'hg resolve --mark')",
+            b"1 conflicts while merging foo/bar.txt!",
             context.exception.stderr,
         )
         self.assert_status({"foo/bar.txt": "M"}, op="updatemerge")
         self.assert_file_regex(
             "foo/bar.txt",
             """\
-            <<<<<<< working copy.*
+            <<<<<<< .*
             changing yet again
             =======
             test
-            >>>>>>> destination.*
+            >>>>>>> .*
             """,
         )
 
@@ -247,7 +246,10 @@ class UpdateTest(EdenHgTestCase):
         # both the working copy and the destination.
         with self.assertRaises(hgrepo.HgError) as context:
             self.repo.update(new_commit)
-        self.assertIn(b"abort: conflicting changes", context.exception.stderr)
+        self.assertIn(
+            b"abort: 1 conflicting file changes:\n" b" bar/some_new_file.txt\n",
+            context.exception.stderr,
+        )
         self.assertEqual(
             base_commit,
             self.repo.get_head_hash(),
@@ -299,7 +301,11 @@ class UpdateTest(EdenHgTestCase):
         # now the update aborts because some_new_file has the different contents
         with self.assertRaises(hgrepo.HgError) as context:
             self.repo.update(new_commit)
-        self.assertIn(b"abort: conflicting changes", context.exception.stderr)
+        self.assertIn(
+            b"bar/some_new_file.txt: untracked file differs\n"
+            b"abort: untracked files in working directory differ from files in requested revision\n",
+            context.exception.stderr,
+        )
         self.assertEqual(
             base_commit,
             self.repo.get_head_hash(),
@@ -373,8 +379,7 @@ class UpdateTest(EdenHgTestCase):
         with self.assertRaises(hgrepo.HgError) as context:
             self.repo.update(commit, merge=True)
         self.assertIn(
-            b"warning: 1 conflicts while merging some_new_file.txt! "
-            b"(edit, then use 'hg resolve --mark')",
+            b"warning: 1 conflicts while merging some_new_file.txt!",
             context.exception.stderr,
         )
         self.assertEqual(
@@ -387,11 +392,11 @@ class UpdateTest(EdenHgTestCase):
         self.assert_status({"some_new_file.txt": "M"}, op="updatemerge")
         merge_contents = dedent(
             """\
-        <<<<<<< working copy.*
+        <<<<<<< .*
         Re-create the file with different contents.
         =======
         Original contents.
-        >>>>>>> destination.*
+        >>>>>>> .*
         """
         )
         self.assertRegex(self.read_file("some_new_file.txt"), merge_contents)
@@ -465,9 +470,8 @@ class UpdateTest(EdenHgTestCase):
         self.assertRegex(
             result.stderr.decode("utf-8"),
             re.compile(
-                "abort: conflicting changes:\n"
-                "  foo/new_file.txt\n"
-                "\\(commit or (goto|update) --clean to discard changes\\)\n",
+                "foo/new_file.txt: untracked file differs\n"
+                "abort: untracked files in working directory differ from files in requested revision\n",
                 re.MULTILINE,
             ),
         )
@@ -1057,6 +1061,8 @@ class UpdateCacheInvalidationTest(EdenHgTestCase):
             self.hg(
                 "config", "--local", "experimental.abort-on-eden-conflict-error", "True"
             )
+            # TODO(sggutier): Remove this once the Rust checkout becomes independent of status
+            self.repo.hg("config", "--local", "checkout.use-rust=false")
 
             if initial_state == PrjFsState.PLACEHOLDER:
                 # Stat file2 to populate a placeholder, making the file non-virtual.

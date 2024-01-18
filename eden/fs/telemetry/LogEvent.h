@@ -8,6 +8,7 @@
 #pragma once
 
 #include <folly/portability/SysTypes.h>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -268,29 +269,6 @@ struct ServerDataFetch {
   }
 };
 
-struct EdenApiMiss {
-  enum MissType : bool {
-    Blob = false,
-    Tree = true,
-  };
-
-  static constexpr const char* type = "edenapi_miss";
-
-  std::string repo_name;
-  MissType miss_type;
-  std::string reason;
-
-  void populate(DynamicEvent& event) const {
-    event.addString("repo_source", repo_name);
-    if (miss_type == Blob) {
-      event.addString("edenapi_miss_type", "blob");
-    } else {
-      event.addString("edenapi_miss_type", "tree");
-    }
-    event.addString("edenapi_miss_reason", reason);
-  }
-};
-
 struct NfsParsingError {
   std::string proc;
   std::string reason;
@@ -411,15 +389,27 @@ struct NfsCrawlDetected {
   }
 };
 
-struct HgImportFailure {
-  static constexpr const char* type = "hgimport_failure";
+struct FetchMiss {
+  enum MissType : uint8_t { Tree = 0, Blob = 1, BlobMetadata = 2 };
 
-  std::string hgImportMethod;
-  std::string hgImportResult;
+  static constexpr const char* type = "fetch_miss";
+
+  std::string_view repo_source;
+  MissType miss_type;
+  std::string reason;
+  bool retry;
 
   void populate(DynamicEvent& event) const {
-    event.addString("method", hgImportMethod);
-    event.addString("reason", hgImportResult);
+    event.addString("repo_source", std::string(repo_source));
+    if (miss_type == Tree) {
+      event.addString("miss_type", "tree");
+    } else if (miss_type == Blob) {
+      event.addString("miss_type", "blob");
+    } else {
+      event.addString("miss_type", "aux");
+    }
+    event.addString("reason", reason);
+    event.addBool("retry", retry);
   }
 };
 

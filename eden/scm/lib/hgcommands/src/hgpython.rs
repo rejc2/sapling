@@ -8,7 +8,6 @@
 use std::cell::RefCell;
 use std::env;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::RwLock;
 use std::sync::Weak;
 
@@ -33,8 +32,6 @@ use crate::python::py_init_threads;
 use crate::python::py_initialize;
 use crate::python::py_is_initialized;
 use crate::python::py_main;
-use crate::python::py_set_argv;
-use crate::python::py_set_program_name;
 
 const HGPYENTRYPOINT_MOD: &str = "sapling";
 pub struct HgPython {
@@ -56,10 +53,11 @@ impl HgPython {
         let span = info_span!("Initialize Python");
         let _guard = span.enter();
         let args = Self::prepare_args(args);
-        let executable_name = &args[0];
-        py_set_program_name(executable_name);
-        py_initialize();
-        py_set_argv(&args);
+
+        let home = Self::sapling_python_home();
+
+        py_initialize(&args, home.as_ref());
+
         py_init_threads();
 
         let gil = Python::acquire_gil();
@@ -67,79 +65,45 @@ impl HgPython {
 
         // Putting the module in sys.modules makes it importable.
         let sys = py.import("sys").unwrap();
-        HgPython::update_path(py, &sys);
 
         // If this fails, it's a fatal error.
         let name = "bindings";
         let bindings_module = PyModule::new(py, name).unwrap();
         prepare_builtin_modules(py, &bindings_module).unwrap();
+
         let sys_modules = PyDict::extract(py, &sys.get(py, "modules").unwrap()).unwrap();
         sys_modules.set_item(py, name, bindings_module).unwrap();
-        Self::update_meta_path(py, &sys);
+        Self::update_meta_path(py, home, &sys);
     }
 
-    fn update_meta_path(py: Python, sys: &PyModule) {
-        // When running inside the repo, auto-enable "dev" mode with desired paths.
-        // This can be overridden by SAPLING_PYTHON_HOME.
-        let mut home: Option<String> = None;
+    fn sapling_python_home() -> Option<String> {
         if let Ok(v) = std::env::var("SAPLING_PYTHON_HOME") {
             if !v.is_empty() && Path::new(&v).is_dir() {
-                home = Some(v)
+                Some(v)
+            } else {
+                None
             }
         } else {
-            home = infer_python_home();
+            infer_python_home()
         }
+    }
+
+    fn update_meta_path(py: Python, home: Option<String>, sys: &PyModule) {
         if let Some(dir) = home.as_ref() {
             // Append the Python home to sys.path.
             tracing::debug!(
                 "Python modules will be imported from filesystem {} (SAPLING_PYTHON_HOME)",
                 dir
             );
+
+            // NB: This has no effect for "debugpython" on Python 3.10 (see py_initialize).
             let sys_path = PyList::extract(py, &sys.get(py, "path").unwrap()).unwrap();
             sys_path.append(py, PyString::new(py, dir).into_object());
-        } else {
-            tracing::debug!("Python modules will be imported by BindingsModuleFinder");
         }
 
         let meta_path_finder = pymodules::BindingsModuleFinder::new(py, home).unwrap();
         let meta_path = PyList::extract(py, &sys.get(py, "meta_path").unwrap()).unwrap();
         meta_path.insert(py, 0, meta_path_finder.into_object());
-    }
-
-    fn update_path(py: Python, sys: &PyModule) {
-        // In homebrew and other environments, the python modules may be installed isolated
-        // alongside the binary. Let's setup the PATH so we discover those python modules.
-        // An example layout:
-        //   $PREFIX/usr/local/bin/hg
-        //   $PREFIX/usr/local/lib/python3.8/site-packages/sapling
-        let py_version: (i32, i32, i32, String, i32) =
-            sys.get(py, "version_info").unwrap().extract(py).unwrap();
-
-        let path_for_prefix = |prefix: &str| -> String {
-            let rel_path = PathBuf::from(format!(
-                "{}/python{}.{}/site-packages",
-                prefix, py_version.0, py_version.1
-            ));
-            std::env::current_exe()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .join(rel_path)
-                .into_os_string()
-                .into_string()
-                .unwrap()
-        };
-        let py_path: PyList = sys.get(py, "path").unwrap().extract(py).unwrap();
-        py_path.append(
-            py,
-            PyUnicode::new(py, &path_for_prefix("lib")).into_object(),
-        );
-        py_path.append(
-            py,
-            PyUnicode::new(py, &path_for_prefix("lib64")).into_object(),
-        );
     }
 
     fn prepare_args(args: &[String]) -> Vec<String> {
@@ -459,6 +423,9 @@ fn infer_python_home() -> Option<String> {
         // Unlikely an in-repo path. Skip repo discovery.
         return None;
     }
+
+    // resolve symbolic links
+    let exe_path = exe_path.canonicalize().ok()?;
 
     // Try to locate the repo root and check the known "home" path.
     let prefix = if cfg!(feature = "fb") {

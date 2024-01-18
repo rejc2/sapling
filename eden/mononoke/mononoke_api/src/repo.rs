@@ -77,6 +77,7 @@ use ephemeral_blobstore::RepoEphemeralStoreArc;
 use ephemeral_blobstore::RepoEphemeralStoreRef;
 use ephemeral_blobstore::StorageLocation;
 use fbinit::FacebookInit;
+use filenodes::Filenodes;
 use filestore::Alias;
 use filestore::FetchKey;
 use filestore::FilestoreConfig;
@@ -91,6 +92,7 @@ use futures::stream::TryStreamExt;
 use futures::try_join;
 use futures::Future;
 use git_symbolic_refs::GitSymbolicRefs;
+use git_types::MappedGitCommitId;
 use hook_manager::manager::HookManager;
 use hook_manager::manager::HookManagerArc;
 use itertools::Itertools;
@@ -186,7 +188,7 @@ pub mod git;
 pub mod land_stack;
 pub mod move_bookmark;
 
-pub use git::upload_git_object;
+pub use git::upload_non_blob_git_object;
 
 define_stats! {
     prefix = "mononoke.api";
@@ -237,6 +239,7 @@ pub struct Repo {
         StreamingClone,
         CommitGraph,
         dyn GitSymbolicRefs,
+        dyn Filenodes,
     )]
     pub inner: InnerRepo,
 
@@ -384,6 +387,14 @@ pub async fn open_synced_commit_mapping(
     Ok(Arc::new(
         sql_factory.open::<SqlSyncedCommitMapping>().await?,
     ))
+}
+
+/// Defines behavuiour of xrepo_commit_lookup when there's no mapping for queries commit just yet.
+pub enum XRepoLookupSyncBehaviour {
+    // Initiates sync and returns the sync result
+    SyncIfAbsent,
+    // Returns None
+    NeverSync,
 }
 
 impl Repo {
@@ -889,6 +900,13 @@ impl RepoContext {
             .repo_derived_data()
             .config()
             .is_enabled(ChangesetInfo::NAME)
+    }
+
+    pub fn derive_gitcommit_enabled(&self) -> bool {
+        self.blob_repo()
+            .repo_derived_data()
+            .config()
+            .is_enabled(MappedGitCommitId::NAME)
     }
 
     pub fn derive_hgchangesets_enabled(&self) -> bool {
@@ -1575,12 +1593,14 @@ impl RepoContext {
         }
     }
 
-    /// Get the equivalent changeset from another repo - it will sync it if needed
+    /// Get the equivalent changeset from another repo - it may sync it if needed (depending on
+    /// `sync_behaviour` arg).
     pub async fn xrepo_commit_lookup(
         &self,
         other: &Self,
         specifier: impl Into<ChangesetSpecifier>,
         maybe_candidate_selection_hint_args: Option<CandidateSelectionHintArgs>,
+        sync_behaviour: XRepoLookupSyncBehaviour,
     ) -> Result<Option<ChangesetContext>, MononokeError> {
         let common_config = self
             .live_commit_sync_config()
@@ -1612,15 +1632,33 @@ impl RepoContext {
             self.repo.x_repo_sync_lease().clone(),
         );
 
-        let maybe_cs_id = commit_syncer
-            .sync_commit(
-                &self.ctx,
-                changeset,
-                candidate_selection_hint,
-                CommitSyncContext::ScsXrepoLookup,
-                false,
-            )
-            .await?;
+        let maybe_cs_id = match sync_behaviour {
+            XRepoLookupSyncBehaviour::NeverSync => {
+                // We are not using the candidate_selection_hint here as  it's also not used by the
+                // sync_commit to resolve the result to return. (It's used when remapping parents).
+                use cross_repo_sync::CommitSyncOutcome::*;
+                commit_syncer
+                    .get_commit_sync_outcome(&self.ctx, changeset)
+                    .await?
+                    .and_then(|outcome| match outcome {
+                        NotSyncCandidate(_) => None,
+                        RewrittenAs(cs_id, _) | EquivalentWorkingCopyAncestor(cs_id, _) => {
+                            Some(cs_id)
+                        }
+                    })
+            }
+            XRepoLookupSyncBehaviour::SyncIfAbsent => {
+                commit_syncer
+                    .sync_commit(
+                        &self.ctx,
+                        changeset,
+                        candidate_selection_hint,
+                        CommitSyncContext::ScsXrepoLookup,
+                        false,
+                    )
+                    .await?
+            }
+        };
         Ok(maybe_cs_id.map(|cs_id| ChangesetContext::new(other.clone(), cs_id)))
     }
 
@@ -1671,12 +1709,35 @@ impl RepoContext {
         location: Location<ChangesetId>,
         count: u64,
     ) -> Result<Vec<ChangesetId>, MononokeError> {
-        let segmented_changelog = self.repo.segmented_changelog();
-        let ancestor = segmented_changelog
-            .location_to_many_changeset_ids(&self.ctx, location, count)
-            .await
-            .map_err(MononokeError::from)?;
-        Ok(ancestor)
+        let use_commit_graph = justknobs::eval(
+            "scm/mononoke:commit_graph_location_to_hash",
+            None,
+            Some(self.name()),
+        )
+        .unwrap_or_default();
+
+        let ancestors = match use_commit_graph {
+            true => {
+                self.repo()
+                    .commit_graph()
+                    .locations_to_changeset_ids(
+                        self.ctx(),
+                        location.descendant,
+                        location.distance,
+                        count,
+                    )
+                    .await?
+            }
+            false => {
+                let segmented_changelog = self.repo.segmented_changelog();
+                segmented_changelog
+                    .location_to_many_changeset_ids(&self.ctx, location, count)
+                    .await
+                    .map_err(MononokeError::from)?
+            }
+        };
+
+        Ok(ancestors)
     }
 
     /// A Segmented Changelog client needs to know how to translate between a commit hash,
@@ -1688,17 +1749,45 @@ impl RepoContext {
         cs_ids: Vec<ChangesetId>,
     ) -> Result<HashMap<ChangesetId, Result<Location<ChangesetId>, MononokeError>>, MononokeError>
     {
-        let segmented_changelog = self.repo.segmented_changelog();
-        let result = segmented_changelog
-            .many_changeset_ids_to_locations(&self.ctx, master_heads, cs_ids)
-            .await
-            .map(|ok| {
-                ok.into_iter()
-                    .map(|(k, v)| (k, v.map_err(Into::into)))
-                    .collect::<HashMap<ChangesetId, Result<_, MononokeError>>>()
-            })
-            .map_err(MononokeError::from)?;
-        Ok(result)
+        let use_commit_graph = justknobs::eval(
+            "scm/mononoke:commit_graph_hash_to_location",
+            None,
+            Some(self.name()),
+        )
+        .unwrap_or_default();
+
+        match use_commit_graph {
+            true => Ok(self
+                .repo()
+                .commit_graph()
+                .changeset_ids_to_locations(self.ctx(), master_heads, cs_ids)
+                .await
+                .map(|ok| {
+                    ok.into_iter()
+                        .map(|(k, v)| {
+                            (
+                                k,
+                                Ok(Location {
+                                    descendant: v.cs_id,
+                                    distance: v.distance,
+                                }),
+                            )
+                        })
+                        .collect::<HashMap<ChangesetId, Result<_, MononokeError>>>()
+                })
+                .map_err(MononokeError::from)?),
+            false => Ok(self
+                .repo()
+                .segmented_changelog()
+                .many_changeset_ids_to_locations(&self.ctx, master_heads, cs_ids)
+                .await
+                .map(|ok| {
+                    ok.into_iter()
+                        .map(|(k, v)| (k, v.map_err(Into::into)))
+                        .collect::<HashMap<ChangesetId, Result<_, MononokeError>>>()
+                })
+                .map_err(MononokeError::from)?),
+        }
     }
 
     pub async fn segmented_changelog_clone_data(

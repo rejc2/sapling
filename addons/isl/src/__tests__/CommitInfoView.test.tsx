@@ -233,6 +233,7 @@ describe('CommitInfoView', () => {
             type: 'runOperation',
             operation: {
               args: [
+                {type: 'config', key: 'amend.autorestack', value: 'always'},
                 'amend',
                 '--addremove',
                 {type: 'repo-relative-file', path: 'src/file2.js'},
@@ -265,7 +266,7 @@ describe('CommitInfoView', () => {
         expect(amendButton?.disabled).toBe(true);
       });
 
-      it('shows optimistic uncommitted changes', () => {
+      it('shows optimistic uncommitted changes', async () => {
         act(() => {
           simulateUncommittedChangedFiles({
             value: [],
@@ -274,12 +275,15 @@ describe('CommitInfoView', () => {
 
         expect(screen.queryByText('Amend and Submit')).not.toBeInTheDocument();
 
+        jest.spyOn(platform, 'confirm').mockImplementation(() => Promise.resolve(true));
         act(() => {
           fireEvent.click(screen.getByText('Uncommit'));
         });
 
-        expect(withinCommitInfo().queryByText(ignoreRTL('cb.js'))).toBeInTheDocument();
-        expect(screen.queryByText('Amend and Submit')).toBeInTheDocument();
+        await waitFor(() => {
+          expect(withinCommitInfo().queryByText(ignoreRTL('cb.js'))).toBeInTheDocument();
+          expect(screen.queryByText('Amend and Submit')).toBeInTheDocument();
+        });
       });
     });
 
@@ -613,6 +617,7 @@ describe('CommitInfoView', () => {
                 type: 'runOperation',
                 operation: {
                   args: [
+                    {type: 'config', key: 'amend.autorestack', value: 'always'},
                     'amend',
                     '--addremove',
                     '--message',
@@ -709,7 +714,7 @@ describe('CommitInfoView', () => {
             expect(amendMessageButton).toBeDisabled();
           });
 
-          it('shows amend message instead of amend when there are only message changes', async () => {
+          it('shows amend message instead of amend when there are only message changes', () => {
             act(() => {
               simulateUncommittedChangedFiles({
                 value: [{path: 'src/file1.js', status: 'M'}],

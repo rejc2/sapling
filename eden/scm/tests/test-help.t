@@ -309,14 +309,13 @@ Test extension help:
        disablesymlinks
                      disables symlink support when enabled
        drop          drop specified changeset from the stack
+       edensparse    allow sparse EdenFS checkouts
        extdiff       command to allow external programs to compare revisions
        extorder
        extutil       (no help text available)
        fastlog
        fbcodereview  integration with Meta internal code review systems
        fbhistedit    extends the existing histedit functionality
-       generic_bisect
-                     (no help text available)
        gitrevset     map a git hash to a Mercurial hash:
        globalrevs    extension for providing strictly increasing revision
                      numbers
@@ -352,7 +351,6 @@ Test extension help:
        smartlog      command to display a relevant subgraph
        snapshot      stores snapshots of uncommitted changes
        sparse        allow sparse checkouts of the working directory
-       sshaskpass    ssh-askpass implementation that works with chg
        stablerev     provide a way to expose the "stable" commit via a revset
        traceprof     (no help text available)
        treemanifestserver
@@ -361,7 +359,10 @@ Test extension help:
        undo          (no help text available)
        win32mbcs     allow the use of MBCS paths with problematic encodings
 
+Only show documented aliases:
 
+  $ hg help goto | grep '^aliases:'
+  aliases: goto, go
 
 Verify that extension keywords appear in help templates
 
@@ -935,17 +936,6 @@ test advanced, deprecated and experimental options are shown with -v
     --dopt option is (DEPRECATED)
   $ hg help -v debugoptEXP | grep eopt
     --eopt option is (EXPERIMENTAL)
-
-#if gettext normal-layout
-test deprecated option is hidden with translation with untranslated description
-(use many globy for not failing on changed transaction)
-  $ LANGUAGE=sv hg help debugoptDEP
-  hg debugoptDEP
-  
-  (*) (glob)
-  
-  (some details hidden, use --verbose to show complete help)
-#endif
 
 Test commands that collide with topics (issue4240)
 

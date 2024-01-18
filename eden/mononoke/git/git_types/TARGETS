@@ -4,7 +4,10 @@ oncall("mononoke")
 
 rust_library(
     name = "git_types",
-    srcs = glob(["src/**/*.rs"]),
+    srcs = glob([
+        "src/**/*.rs",
+        "test_data/**/*.txt",
+    ]),
     test_deps = [
         "fbsource//third-party/rust:async-compression",
         "fbsource//third-party/rust:futures-util",
@@ -53,6 +56,7 @@ rust_library(
         "//eden/mononoke/derived_data/remote/if:derived_data_service_if-rust",
         "//eden/mononoke/filestore:filestore",
         "//eden/mononoke/git/git_types/if:git-types-thrift-rust",
+        "//eden/mononoke/git/packfile:packfile",
         "//eden/mononoke/manifest:manifest",
         "//eden/mononoke/megarepo_api:megarepo_error",
         "//eden/mononoke/mononoke_types:mononoke_types",

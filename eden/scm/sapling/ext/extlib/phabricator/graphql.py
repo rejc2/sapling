@@ -368,6 +368,22 @@ class Client:
                 is_landing
                 land_job_status
                 needs_final_review_status
+                unpublished_phabricator_versions {
+                  phabricator_version_migration {
+                    ordinal_label {
+                      abbreviated
+                    }
+                    commit_hash_best_effort
+                  }
+                }
+                phabricator_versions {
+                  nodes {
+                    ordinal_label {
+                      abbreviated
+                    }
+                    commit_hash_best_effort
+                  }
+                }
                 %s
               }
             }
@@ -390,11 +406,13 @@ class Client:
             pass
 
         infos = {}
+        diff_number_str = None  # for error message
         try:
             nodes = ret["data"]["query"][0]["results"]["nodes"]
             for node in nodes:
                 info = {}
-                infos[str(node["number"])] = info
+                diff_number_str = str(node["number"])
+                infos[diff_number_str] = info
 
                 status = node["diff_status_name"]
                 # GraphQL uses "Closed" but Conduit used "Committed" so let's
@@ -421,17 +439,34 @@ class Client:
                         .replace("_", " ")
                     )
 
+                alldiffversions = {}
+                phabversions = node.get("phabricator_versions", {}).get("nodes", [])
+                phabdraftversions = node.get("unpublished_phabricator_versions", [])
+                for version in phabversions + phabdraftversions:
+                    if "phabricator_version_migration" in version:
+                        version = version["phabricator_version_migration"]
+                    name = version.get("ordinal_label", {}).get("abbreviated")
+                    vhash = version.get("commit_hash_best_effort")
+                    if name and vhash:
+                        alldiffversions[vhash] = name
+                info["diff_versions"] = alldiffversions
+
                 active_version = node.get(
                     "latest_publishable_draft_phabricator_version"
                 )
                 if active_version is None:
                     active_version = node.get("latest_active_phabricator_version", {})
-                commit_hash = active_version.get("commit_hash_best_effort")
-                if commit_hash is not None:
-                    info["hash"] = commit_hash
+                if active_version is not None:
+                    commit_hash = active_version.get("commit_hash_best_effort")
+                    if commit_hash is not None:
+                        info["hash"] = commit_hash
 
         except (AttributeError, KeyError, TypeError):
-            raise ClientError(None, "Unexpected graphql response format")
+            if diff_number_str is not None:
+                msg = _("Unexpected graphql response format for D%s") % diff_number_str
+            else:
+                msg = _("Unexpected graphql response format")
+            raise ClientError(None, msg)
 
         return infos
 

@@ -359,27 +359,25 @@ def load(ui, name, path):
         if "ext" in sys.modules:
             ui.develwarn("extension %s imported incorrect modules" % name)
 
-    # Before we do anything with the extension, check against minimum stated
-    # compatibility. This gives extension authors a mechanism to have their
-    # extensions short circuit when loaded with a known incompatible version
-    # of Mercurial.
-    minver = getattr(mod, "minimumhgversion", None)
-    if minver and util.versiontuple(minver, 2) > util.versiontuple(n=2):
-        ui.warn(
-            _(
-                "(third party extension %s requires version %s or newer "
-                "of Mercurial; disabling)\n"
-            )
-            % (shortname, minver)
-        )
-        return
-    _validatecmdtable(ui, getattr(mod, "cmdtable", {}))
+    # the '_getattr()' triggers module import when the demand importer is active
+    _validatecmdtable(ui, _getattr(mod, "cmdtable", {}))
 
     _extensions[shortname] = mod
     _order.append(shortname)
     for fn in _aftercallbacks.get(shortname, []):
         fn(loaded=True)
     return mod
+
+
+def _getattr(obj, name, default):
+    "getattr that verifies the name of AttributeError"
+    try:
+        return getattr(obj, name)
+    except AttributeError as e:
+        if e.name == name:
+            return default
+        else:
+            raise
 
 
 def _runuisetup(name, ui):

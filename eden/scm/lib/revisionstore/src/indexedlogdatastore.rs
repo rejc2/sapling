@@ -23,6 +23,7 @@ use indexedlog::log::IndexOutput;
 use lz4_pyframe::compress;
 use lz4_pyframe::decompress;
 use minibytes::Bytes;
+use once_cell::sync::OnceCell;
 use parking_lot::RwLock;
 use tracing::warn;
 use types::hgid::ReadHgIdExt;
@@ -62,7 +63,7 @@ pub struct Entry {
     key: Key,
     metadata: Metadata,
 
-    content: Option<Bytes>,
+    content: OnceCell<Bytes>,
     compressed_content: Option<Bytes>,
 }
 
@@ -70,7 +71,7 @@ impl std::cmp::PartialEq for Entry {
     fn eq(&self, other: &Self) -> bool {
         self.key == other.key
             && self.metadata == other.metadata
-            && match (self.content_inner(), other.content_inner()) {
+            && match (self.calculate_content(), other.calculate_content()) {
                 (Ok(c1), Ok(c2)) if c1 == c2 => true,
                 _ => false,
             }
@@ -81,7 +82,7 @@ impl Entry {
     pub fn new(key: Key, content: Bytes, metadata: Metadata) -> Self {
         Entry {
             key,
-            content: Some(content),
+            content: OnceCell::with_value(content),
             metadata,
             compressed_content: None,
         }
@@ -123,16 +124,16 @@ impl Entry {
 
         Ok(Entry {
             key,
-            content: None,
+            content: OnceCell::new(),
             compressed_content: Some(bytes),
             metadata,
         })
     }
 
     /// Read an entry from the IndexedLog and deserialize it.
-    pub fn from_log(key: &Key, log: &RwLock<Store>) -> Result<Option<Self>> {
+    pub(crate) fn from_log(id: &[u8], log: &RwLock<Store>) -> Result<Option<Self>> {
         let locked_log = log.read();
-        let mut log_entry = locked_log.lookup(0, key.hgid.as_ref())?;
+        let mut log_entry = locked_log.lookup(0, id)?;
         let buf = match log_entry.next() {
             None => return Ok(None),
             Some(buf) => buf?,
@@ -154,7 +155,7 @@ impl Entry {
 
         let compressed = if let Some(compressed) = self.compressed_content {
             compressed
-        } else if let Some(raw) = self.content {
+        } else if let Some(raw) = self.content.get() {
             compress(&raw)?.into()
         } else {
             bail!("No content");
@@ -166,23 +167,20 @@ impl Entry {
         log.write().append(buf)
     }
 
-    fn content_inner(&self) -> Result<Bytes> {
-        if let Some(content) = self.content.as_ref() {
-            return Ok(content.clone());
-        }
-
-        if let Some(compressed) = self.compressed_content.as_ref() {
-            let raw = Bytes::from(decompress(compressed)?);
-            Ok(raw)
-        } else {
-            bail!("No content");
-        }
+    pub(crate) fn calculate_content(&self) -> Result<Bytes> {
+        let content = self.content.get_or_try_init(|| {
+            if let Some(compressed) = self.compressed_content.as_ref() {
+                let raw = Bytes::from(decompress(compressed)?);
+                Ok(raw)
+            } else {
+                bail!("No content");
+            }
+        })?;
+        Ok(content.clone())
     }
 
-    pub fn content(&mut self) -> Result<Bytes> {
-        self.content = Some(self.content_inner()?);
-        // this unwrap is safe because we assign the field in the line above
-        Ok(self.content.as_ref().unwrap().clone())
+    pub fn content(&self) -> Result<Bytes> {
+        self.calculate_content()
     }
 
     pub fn metadata(&self) -> &Metadata {
@@ -264,14 +262,29 @@ impl IndexedLogHgIdDataStore {
     }
 
     /// Attempt to read an Entry from IndexedLog, replacing the stored path with the one from the provided Key
-    pub fn get_entry(&self, key: Key) -> Result<Option<Entry>> {
-        Ok(self.get_raw_entry(&key)?.map(|e| e.with_key(key)))
+    pub(crate) fn get_entry(&self, key: Key) -> Result<Option<Entry>> {
+        Ok(self.get_raw_entry(&key.hgid)?.map(|e| e.with_key(key)))
     }
 
     // TODO(meyer): Make IndexedLogHgIdDataStore "directly" lockable so we can lock and do a batch of operations (RwLock Guard pattern)
     /// Attempt to read an Entry from IndexedLog, without overwriting the Key (return Key path may not match the request Key path)
-    pub(crate) fn get_raw_entry(&self, key: &Key) -> Result<Option<Entry>> {
-        Entry::from_log(key, &self.store)
+    pub(crate) fn get_raw_entry(&self, id: &HgId) -> Result<Option<Entry>> {
+        Entry::from_log(id.as_ref(), &self.store)
+    }
+
+    /// Directly get the local content. Do not ask remote servers.
+    pub(crate) fn get_local_content_direct(&self, id: &HgId) -> Result<Option<Bytes>> {
+        let entry = match self.get_raw_entry(&id)? {
+            None => return Ok(None),
+            Some(v) => v,
+        };
+        if entry.metadata().is_lfs() {
+            // Does not handle the LFS complexity here.
+            // It seems this is not actually used in modern setup.
+            return Ok(None);
+        }
+        let data = hgstore::strip_hg_file_metadata(&entry.calculate_content()?)?.0;
+        Ok(Some(data))
     }
 
     /// Write an entry to the IndexedLog
@@ -335,7 +348,7 @@ impl LocalStore for IndexedLogHgIdDataStore {
                         warn!("Force missing: {}", k.path);
                         return true;
                     }
-                    match Entry::from_log(k, &self.store) {
+                    match Entry::from_log(k.hgid.as_ref(), &self.store) {
                         Ok(None) | Err(_) => true,
                         Ok(Some(_)) => false,
                     }
@@ -355,7 +368,7 @@ impl HgIdDataStore for IndexedLogHgIdDataStore {
             content => return Ok(StoreResult::NotFound(content)),
         };
 
-        let mut entry = match self.get_raw_entry(&key)? {
+        let entry = match self.get_raw_entry(&key.hgid)? {
             None => return Ok(StoreResult::NotFound(StoreKey::HgId(key))),
             Some(entry) => entry,
         };
@@ -374,7 +387,7 @@ impl HgIdDataStore for IndexedLogHgIdDataStore {
             content => return Ok(StoreResult::NotFound(content)),
         };
 
-        let entry = match self.get_raw_entry(&key)? {
+        let entry = match self.get_raw_entry(&key.hgid)? {
             None => return Ok(StoreResult::NotFound(StoreKey::HgId(key))),
             Some(entry) => entry,
         };

@@ -51,13 +51,14 @@ use edenapi_types::HistoryEntry;
 use edenapi_types::IndexableId;
 use edenapi_types::LandStackResponse;
 use edenapi_types::LookupResult;
+use edenapi_types::SetBookmarkResponse;
 use edenapi_types::TreeAttributes;
 use edenapi_types::TreeEntry;
 use edenapi_types::UploadHgChangeset;
 use edenapi_types::UploadToken;
 use futures::prelude::*;
 use futures::stream;
-use hgstore::separate_metadata;
+use hgstore::split_hg_file_metadata;
 use progress_model::ProgressBar;
 use pyrevisionstore::as_legacystore;
 use revisionstore::HgIdMutableDeltaStore;
@@ -210,19 +211,19 @@ pub trait EdenApiPyExt: EdenApi {
         bookmark: String,
         to: Option<HgId>,
         from: Option<HgId>,
-        pushvars: Vec<(String, String)>,
-    ) -> PyResult<bool> {
-        py.allow_threads(|| {
-            block_unless_interrupted(async move {
-                self.set_bookmark(bookmark, to, from, pushvars.into_iter().collect())
-                    .await?;
-                Ok::<(), EdenApiError>(())
+        pushvars: HashMap<String, String>,
+    ) -> PyResult<Serde<SetBookmarkResponse>> {
+        let response = py
+            .allow_threads(|| {
+                block_unless_interrupted(async move {
+                    let response = self.set_bookmark(bookmark, to, from, pushvars).await?;
+                    Ok::<_, EdenApiError>(response)
+                })
             })
-        })
-        .map_pyerr(py)?
-        .map_pyerr(py)?;
+            .map_pyerr(py)?
+            .map_pyerr(py)?;
 
-        Ok(true)
+        Ok(Serde(response))
     }
 
     fn land_stack_py(
@@ -231,14 +232,12 @@ pub trait EdenApiPyExt: EdenApi {
         bookmark: String,
         head: HgId,
         base: HgId,
-        pushvars: Vec<(String, String)>,
+        pushvars: HashMap<String, String>,
     ) -> PyResult<Serde<LandStackResponse>> {
         let response = py
             .allow_threads(|| {
                 block_unless_interrupted(async move {
-                    let response = self
-                        .land_stack(bookmark, head, base, pushvars.into_iter().collect())
-                        .await?;
+                    let response = self.land_stack(bookmark, head, base, pushvars).await?;
                     Ok::<_, EdenApiError>(response)
                 })
             })
@@ -609,7 +608,7 @@ pub trait EdenApiPyExt: EdenApi {
                     StoreResult::Found(raw_content) => {
                         let raw_content = raw_content.into();
                         let (raw_data, copy_from) =
-                            separate_metadata(&raw_content).map_pyerr(py)?;
+                            split_hg_file_metadata(&raw_content).map_pyerr(py)?;
                         let content_id = calc_contentid(&raw_data);
                         Ok((
                             (content_id, raw_data),

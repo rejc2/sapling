@@ -49,6 +49,7 @@ rust_binary(
         "fbsource//third-party/rust:itertools",
         "fbsource//third-party/rust:prettytable-rs",
         "fbsource//third-party/rust:regex",
+        "fbsource//third-party/rust:serde",
         "fbsource//third-party/rust:serde_json",
         "fbsource//third-party/rust:slog",
         "fbsource//third-party/rust:smallvec",
@@ -83,7 +84,6 @@ rust_binary(
         "//eden/mononoke/cmdlib/displaying/graph:print_graph",
         "//eden/mononoke/cmdlib/mononoke_app:mononoke_app",
         "//eden/mononoke/cmdlib/scrubbing:cmdlib_scrubbing",
-        "//eden/mononoke/common/rendezvous:rendezvous",
         "//eden/mononoke/common/rust/caching_ext:caching_ext",
         "//eden/mononoke/common/rust/sql_ext:sql_ext",
         "//eden/mononoke/common/sql_construct:sql_construct",
@@ -131,7 +131,6 @@ rust_binary(
         "//eden/mononoke/server/context:context",
         "//thrift/lib/rust:fbthrift",
     ] + ([] if rust_oss.is_oss_build() else [
-        "fbsource//third-party/rust:serde",
         "//eden/mononoke/blobstore:blobstore_factory",
         "//eden/mononoke/blobstore:fileblob",
         "//eden/mononoke/blobstore:redactedblobstore",

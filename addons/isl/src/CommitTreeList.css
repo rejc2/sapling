@@ -182,6 +182,11 @@
   user-select: none;
 }
 
+.commit-details:focus-visible {
+  outline: var(--focus-border) 1px auto;
+  outline-offset: var(--halfpad);
+}
+
 .commit-wide-drag-target {
   position: absolute;
   left: 0;
@@ -254,24 +259,29 @@
   margin-right: var(--halfpad);
 }
 
-.goto-button {
-  opacity: 0;
-  transition: opacity 0.1s;
-}
-
 .goto-button .codicon {
   margin-left: var(--halfpad);
 }
 
-.commit:hover .goto-button {
+.goto-button,
+.open-commit-info-button {
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.commit:hover .goto-button,
+.commit:hover .open-commit-info-button {
   opacity: 1;
 }
-.goto-button:focus-within {
+
+.goto-button:focus-within,
+.open-commit-info-button:focus-within {
   opacity: 1;
 }
 
 .selected-commit-background {
   background-color: var(--selected-commit-background);
+  border: var(--selected-commit-border);
   width: calc(100% + 3.5 * var(--pad));
   position: absolute;
   height: 100%;
@@ -297,4 +307,22 @@
   padding: 1px 4px;
   font-size: 90%;
   background-color: var(--hover-darken);
+}
+
+.render-dag.commit-tree-root {
+  margin-left: calc(1.5 * var(--pad));
+  margin-top: calc(2px + var(--halfpad));
+}
+
+.render-dag .commit {
+  top: calc(-2px - var(--halfpad));
+}
+
+.render-dag .selected-commit-background {
+  width: calc(100% + var(--halfpad));
+  left: calc(0px - var(--halfpad));
+}
+
+.render-dag .head-commit-info {
+  margin-left: var(--halfpad);
 }

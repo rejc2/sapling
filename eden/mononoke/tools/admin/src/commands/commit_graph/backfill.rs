@@ -29,7 +29,6 @@ use mononoke_app::MononokeApp;
 use mononoke_types::ChangesetId;
 use phases::ArcPhases;
 use phases::Phases;
-use rendezvous::RendezVousOptions;
 use repo_identity::RepoIdentityRef;
 use sql_commit_graph_storage::SqlCommitGraphStorageBuilder;
 
@@ -185,9 +184,7 @@ pub(super) async fn backfill(
         .open::<SqlCommitGraphStorageBuilder>()
         .await?
         .build(
-            RendezVousOptions {
-                free_connections: 5,
-            },
+            app.environment().rendezvous_options,
             repo.repo_identity().id(),
         );
     let maybe_cached_sql_storage: Arc<dyn CommitGraphStorage> = match app.environment().caching {

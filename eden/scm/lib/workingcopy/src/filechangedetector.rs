@@ -9,10 +9,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
-use futures::StreamExt;
 use manifest::Manifest;
 use manifest_tree::TreeManifest;
-use parking_lot::RwLock;
 use pathmatcher::ExactMatcher;
 use progress_model::ActiveProgressBar;
 use progress_model::ProgressBar;
@@ -25,7 +23,6 @@ use vfs::VFS;
 
 use crate::filesystem::PendingChange;
 use crate::metadata;
-use crate::metadata::HgModifiedTime;
 use crate::metadata::Metadata;
 
 pub type ArcFileStore = Arc<dyn FileStore>;
@@ -67,10 +64,9 @@ pub(crate) trait FileChangeDetectorTrait:
 
 pub(crate) struct FileChangeDetector {
     vfs: VFS,
-    last_write: HgModifiedTime,
     results: Vec<Result<ResolvedFileChangeResult>>,
     lookups: RepoPathMap<Metadata>,
-    manifest: Arc<RwLock<TreeManifest>>,
+    manifest: Arc<TreeManifest>,
     store: ArcFileStore,
     worker_count: usize,
     progress: ActiveProgressBar,
@@ -79,15 +75,13 @@ pub(crate) struct FileChangeDetector {
 impl FileChangeDetector {
     pub fn new(
         vfs: VFS,
-        last_write: HgModifiedTime,
-        manifest: Arc<RwLock<TreeManifest>>,
+        manifest: Arc<TreeManifest>,
         store: ArcFileStore,
         worker_count: Option<usize>,
     ) -> Self {
         let case_sensitive = vfs.case_sensitive();
         FileChangeDetector {
             vfs,
-            last_write,
             lookups: RepoPathMap::new(case_sensitive),
             results: Vec::new(),
             manifest,
@@ -104,7 +98,6 @@ const EXIST_P1: StateFlags = StateFlags::EXIST_P1;
 pub(crate) fn file_changed_given_metadata(
     vfs: &VFS,
     file: metadata::File,
-    last_write: HgModifiedTime,
 ) -> Result<FileChangeResult> {
     let path = file.path;
 
@@ -222,7 +215,7 @@ pub(crate) fn file_changed_given_metadata(
         Some(ts) => ts,
     };
 
-    if Some(ts_mtime) != fs_meta.mtime() || ts_mtime == last_write {
+    if Some(ts_mtime) != fs_meta.mtime() {
         tracing::trace!(?path, "maybe (mtime doesn't match)");
         return Ok(FileChangeResult::Maybe((path, fs_meta)));
     }
@@ -271,7 +264,7 @@ impl FileChangeDetector {
         &mut self,
         file: metadata::File,
     ) -> Result<FileChangeResult> {
-        let res = file_changed_given_metadata(&self.vfs, file, self.last_write);
+        let res = file_changed_given_metadata(&self.vfs, file);
 
         if let Ok(FileChangeResult::Maybe((ref path, ref meta))) = res {
             self.lookups.insert(path.to_owned(), meta.clone());
@@ -367,7 +360,6 @@ impl IntoIterator for FileChangeDetector {
         let matcher = ExactMatcher::new(self.lookups.keys(), self.vfs.case_sensitive());
         let keys = self
             .manifest
-            .read()
             .files(matcher)
             .filter_map(|result| {
                 let file = match result {
@@ -422,17 +414,22 @@ impl IntoIterator for FileChangeDetector {
         // TODO: if the underlying stores gain the ability to do hash-based comparisons,
         // switch this to use that (rather than pulling down the entire contents of each
         // file).
-        async_runtime::block_on(async {
-            let _span = tracing::info_span!("get_content_stream").entered();
-
-            let mut results = self.store.get_content_stream(keys).await;
-            while let Some(result) = results.next().await {
-                match result {
-                    Ok((bytes, key)) => disk_send.send((key.path, bytes)).unwrap(),
-                    Err(e) => results_send.send(Err(e)).unwrap(),
-                };
+        let _span = tracing::info_span!("get_content_stream").entered();
+        match self.store.get_content_iter(keys) {
+            Err(e) => results_send.send(Err(e)).unwrap(),
+            Ok(v) => {
+                for entry in v {
+                    let (key, data) = match entry {
+                        Ok(v) => v,
+                        Err(e) => {
+                            results_send.send(Err(e)).unwrap();
+                            continue;
+                        }
+                    };
+                    disk_send.send((key.path, data)).unwrap();
+                }
             }
-        });
+        };
 
         drop(results_send);
         drop(disk_send);

@@ -133,6 +133,8 @@ else:
 
 
 # The main Rust IO. It handles progress and streampager.
+# This is for low-level operations where the `ui` object is not present.
+# If you have `ui`, use` ui.io` instead.
 get_main_io = bindings.io.IO.main
 
 # Define a fail point.
@@ -2404,7 +2406,7 @@ def parsedate(date):
     True
     >>> parsedate('yesterday ') == parsedate(
     ...     (datetime.date.today() - datetime.timedelta(days=1)
-    ...      ).strftime('%b %d'))
+    ...      ).strftime('%b %d %Y'))
     True
     >>> now, tz = makedate()
     >>> strnow, strtz = parsedate('now')

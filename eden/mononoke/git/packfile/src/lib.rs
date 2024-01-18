@@ -8,5 +8,6 @@
 pub mod bundle;
 mod hash_writer;
 pub mod pack;
-mod test;
 pub mod types;
+
+pub use packfile_thrift as thrift;

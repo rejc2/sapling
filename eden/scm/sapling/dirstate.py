@@ -30,7 +30,6 @@ from typing import (
     Sequence,
     Set,
     Tuple,
-    Union,
 )
 
 import bindings
@@ -81,13 +80,6 @@ class repocache(scmutil.filecache):
         return obj._opener.join(fname)
 
 
-class rootcache(scmutil.filecache):
-    """filecache for files in the repository root"""
-
-    def join(self, obj: "dirstate", fname: str) -> str:
-        return obj._join(fname)
-
-
 def _getfsnow(vfs: "vfs.abstractvfs") -> int:
     """Get "now" timestamp on filesystem"""
     tmpfd, tmpname = vfs.mkstemp()
@@ -104,7 +96,7 @@ ParentChangeCallback = Callable[
 
 
 # pyre-fixme[2]: Parameter must be annotated.
-def fastreadp1(repopath) -> Optional[bytes]:
+def fastreadp1(repopath, is_dot_hg_path=False) -> Optional[bytes]:
     """Read dirstate p1 node without constructing repo or dirstate objects
 
     This is the first 20-bytes of the dirstate file. All known dirstate
@@ -113,11 +105,13 @@ def fastreadp1(repopath) -> Optional[bytes]:
     Return None if p1 cannot be read.
     """
     try:
-        ident = identity.sniffdir(repopath)
-        if not ident:
-            return None
+        if not is_dot_hg_path:
+            ident = identity.sniffdir(repopath)
+            if not ident:
+                return None
+            repopath = os.path.join(repopath, ident.dotdir())
 
-        with open(os.path.join(repopath, ident.dotdir(), "dirstate"), "rb") as f:
+        with open(os.path.join(repopath, "dirstate"), "rb") as f:
             node = f.read(len(nullid))
             return node
     except IOError:
@@ -193,31 +187,6 @@ class dirstate:
         # normally, so we don't have a try/finally here on purpose.
         self._parentwriters -= 1
 
-    def beginparentchange(self) -> None:
-        """Marks the beginning of a set of changes that involve changing
-        the dirstate parents. If there is an exception during this time,
-        the dirstate will not be written when the wlock is released. This
-        prevents writing an incoherent dirstate where the parent doesn't
-        match the contents.
-        """
-        self._ui.deprecwarn(
-            "beginparentchange is obsoleted by the " "parentchange context manager.",
-            "4.3",
-        )
-        self._parentwriters += 1
-
-    def endparentchange(self) -> None:
-        """Marks the end of a set of changes that involve changing the
-        dirstate parents. Once all parent changes have been marked done,
-        the wlock will be free to write the dirstate on release.
-        """
-        self._ui.deprecwarn(
-            "endparentchange is obsoleted by the " "parentchange context manager.",
-            "4.3",
-        )
-        if self._parentwriters > 0:
-            self._parentwriters -= 1
-
     def pendingparentchange(self) -> bool:
         """Returns true if the dirstate is in the middle of a set of changes
         that modify the dirstate parent.
@@ -241,7 +210,7 @@ class dirstate:
     def hasdir(self, d: str) -> bool:
         return self._map.hastrackeddir(d)
 
-    @rootcache(".hgignore")
+    @util.propertycache
     def _ignore(self) -> "matchmod.gitignorematcher":
         # gitignore
         globalignores = self._globalignorefiles()
@@ -399,8 +368,7 @@ class dirstate:
         """
         if self._parentwriters == 0:
             raise ValueError(
-                "cannot set dirstate parent without "
-                "calling dirstate.beginparentchange"
+                "cannot set dirstate parent without " "calling dirstate.parentchange"
             )
 
         self._dirty = True
@@ -654,24 +622,6 @@ class dirstate:
 
         return folded
 
-    def _normalizefile(
-        self,
-        path: str,
-        isknown: bool,
-        ignoremissing: bool = False,
-        exists: "Optional[bool]" = None,
-    ) -> str:
-        normed = util.normcase(path)
-        folded = self._map.filefoldmap.get(normed, None)
-        if folded is None:
-            if isknown:
-                folded = path
-            else:
-                folded = self._discoverpath(
-                    path, normed, ignoremissing, exists, self._map.filefoldmap
-                )
-        return folded
-
     def _normalize(
         self,
         path: str,
@@ -885,11 +835,28 @@ class dirstate:
                 files.append(fullpath)
         return files
 
-    def _ruststatus(
+    @perftrace.tracefunc("Status")
+    def status(
         self, match: matchmod.basematcher, ignored: bool, clean: bool, unknown: bool
-    ) -> "scmutil.status":
+    ) -> scmutil.status:
+        """Determine the status of the working copy relative to the
+        dirstate and return a scmutil.status.
+        """
+        if self._lastnormaltime > 0:
+            # This handles situations where, for example:
+            #   1. File "foo" is NEED_CHECK in treestate, but contents are clean.
+            #   2. "sl import" performs an update at time1 that marks "foo" as clean in-memory,
+            #      but doesn't write dirstate out yet.
+            #   3. "sl import" changes "foo" contents on disk with mtime time1.
+            #   4. "status" needs to list "foo" as modified even though mtime matches treestate.
+            #
+            # _lastnormaltime is set during step 2. We used to pass _lastnormaltime
+            # directly to workingcopy().status(), but now we re-use the invalidatemtime()
+            # mechanism to mark "foo" as NEED_CHECK.
+            self._map._tree.invalidatemtime(self._lastnormaltime)
+
         status = self._repo._rsrepo.workingcopy().status(
-            match, self._lastnormaltime, bool(ignored), self._ui._rcfg
+            match, bool(ignored), self._ui._rcfg
         )
 
         if not unknown:
@@ -906,212 +873,6 @@ class dirstate:
             pathutil.pathauditor(self._root, cached=True),
         )
 
-        return status
-
-    @perftrace.tracefunc("Status")
-    def status(
-        self, match: matchmod.basematcher, ignored: bool, clean: bool, unknown: bool
-    ) -> "scmutil.status":
-        """Determine the status of the working copy relative to the
-        dirstate and return a scmutil.status.
-        """
-
-        if self._ui.configbool("workingcopy", "rust-status"):
-            self._ui.log("status_info", internal_status_mode="rust")
-            return self._ruststatus(match, ignored, clean, unknown)
-
-        self._ui.log("status_info", internal_status_mode="python")
-
-        wctx = self._repo[None]
-        # Prime the wctx._parents cache so the parent doesn't change out from
-        # under us if a checkout happens in another process.
-        pctx = wctx.p1()
-
-        listignored, listclean, listunknown = ignored, clean, unknown
-        modified: "List[str]" = []
-        added: "List[str]" = []
-        unknownpaths: "List[str]" = []
-        ignoredpaths: "List[str]" = []
-        removed: "List[str]" = []
-        deleted: "List[str]" = []
-        cleanpaths: "List[str]" = []
-
-        dmap = self._map
-        dmap.preload()
-        dget = dmap.__getitem__
-        madd = modified.append
-        aadd = added.append
-        uadd = unknownpaths.append
-        iadd = ignoredpaths.append
-        radd = removed.append
-        dadd = deleted.append
-        ignore = self._ignore
-        copymap = self._map.copymap
-
-        # We have seen some rare issues that a few "M" or "R" files show up
-        # while the files are expected to be clean. Log the reason of first few
-        # "M" files.
-        mtolog = self._ui.configint("experimental", "samplestatus") or 0
-
-        oldid = self.identity()
-
-        # Step 1: Get the files that are different from the clean checkedout p1 tree.
-        pendingchanges = self._fs.pendingchanges(match, listignored=listignored)
-
-        for fn, exists in pendingchanges:
-            assert isinstance(fn, str)
-            try:
-                t = dget(fn)
-                # This "?" state is only tracked by treestate, emulate the old
-                # behavior - KeyError.
-                if t[0] == "?":
-                    raise KeyError
-            except KeyError:
-                isignored = ignore(fn)
-                if listignored and isignored:
-                    iadd(fn)
-                elif listunknown and not isignored:
-                    uadd(fn)
-                continue
-
-            state = t[0]
-            if not exists and state in "nma":
-                dadd(fn)
-            elif state == "n":
-                madd(fn)
-            else:
-                # All other states will be handled by the logic below, and we
-                # don't care that it's a pending change.
-                pass
-
-        # Fetch the nonnormalset after iterating over pendingchanges, since the
-        # iteration may change the nonnormalset as lookup states are resolved.
-        ignorevisitdir: "Callable[[str], Union[str, bool]]" = ignore.visitdir
-
-        def dirfilter(path: str) -> bool:
-            result = ignorevisitdir(path.rstrip("/"))
-            return result == "all"
-
-        nonnormalset = dmap.nonnormalsetfiltered(dirfilter)
-
-        otherparentset = dmap.otherparentset
-
-        # The seen set is used to prevent steps 2 and 3 from processing things
-        # we saw in step 1.
-        seenset = set(deleted + modified)
-
-        # audit_path is used to verify that nonnormal files still exist and are
-        # not behind symlinks.
-        auditpath: "pathutil.pathauditor" = pathutil.pathauditor(
-            self._root, cached=True
-        )
-
-        def fileexists(fn: str) -> bool:
-            # So let's double check for the existence of that file.
-            st = list(util.statfiles([self._join(fn)]))[0]
-
-            # auditpath checks to see if the file is under a symlink directory.
-            # If it is, we treat it the same as if it didn't exist.
-            return st is not None and auditpath.check(fn)
-
-        # Step 2: Handle status results that are not simply pending filesystem
-        # changes on top of the pristine tree.
-        for fn in otherparentset:
-            assert isinstance(fn, str)
-            if not match(fn) or fn in seenset:
-                continue
-            t = dget(fn)
-            state = t[0]
-            # We only need to handle 'n' here, since all other states will be
-            # covered by the nonnormal loop below.
-            if state in "n":
-                # pendingchanges() above only checks for changes against p1.
-                # For things from p2, we need to manually check for
-                # existence. We don't have to check if they're modified,
-                # since them coming from p2 indicates they are considered
-                # modified.
-                if fileexists(fn):
-                    if mtolog > 0:
-                        mtolog -= 1
-                        self._ui.log("status", "M %s: exists in p2" % fn)
-                    madd(fn)
-                else:
-                    dadd(fn)
-                seenset.add(fn)
-
-        for fn in nonnormalset:
-            assert isinstance(fn, str)
-            if not match(fn) or fn in seenset:
-                continue
-            t = dget(fn)
-            state = t[0]
-            if state == "m":
-                madd(fn)
-                seenset.add(fn)
-                if mtolog > 0:
-                    mtolog -= 1
-                    self._ui.log("status", "M %s: state is 'm' (merge)" % fn)
-            elif state == "a":
-                if fileexists(fn):
-                    aadd(fn)
-                else:
-                    # If an added file is deleted, report it as missing
-                    dadd(fn)
-                seenset.add(fn)
-            elif state == "r":
-                radd(fn)
-                seenset.add(fn)
-            elif state == "n":
-                # This can happen if the file is in a lookup state, but all 'n'
-                # files should've been checked in fs.pendingchanges, so we can
-                # ignore it here.
-                pass
-            elif state == "?":
-                # I'm pretty sure this is a bug if nonnormalset contains unknown
-                # files, but the tests say it can happen so let's just ignore
-                # it.
-                pass
-            else:
-                raise error.ProgrammingError(
-                    "unexpected nonnormal state '%s' " "for '%s'" % (t, fn)
-                )
-
-        # Most copies should be handled above, as modifies or adds, but there
-        # can be cases where a file is clean and already committed and a commit
-        # is just retroactively marking it as copied. In that case we need to
-        # mark is as modified.
-        for fn in copymap:
-            assert isinstance(fn, str)
-            if not match(fn) or fn in seenset:
-                continue
-            # It seems like a bug, but the tests show that copymap can contain
-            # files that aren't in the dirstate. I believe this is caused by
-            # using treestate, which leaves the copymap as partially maintained.
-            if fn not in dmap:
-                continue
-            madd(fn)
-            seenset.add(fn)
-
-        status = scmutil.status(
-            modified, added, removed, deleted, unknownpaths, ignoredpaths, cleanpaths
-        )
-
-        # Step 3: If clean files were requested, add those to the results
-        # Step 4: Report any explicitly requested files that don't exist
-        self._add_clean_and_trigger_bad_matches(
-            match, status, pctx, listclean, auditpath
-        )
-
-        # TODO: fire this inside filesystem. fixup is a list of files that
-        # checklookup says are clean
-        if not getattr(self._repo, "_insidepoststatusfixup", False):
-            self._poststatusfixup(status, wctx, oldid)
-
-        perftrace.tracevalue("A/M/R Files", len(modified) + len(added) + len(removed))
-        if len(unknownpaths) > 0:
-            perftrace.tracevalue("Unknown Files", len(unknownpaths))
-        if len(ignoredpaths) > 0:
-            perftrace.tracevalue("Ignored Files", len(ignoredpaths))
         return status
 
     def _add_clean_and_trigger_bad_matches(
@@ -1152,101 +913,6 @@ class dirstate:
             if not typ & (stat.S_IFDIR | stat.S_IFREG | stat.S_IFLNK):
                 # This handles invalid types like named pipe.
                 match.bad(path, filesystem.badtype(typ))
-
-    def _poststatusfixup(
-        self, status: "scmutil.status", wctx: "context.workingctx", oldid: object
-    ) -> None:
-        """update dirstate for files that are actually clean"""
-        poststatusbefore = self._repo.postdsstatus(afterdirstatewrite=False)
-        poststatusafter = self._repo.postdsstatus(afterdirstatewrite=True)
-        ui = self._repo.ui
-        if poststatusbefore or poststatusafter or self._dirty:
-            # prevent infinite loop because fsmonitor postfixup might call
-            # wctx.status()
-            # pyre-fixme[16]: localrepo has no attribute _insidepoststatusfixup
-            self._repo._insidepoststatusfixup = True
-            try:
-                # Updating the dirstate is optional so we don't wait on the
-                # lock.
-                # wlock can invalidate the dirstate, so cache normal _after_
-                # taking the lock. This is a bit weird because we're inside the
-                # dirstate that is no longer valid.
-
-                # If watchman reports fresh instance, still take the lock,
-                # since not updating watchman state leads to very painful
-                # performance.
-                freshinstance = False
-                nonnormalcount = 0
-                try:
-                    freshinstance = self._fs._fsmonitorstate._lastisfresh
-                    nonnormalcount = self._fs._fsmonitorstate._lastnonnormalcount
-                except Exception:
-                    pass
-                waitforlock = False
-                nonnormalthreshold = self._repo.ui.configint(
-                    "fsmonitor", "dirstate-nonnormal-file-threshold"
-                )
-                if (
-                    nonnormalthreshold is not None
-                    and nonnormalcount >= nonnormalthreshold
-                ):
-                    ui.debug(
-                        "poststatusfixup decides to wait for wlock since nonnormal file count %s >= %s\n"
-                        % (nonnormalcount, nonnormalthreshold)
-                    )
-                    waitforlock = True
-                if freshinstance:
-                    waitforlock = True
-                    ui.debug(
-                        "poststatusfixup decides to wait for wlock since watchman reported fresh instance\n"
-                    )
-
-                with self._repo.disableeventreporting(), self._repo.wlock(waitforlock):
-                    identity = self._repo.dirstate.identity()
-                    if identity == oldid:
-                        if poststatusbefore:
-                            for ps in poststatusbefore:
-                                ps(wctx, status)
-
-                        # write changes out explicitly, because nesting
-                        # wlock at runtime may prevent 'wlock.release()'
-                        # after this block from doing so for subsequent
-                        # changing files
-                        #
-                        # This is a no-op if dirstate is not dirty.
-                        tr = self._repo.currenttransaction()
-                        self.write(tr)
-
-                        if poststatusafter:
-                            for ps in poststatusafter:
-                                ps(wctx, status)
-                    elif not util.istest():
-                        # Too noisy in tests.
-                        ui.debug(
-                            "poststatusfixup did not write dirstate because identity changed %s != %s\n"
-                            % (oldid, identity)
-                        )
-
-            except error.LockError as ex:
-                # pyre-fixme[61]: `waitforlock` may not be initialized here.
-                if waitforlock:
-                    ui.write_err(
-                        _(
-                            "warning: failed to update watchman state because wlock cannot be obtained (%s)\n"
-                        )
-                        % (ex,)
-                    )
-                    ui.write_err(slowstatuswarning)
-                else:
-                    ui.debug(
-                        "poststatusfixup did not write dirstate because wlock cannot be obtained (%s)\n"
-                        % (ex,)
-                    )
-
-            finally:
-                # Even if the wlock couldn't be grabbed, clear out the list.
-                self._repo.clearpostdsstatus()
-                self._repo._insidepoststatusfixup = False
 
     def matches(self, match: matchmod.basematcher) -> "Iterable[str]":
         """

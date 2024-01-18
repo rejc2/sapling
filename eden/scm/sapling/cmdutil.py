@@ -40,6 +40,7 @@ from . import (
     formatter,
     git,
     graphmod,
+    hintutil,
     identity,
     json,
     match as matchmod,
@@ -262,8 +263,20 @@ def comparechunks(chunks, headers):
     return newpatch.getvalue() == originalpatch.getvalue()
 
 
+class AliasList(list):
+    """Like "list" but provides a "documented" API to hide "undocumented" aliases"""
+
+    _raw = ""
+
+    def documented(self):
+        """documented aliases"""
+        return self._raw.lstrip("^").split("||", 1)[0].split("|")
+
+
 def parsealiases(cmd):
-    return cmd.lstrip("^").split("|")
+    aliases = AliasList(s for s in cmd.lstrip("^").split("|") if s)
+    aliases._raw = cmd
+    return aliases
 
 
 def setupwrapcolorwrite(ui):
@@ -343,7 +356,7 @@ def dorecord(ui, repo, commitfunc, cmdsuggest, backupall, filterfn, *pats, **opt
         will be left in place, so the user can continue working.
         """
 
-        checkunfinished(repo, commit=True)
+        checkunfinished(repo, op="commit")
         wctx = repo[None]
         merge = len(wctx.parents()) > 1
         if merge:
@@ -734,7 +747,7 @@ def _updatecleanmsg(dest=None):
 
 def _graftmsg():
     # tweakdefaults requires `update` to have a rev hence the `.`
-    return _helpmessage(_("@prog@ graft --continue"), _updatecleanmsg())
+    return _helpmessage(_("@prog@ graft --continue"), _("@prog@ graft --abort"))
 
 
 def _mergemsg():
@@ -1208,22 +1221,37 @@ def copy(ui, repo, pats, opts, rename=False):
     # ossep => pathname that uses os.sep to separate directories
     cwd = repo.getcwd()
     targets = {}
-    after = opts.get("after")
+    amend = opts.get("amend")
+    mark = opts.get("mark") or opts.get("after")
     dryrun = opts.get("dry_run")
+    force = opts.get("force")
     wctx = repo[None]
     auditor = pathutil.pathauditor(repo.root)
 
+    if amend and not mark:
+        raise error.Abort(_("--amend without --mark is not supported"))
+
+    if amend:
+        walkctx = repo["."]
+        if rename:
+            walkctx = walkctx.p1()
+    else:
+        walkctx = wctx
+
     def walkpat(pat):
         srcs = []
-        if after:
+        if mark:
             badstates = "?"
         else:
             badstates = "?r"
-        m = scmutil.match(wctx, [pat], opts, globbed=True)
-        for abs in wctx.walk(m):
-            state = repo.dirstate[abs]
+        m = scmutil.match(walkctx, [pat], opts, globbed=True)
+        for abs in walkctx.walk(m):
             rel = m.rel(abs)
             exact = m.exact(abs)
+            if amend:
+                srcs.append((abs, rel, exact))
+                continue
+            state = repo.dirstate[abs]
             if state in badstates:
                 if exact and state == "?":
                     ui.warn(_("%s: not copying - file is not managed\n") % rel)
@@ -1237,6 +1265,33 @@ def copy(ui, repo, pats, opts, rename=False):
             # rel: ossep
             srcs.append((abs, rel, exact))
         return srcs
+
+    # (without --amend)
+    # target exists  --mark   --force|  action
+    #       n            n      *    |  copy
+    #       n            y      *    |  (1)
+    #   untracked        n      n    |  (4) (a)
+    #   untracked        n      y    |  (3)
+    #   untracked        y      *    |  (2)
+    #       y            n      n    |  (4) (b)
+    #       y            n      y    |  (3)
+    #       y            y      n    |  (2)
+    #       y            y      y    |  (3)
+    #    deleted         n      n    |  copy
+    #    deleted         n      y    |  (3)
+    #    deleted         y      n    |  (1)
+    #    deleted         y      y    |  (1)
+    #
+    # * = don't care
+    # (1) <src>: not recording move - <target> does not exist
+    # (2) preserve target contents
+    # (3) replace target contents
+    # (4) <target>: not overwriting - file {exists,already committed};
+    # (a) with '--mark' hint
+    # (b) with '--amend --mark' hint
+
+    # [(abssrc, abstarget)]
+    to_amend = []
 
     # abssrc: hgsep
     # relsrc: ossep
@@ -1276,41 +1331,29 @@ def copy(ui, repo, pats, opts, rename=False):
                 exists = False
                 samefile = True
 
-        if not after and exists or after and state in "mn":
-            if not opts["force"]:
+        if not mark and exists or (mark and state in "mn" and not amend):
+            if not force:
                 if state in "mn":
                     msg = _("%s: not overwriting - file already committed\n")
-                    if after:
-                        flags = "--after --force"
-                    else:
-                        flags = "--force"
                     if rename:
-                        hint = (
-                            _(
-                                "(@prog@ rename %s to replace the file by "
-                                "recording a rename)\n"
-                            )
-                            % flags
+                        hint = _(
+                            "(use '@prog@ rename --amend --mark' to amend the current commit)\n"
                         )
                     else:
-                        hint = (
-                            _(
-                                "(@prog@ copy %s to replace the file by "
-                                "recording a copy)\n"
-                            )
-                            % flags
+                        hint = _(
+                            "(use '@prog@ copy --amend --mark' to amend the current commit)\n"
                         )
                 else:
                     msg = _("%s: not overwriting - file exists\n")
                     if rename:
-                        hint = _("(@prog@ rename --after to record the rename)\n")
+                        hint = _("(@prog@ rename --mark to record the rename)\n")
                     else:
-                        hint = _("(@prog@ copy --after to record the copy)\n")
+                        hint = _("(@prog@ copy --mark to record the copy)\n")
                 ui.warn(msg % reltarget)
                 ui.warn(hint)
                 return
 
-        if after:
+        if mark:
             if not exists:
                 if rename:
                     ui.warn(
@@ -1323,7 +1366,7 @@ def copy(ui, repo, pats, opts, rename=False):
                         % (relsrc, reltarget)
                     )
                 return
-        elif not dryrun:
+        elif not dryrun and not amend:
             try:
                 if exists:
                     os.unlink(target)
@@ -1356,12 +1399,17 @@ def copy(ui, repo, pats, opts, rename=False):
 
         targets[abstarget] = abssrc
 
-        # fix up dirstate
-        scmutil.dirstatecopy(ui, repo, wctx, abssrc, abstarget, dryrun=dryrun, cwd=cwd)
-        if rename and not dryrun:
-            if not after and srcexists and not samefile:
-                repo.wvfs.unlinkpath(abssrc)
-            wctx.forget([abssrc])
+        if amend:
+            to_amend.append((abssrc, abstarget))
+        else:
+            # fix up dirstate
+            scmutil.dirstatecopy(
+                ui, repo, wctx, abssrc, abstarget, dryrun=dryrun, cwd=cwd
+            )
+            if rename and not dryrun:
+                if not mark and srcexists and not samefile:
+                    repo.wvfs.unlinkpath(abssrc)
+                wctx.forget([abssrc])
 
     # pat: ossep
     # dest ossep
@@ -1443,7 +1491,7 @@ def copy(ui, repo, pats, opts, rename=False):
             raise error.Abort(_("destination %s is not a directory") % dest)
 
     tfn = targetpathfn
-    if after:
+    if mark:
         tfn = targetpathafterfn
     copylist = []
     for pat in pats:
@@ -1451,7 +1499,7 @@ def copy(ui, repo, pats, opts, rename=False):
         if not srcs:
             continue
         copylist.append((tfn(pat, dest, srcs), srcs))
-    if not copylist:
+    if not copylist and not to_amend:
         raise error.Abort(_("no files to copy"))
 
     errors = 0
@@ -1460,10 +1508,76 @@ def copy(ui, repo, pats, opts, rename=False):
             if copyfile(abssrc, relsrc, targetpath(abssrc), exact):
                 errors += 1
 
-    if errors:
-        ui.warn(_("(consider using --after)\n"))
+    if to_amend:
+        amend_copy(repo, to_amend, rename, force)
+
+    if errors and not mark:
+        ui.warn(_("(consider using --mark)\n"))
 
     return errors != 0
+
+
+def amend_copy(repo, to_amend, rename, force):
+    with repo.lock():
+        ctx = repo["."]
+        pctx = ctx.p1()
+
+        # Checks
+        for src_path, dst_path in to_amend:
+            if rename:
+                if src_path in ctx or src_path not in pctx:
+                    raise error.Abort(
+                        _("source path '%s' is not deleted by the current commit")
+                        % src_path
+                    )
+            else:
+                if src_path not in ctx:
+                    raise error.Abort(
+                        _("source path '%s' is not present the current commit")
+                        % src_path
+                    )
+            if dst_path not in ctx or dst_path in pctx:
+                raise error.Abort(
+                    _("target path '%s' is not added by the current commit") % dst_path
+                )
+            if not force:
+                # Check already renamed.
+                renamed = ctx[dst_path].renamed()
+                if renamed:
+                    renamed_path = renamed[0]
+                    if renamed_path == src_path:
+                        continue
+                    raise error.Abort(
+                        _("target path '%s' is already marked as copied from '%s'")
+                        % (dst_path, renamed_path),
+                        hint=_("use --force to skip this check"),
+                    )
+                # Check similarity. Can be bypassed by --force.
+                if rename:
+                    src_data = pctx[src_path].data()
+                else:
+                    src_data = ctx[src_path].data()
+                dst_data = ctx[dst_path].data()
+                if not bindings.copytrace.is_content_similar(
+                    src_data, dst_data, repo.ui._rcfg
+                ):
+                    raise error.Abort(
+                        _("'%s' and '%s' does not look similar") % (src_path, dst_path),
+                        hint=_("use --force to skip similarity check"),
+                    )
+
+        # Actual amend
+        from . import context
+
+        mctx = context.memctx.mirror(ctx)
+        for src_path, dst_path in to_amend:
+            mctx[dst_path] = context.overlayfilectx(
+                mctx[dst_path], copied=(src_path, pctx.node())
+            )
+        new_node = mctx.commit()
+        mapping = {ctx.node(): (new_node,)}
+        scmutil.cleanupnodes(repo, mapping, rename and "rename" or "copy")
+        repo.dirstate.rebuild(new_node, allfiles=[], changedfiles=[], exact=True)
 
 
 def uncopy(ui, repo, matcher, opts):
@@ -1999,8 +2113,6 @@ class changeset_printer:
         self.ui.write(columns["user"] % ctx.user(), label="log.user")
         self.ui.write(columns["date"] % util.datestr(ctx.date()), label="log.date")
 
-        self._exthook(ctx)
-
         if self.ui.debugflag:
             files = ctx.p1().status(ctx)[:3]
             for key, value in zip(["files", "files+", "files-"], files):
@@ -2040,9 +2152,6 @@ class changeset_printer:
         self.ui.write("\n")
 
         self.showpatch(ctx, matchfn, hunksfilterfn=hunksfilterfn)
-
-    def _exthook(self, ctx):
-        """empty method used by extension as a hook point"""
 
     def showpatch(self, ctx, matchfn, hunksfilterfn=None):
         if not matchfn:
@@ -2396,6 +2505,8 @@ def showmarker(fm, marker, index=None):
 def finddate(ui, repo, date):
     """Find the tipmost changeset that matches the given date spec"""
 
+    if not ui.quiet:
+        hintutil.triggershow(ui, "date-option", date, bookmarks.mainbookmark(repo))
     df = util.matchdate(date)
     m = scmutil.matchall(repo)
     results = {}
@@ -3253,6 +3364,7 @@ def displaygraph(
     props=None,
     reserved=None,
     out=None,
+    on_output=None,
 ):
     props = props or {}
     formatnode = _graphnodeformatter(ui, displayer)
@@ -3321,6 +3433,8 @@ def displaygraph(
             out(nextrow)
         else:
             ui.write(encoding.unitolocal(nextrow))
+        if on_output is not None:
+            on_output(ctx, nextrow)
         displayer.flush(ctx)
 
     displayer.close()
@@ -3553,9 +3667,9 @@ def eden_files(ui, ctx, m, fm, fmt):
     return ret
 
 
-def remove(ui, repo, m, prefix, after, force, warnings=None):
+def remove(ui, repo, m, prefix, mark, force, warnings=None):
     ret = 0
-    clean = force or not after
+    clean = force or not mark
     s = repo.status(match=m, clean=clean)
     modified, added, deleted, clean = s[0], s[1], s[3], s[6]
 
@@ -3589,7 +3703,7 @@ def remove(ui, repo, m, prefix, after, force, warnings=None):
 
     if force:
         list = modified + deleted + clean + added
-    elif after:
+    elif mark:
         list = deleted
         # For performance, "remaining" only lists "exact" matches.
         # In theory it should also list "clean" files but that's too expensive
@@ -3632,7 +3746,7 @@ def remove(ui, repo, m, prefix, after, force, warnings=None):
                 ui.status(_("removing %s\n") % m.rel(f))
 
     with repo.wlock():
-        if not after:
+        if not mark:
             for f in list:
                 if f in added:
                     continue  # we never unlink added files on remove
@@ -4614,61 +4728,15 @@ summaryhooks = util.hooks()
 #  - (desturl,   destbranch,   destpeer,   outgoing)
 summaryremotehooks = util.hooks()
 
-# A list of state files kept by multistep operations like graft.
-# Since graft cannot be aborted, it is considered 'clearable' by update.
-# note: bisect is intentionally excluded
-# (state file, clearable, allowcommit, error, hint)
-unfinishedstates = [
-    (
-        "graftstate",
-        True,
-        False,
-        _("graft in progress"),
-        _("use '@prog@ graft --continue' or '@prog@ graft --abort' to abort"),
-    ),
-    (
-        "updatemergestate",
-        True,
-        True,
-        _("update --merge in progress"),
-        _("use '@prog@ goto --continue' to continue"),
-    ),
-    (
-        "updatestate",
-        True,
-        False,
-        _("last update was interrupted"),
-        _(
-            "use '@prog@ goto DESTINATION' to get a consistent checkout\n"
-            "note: '@prog@ goto --continue' is supported in some cases, such as "
-            "during clone, and will resume the checkout where it left off"
-        ),
-    ),
-]
 
-
-def checkunfinished(repo, commit=False):
+def checkunfinished(repo, op=None):
     """Look for an unfinished multistep operation, like graft, and abort
     if found. It's probably good to check this right before
     bailifchanged().
     """
-    for f, clearable, allowcommit, msg, hint in unfinishedstates:
-        if commit and allowcommit:
-            continue
-        if repo.localvfs.exists(f):
-            raise error.Abort(msg, hint=hint)
-
-
-def clearunfinished(repo):
-    """Check for unfinished operations (as above), and clear the ones
-    that are clearable.
-    """
-    for f, clearable, allowcommit, msg, hint in unfinishedstates:
-        if not clearable and repo.localvfs.exists(f):
-            raise error.Abort(msg, hint=hint)
-    for f, clearable, allowcommit, msg, hint in unfinishedstates:
-        if clearable and repo.localvfs.exists(f):
-            util.unlink(repo.localvfs.join(f))
+    state = repo._rsrepo.workingcopy().commandstate(op)
+    if state:
+        raise error.Abort(state[0], hint=state[1])
 
 
 afterresolvedstates = [

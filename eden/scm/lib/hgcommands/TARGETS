@@ -34,14 +34,20 @@ rust_python_library(
             },
             "extra_buck_dependencies": {
                 "dependencies": [
+                    "//eden/scm/saplingnative/bindings/modules/pycheckout:pycheckout",
                     "//eden/scm/saplingnative/bindings/modules/pyedenclient:pyedenclient",
+                    "//eden/scm/saplingnative/bindings/modules/pyworkingcopy:pyworkingcopy",
+                    "//eden/scm/lib/revisionstore:revisionstore",
                 ],
             },
             "features": {
                 "default": [],
                 "eden": [
+                    "checkout/eden",
                     "clidispatch/eden",
+                    "pycheckout/eden",
                     "pyedenclient/eden",
+                    "pyworkingcopy/eden",
                     "edenfs-client",
                 ],
                 "fb": [
@@ -113,7 +119,7 @@ rust_python_library(
         "//eden/scm/lib/progress/render:progress-render",
         "//eden/scm/lib/repo:repo",
         "//eden/scm/lib/repo_name:repo_name",
-        "//eden/scm/lib/revisionstore:revisionstore",
+        "//eden/scm/lib/revisionstore:revisionstore_with_ods",
         "//eden/scm/lib/runlog:runlog",
         "//eden/scm/lib/sampling:sampling",
         "//eden/scm/lib/status:status",
@@ -128,6 +134,7 @@ rust_python_library(
         "//eden/scm/lib/util/nodeipc:nodeipc",
         "//eden/scm/lib/version:rust_version",
         "//eden/scm/lib/workingcopy:workingcopy",
+        "//eden/scm/lib/workingcopy/repostate:repostate",
         "//eden/scm/saplingnative/bindings:bindings",
         "//eden/scm/saplingnative/bindings/modules/pyconfigloader:pyconfigloader",
         "//eden/scm/saplingnative/bindings/modules/pyio:pyio",

@@ -83,6 +83,14 @@ DEFAULT_PORT = 3011
                 + " See addons/isl/README.md for more information. (ADVANCED)"
             ),
         ),
+        (
+            "",
+            "session",
+            "",
+            _(
+                "Provide a specific ID for this ISL session used in analytics. (ADVANCED)"
+            ),
+        ),
     ],
 )
 def isl_cmd(ui, repo, *args, **opts):
@@ -132,6 +140,7 @@ def isl_cmd(ui, repo, *args, **opts):
     browser = opts.get("browser")
     app = opts.get("app")
     dev = opts.get("dev")
+    session = opts.get("session")
 
     force_no_app = ui.configbool("web", "force-no-app")
 
@@ -155,6 +164,7 @@ def isl_cmd(ui, repo, *args, **opts):
             "browser": None if browser == "" else browser,
             "noApp": force_no_app or not app,
             "dev": dev,
+            "session": session,
         }
     )
 
@@ -216,10 +226,15 @@ def find_nodejs(ui) -> str:
 
 def get_isl_args_cwd(ui) -> Tuple[List[str], str]:
     # find "isl-dist.tar.xz"
-    candidates = ui.configlist("web", "isl-dist-path") + ["isl-dist.tar.xz"]
+    isl_dist_name = "isl-dist.tar.xz"
+    candidates = ui.configlist("web", "isl-dist-path") + [
+        os.path.join("..", "lib", isl_dist_name),
+        isl_dist_name,
+    ]
+    exe_dir = os.path.dirname(os.path.realpath(sys.executable))
     isl_tar_path = resolve_path(
         candidates,
-        lambda p: os.path.join(os.path.dirname(os.path.realpath(sys.executable)), p),
+        lambda p: os.path.join(exe_dir, p),
     )
     if isl_tar_path is None:
         raise error.Abort(_("ISL is not available with this @prog@ install"))

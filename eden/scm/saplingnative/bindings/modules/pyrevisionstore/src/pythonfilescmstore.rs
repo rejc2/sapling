@@ -5,7 +5,6 @@
  * GNU General Public License version 2.
  */
 
-use async_trait::async_trait;
 use cpython::FromPyObject;
 use cpython::ObjectProtocol;
 use cpython::PyBytes;
@@ -13,10 +12,10 @@ use cpython::PyObject;
 use cpython::Python;
 use cpython_ext::PyErr;
 use cpython_ext::PyPathBuf;
-use futures::stream::BoxStream;
-use futures::stream::StreamExt;
 use minibytes::Bytes;
+use storemodel::BoxIterator;
 use storemodel::FileStore;
+use storemodel::KeyStore;
 use types::Key;
 
 pub struct PythonFileScmStore {
@@ -35,37 +34,29 @@ impl PythonFileScmStore {
     }
 }
 
-#[async_trait]
-impl FileStore for PythonFileScmStore {
-    async fn get_content_stream(&self, keys: Vec<Key>) -> BoxStream<anyhow::Result<(Bytes, Key)>> {
-        let gil = Python::acquire_gil();
-        let py = gil.python();
-        let contents = keys
-            .into_iter()
-            .map(|k| {
-                let py_name = PyPathBuf::from(k.path.as_repo_path());
-                let py_node = PyBytes::new(py, k.hgid.as_ref());
-                let result = self
-                    .read_file_contents
-                    .call(py, (py_name, py_node), None)
-                    .map_err(PyErr::from)?;
-                let py_bytes = PyBytes::extract(py, &result).map_err(PyErr::from)?;
-                let bytes = py_bytes.data(py).to_vec();
-                Ok((bytes.into(), k))
-            })
-            .collect::<Vec<_>>();
-
-        futures::stream::iter(contents.into_iter()).boxed()
-    }
-
-    async fn get_rename_stream(
+impl KeyStore for PythonFileScmStore {
+    fn get_content_iter(
         &self,
-        _keys: Vec<Key>,
-    ) -> BoxStream<anyhow::Result<(Key, Option<Key>)>> {
-        futures::stream::empty().boxed()
-    }
-
-    fn get_local_content(&self, _key: &Key) -> anyhow::Result<Option<minibytes::Bytes>> {
-        Ok(None)
+        keys: Vec<Key>,
+    ) -> anyhow::Result<BoxIterator<anyhow::Result<(Key, Bytes)>>> {
+        let iter = keys.into_iter().map(|k| {
+            let gil = Python::acquire_gil();
+            let py = gil.python();
+            let py_name = PyPathBuf::from(k.path.as_repo_path());
+            let py_node = PyBytes::new(py, k.hgid.as_ref());
+            let result = match self.read_file_contents.call(py, (py_name, py_node), None) {
+                Err(e) => return Err(PyErr::from(e).into()),
+                Ok(v) => v,
+            };
+            let py_bytes = match PyBytes::extract(py, &result) {
+                Err(e) => return Err(PyErr::from(e).into()),
+                Ok(v) => v,
+            };
+            let bytes = Bytes::copy_from_slice(py_bytes.data(py));
+            Ok((k, bytes))
+        });
+        Ok(Box::new(iter))
     }
 }
+
+impl FileStore for PythonFileScmStore {}

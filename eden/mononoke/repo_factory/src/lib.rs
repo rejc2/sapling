@@ -47,6 +47,10 @@ use bonsai_svnrev_mapping::CachingBonsaiSvnrevMapping;
 use bonsai_svnrev_mapping::SqlBonsaiSvnrevMappingBuilder;
 use bonsai_tag_mapping::ArcBonsaiTagMapping;
 use bonsai_tag_mapping::SqlBonsaiTagMappingBuilder;
+#[cfg(fbcode_build)]
+use bookmark_service_client::BookmarkServiceClient;
+#[cfg(fbcode_build)]
+use bookmark_service_client::RepoBookmarkServiceClient;
 use bookmarks::bookmark_heads_fetcher;
 use bookmarks::ArcBookmarkUpdateLog;
 use bookmarks::ArcBookmarks;
@@ -83,9 +87,12 @@ use derived_data_client_library::Client as DerivationServiceClient;
 use derived_data_remote::Address;
 use derived_data_remote::DerivationClient;
 use derived_data_remote::RemoteDerivationOptions;
+#[cfg(fbcode_build)]
+use environment::BookmarkCacheAddress;
+use environment::BookmarkCacheDerivedData;
+use environment::BookmarkCacheKind;
 use environment::Caching;
 use environment::MononokeEnvironment;
-use environment::WarmBookmarksCacheDerivedData;
 use ephemeral_blobstore::ArcRepoEphemeralStore;
 use ephemeral_blobstore::RepoEphemeralStore;
 use ephemeral_blobstore::RepoEphemeralStoreBuilder;
@@ -130,7 +137,6 @@ use readonlyblob::ReadOnlyBlobstore;
 use redactedblobstore::ArcRedactionConfigBlobstore;
 use redactedblobstore::RedactedBlobs;
 use redactedblobstore::RedactionConfigBlobstore;
-use rendezvous::RendezVousOptions;
 use repo_blobstore::ArcRepoBlobstore;
 use repo_blobstore::ArcRepoBlobstoreUnlinkOps;
 use repo_blobstore::RepoBlobstore;
@@ -1401,7 +1407,7 @@ impl RepoFactory {
         Ok(Arc::new(RepoSparseProfiles { sql_profile_sizes }))
     }
 
-    pub fn repo_lock(
+    pub async fn repo_lock(
         &self,
         repo_config: &ArcRepoConfig,
         repo_identity: &ArcRepoIdentity,
@@ -1417,7 +1423,8 @@ impl RepoFactory {
                     &repo_config.storage_config.metadata,
                     &self.env.mysql_options,
                     self.env.readonly_storage.0,
-                )?;
+                )
+                .await?;
 
                 Ok(Arc::new(MutableRepoLock::new(sql, repo_identity.id())))
             }
@@ -1459,8 +1466,8 @@ impl RepoFactory {
         repo_derived_data: &ArcRepoDerivedData,
         phases: &ArcPhases,
     ) -> Result<ArcBookmarksCache> {
-        match self.env.warm_bookmarks_cache_derived_data {
-            Some(derived_data) => {
+        match &self.env.bookmark_cache_options.cache_kind {
+            BookmarkCacheKind::Local => {
                 let mut scuba = self.env.warm_bookmarks_cache_scuba_sample_builder.clone();
                 scuba.add("repo", repo_identity.name());
 
@@ -1471,21 +1478,48 @@ impl RepoFactory {
                     repo_identity.clone(),
                 );
 
-                match derived_data {
-                    WarmBookmarksCacheDerivedData::HgOnly => {
+                match self.env.bookmark_cache_options.derived_data {
+                    BookmarkCacheDerivedData::HgOnly => {
                         wbc_builder.add_hg_warmers(repo_derived_data, phases)?;
                     }
-                    WarmBookmarksCacheDerivedData::AllKinds => {
+                    BookmarkCacheDerivedData::AllKinds => {
                         wbc_builder.add_all_warmers(repo_derived_data, phases)?;
                     }
-                    WarmBookmarksCacheDerivedData::NoDerivation => {}
+                    BookmarkCacheDerivedData::NoDerivation => {}
                 }
 
                 Ok(Arc::new(
                     wbc_builder.build().watched(&self.env.logger).await?,
                 ))
             }
-            None => Ok(Arc::new(NoopBookmarksCache::new(bookmarks.clone()))),
+            #[cfg(fbcode_build)]
+            BookmarkCacheKind::Remote(address) => {
+                anyhow::ensure!(
+                    self.env.bookmark_cache_options.derived_data
+                        == BookmarkCacheDerivedData::HgOnly,
+                    "HgOnly derivation supported right now"
+                );
+
+                let client = match address {
+                    BookmarkCacheAddress::HostPort(host_port) => {
+                        BookmarkServiceClient::from_host_port(self.env.fb, host_port.to_string())?
+                    }
+                    BookmarkCacheAddress::SmcTier(tier_name) => {
+                        BookmarkServiceClient::from_tier_name(self.env.fb, tier_name.to_string())?
+                    }
+                };
+                let repo_client =
+                    RepoBookmarkServiceClient::new(repo_identity.name().to_string(), client);
+
+                Ok(Arc::new(repo_client))
+            }
+            #[cfg(not(fbcode_build))]
+            BookmarkCacheKind::Remote(_addr) => {
+                return Err(anyhow::anyhow!(
+                    "Remote bookmark cache not supported in non-fbcode builds"
+                ));
+            }
+            BookmarkCacheKind::Disabled => Ok(Arc::new(NoopBookmarksCache::new(bookmarks.clone()))),
         }
     }
 
@@ -1580,12 +1614,7 @@ impl RepoFactory {
         let sql_storage = self
             .open_sql::<SqlCommitGraphStorageBuilder>(repo_config)
             .await?
-            .build(
-                RendezVousOptions {
-                    free_connections: 5,
-                },
-                repo_identity.id(),
-            );
+            .build(self.env.rendezvous_options, repo_identity.id());
 
         let maybe_cached_storage: Arc<dyn CommitGraphStorage> =
             if let Some(cache_handler_factory) = self.cache_handler_factory("commit_graph")? {

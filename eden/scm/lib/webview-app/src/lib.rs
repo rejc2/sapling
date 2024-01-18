@@ -102,6 +102,7 @@ pub struct ISLSpawnOptions {
     /// If false (default), spawn with the chromelike --app or in an OS webview application.
     pub no_app: bool,
     pub dev: bool,
+    pub session: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
@@ -143,6 +144,9 @@ impl ISLSpawnOptions {
         if self.force {
             cmd.arg("--force");
         }
+        if let Some(session) = &self.session {
+            cmd.args(["--session", session]);
+        }
         cmd.stdin(Stdio::null());
         if pipe_stdout {
             cmd.stdout(Stdio::piped());
@@ -173,6 +177,7 @@ impl ISLSpawnOptions {
         }
     }
 
+    #[cfg(target_os = "macos")]
     /// Override arguments that make the spawned server compatible with connecting to the webview.
     #[cfg(target_os = "macos")]
     fn replace_args_for_webview_spawn(self) -> ISLSpawnOptions {

@@ -457,7 +457,6 @@ coreconfigitem("ui", "formatted", default=None)
 coreconfigitem("ui", "git", default="git")
 coreconfigitem("ui", "gitignore", default=True)
 coreconfigitem("ui", "graphnodetemplate", default=None)
-coreconfigitem("ui", "hgignore", default=False)
 coreconfigitem("ui", "http2debuglevel", default=None)
 coreconfigitem("ui", "ignorerevnum", default=True)
 coreconfigitem("ui", "interactive", default=None)
@@ -558,8 +557,6 @@ coreconfigitem("worker", "backgroundcloseminfilecount", default=2048)
 coreconfigitem("worker", "backgroundclosethreadcount", default=4)
 coreconfigitem("worker", "enabled", default=True)
 coreconfigitem("worker", "numcpus", default=None)
-
-coreconfigitem("workingcopy", "rust-status", default=False)
 
 # Rebase related configuration moved to core because other extension are doing
 # strange things. For example, shelve import the extensions to reuse some bit

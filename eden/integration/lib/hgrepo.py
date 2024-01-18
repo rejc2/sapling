@@ -31,12 +31,14 @@ class HgRepository(repobase.Repository):
     hg_environment: Dict[str, str]
     temp_mgr: TempFileManager
     staged_files: List[str]
+    filtered: bool = False
 
     def __init__(
         self,
         path: str,
         system_hgrc: Optional[str] = None,
         temp_mgr: Optional[TempFileManager] = None,
+        filtered: bool = False,
     ) -> None:
         """
         If hgrc is specified, it will be used as the value of the HGRCPATH
@@ -63,6 +65,7 @@ class HgRepository(repobase.Repository):
             self.hg_environment["HGRCPATH"] = ""
         self.hg_bin = FindExe.HG
         self.staged_files = []
+        self.filtered = filtered
 
     @classmethod
     def get_system_hgrc_contents(cls) -> str:
@@ -237,9 +240,13 @@ class HgRepository(repobase.Repository):
         hgrc["remotefilelog"]["reponame"] = "test"
         hgrc["remotefilelog"]["cachepath"] = cachepath
 
-        # Use Rust status internally for all commands.
-        hgrc.setdefault("workingcopy", {})
-        hgrc["workingcopy"]["rust-status"] = "true"
+        # Use Rust status.
+        hgrc.setdefault("status", {})
+        hgrc["status"]["use-rust"] = "true"
+
+        # Use (native) Rust checkout whenever possible
+        hgrc.setdefault("checkout", {})
+        hgrc["checkout"]["use-rust"] = "true"
 
         self.write_hgrc(hgrc)
 
@@ -266,7 +273,7 @@ class HgRepository(repobase.Repository):
             f.write("[hooks]\npost-pull.changelo-migrate=")
 
     def get_type(self) -> str:
-        return "hg"
+        return "filteredhg" if self.filtered else "hg"
 
     def get_head_hash(self) -> str:
         return self.hg("log", "-r.", "-T{node}")

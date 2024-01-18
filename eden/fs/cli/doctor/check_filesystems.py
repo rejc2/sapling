@@ -199,7 +199,7 @@ class LowDiskSpaceMacOS(Problem, FixableProblem):
 
     def perform_fix(self) -> None:
         apfs_util = "/System/Library/Filesystems/apfs.fs/Contents/Resources/apfs.util"
-        command = f"{apfs_util} -P ~/*"
+        command = f"{apfs_util} -P -high ~"
         try:
             subprocess.run(
                 command,
@@ -595,7 +595,11 @@ def check_materialized_are_accessible(
                             == FILE_ATTRIBUTE_REPARSE_POINT
                         )
                         if is_reparse:
-                            dirent_mode = stat.S_IFREG
+                            dirent_mode = (
+                                stat.S_IFLNK
+                                if windows_symlinks_enabled
+                                else stat.S_IFREG
+                            )
                         else:
                             dirent_mode = stat.S_IFDIR
 

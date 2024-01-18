@@ -268,7 +268,7 @@ impl ChangesetKey<HgChangesetId> {
 
 bitflags! {
     /// Some derived data needs unodes as precondition, flags represent what is available in a compact way
-    #[derive(Default)]
+    #[derive(Default, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
     pub struct UnodeFlags: u8 {
         const NONE = 0b00000000;
         const BLAME = 0b00000001;
@@ -1220,8 +1220,14 @@ mod tests {
         // If you are adding a new derived data type, please add it to the walker graph rather than to this
         // list, otherwise it won't get scrubbed and thus you would be unaware of different representation
         // in different stores
-        let grandfathered: HashSet<&'static str> =
-            HashSet::from_iter(vec!["git_trees", "git_commits", "git_delta_manifests"]);
+        let grandfathered: HashSet<&'static str> = HashSet::from_iter(vec![
+            "git_trees",
+            "git_commits",
+            "git_delta_manifests",
+            "testmanifest",
+            "testshardedmanifest",
+            "bssm_v3",
+        ]);
         let mut missing = HashSet::new();
         for t in a {
             if s.contains(t.as_str()) {

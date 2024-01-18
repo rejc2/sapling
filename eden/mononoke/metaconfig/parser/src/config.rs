@@ -223,6 +223,7 @@ fn parse_with_repo_definition(
         update_logging_config,
         commit_graph_config,
         deep_sharding_config,
+        everstore_local_path,
         ..
     } = named_repo_config;
 
@@ -380,6 +381,7 @@ fn parse_with_repo_definition(
         commit_graph_config,
         default_commit_identity_scheme,
         deep_sharding_config,
+        everstore_local_path,
     })
 }
 
@@ -640,6 +642,7 @@ mod test {
                             NonRootMPath::new("p1").unwrap() => NonRootMPath::new(".r2-legacy/p1").unwrap(),
                             NonRootMPath::new("p5").unwrap() => NonRootMPath::new(".r2-legacy/p5").unwrap(),
                         },
+                        git_submodules_action: Default::default(),
                     },
                     RepositoryId::new(3) => SmallRepoCommitSyncConfig {
                         default_action: DefaultSmallToLargeCommitSyncPathAction::PrependPrefix(NonRootMPath::new("subdir").unwrap()),
@@ -647,6 +650,7 @@ mod test {
                             NonRootMPath::new("p1").unwrap() => NonRootMPath::new("p1").unwrap(),
                             NonRootMPath::new("p4").unwrap() => NonRootMPath::new("p5/p4").unwrap(),
                         },
+                        git_submodules_action: Default::default(),
                     }
                 },
                 version_name: CommitSyncConfigVersion("TEST_VERSION_NAME".to_string()),
@@ -1156,6 +1160,7 @@ mod test {
                 ],
                 push: PushParams {
                     pure_push_allowed: false,
+                    unbundle_commit_limit: None,
                 },
                 pushrebase: PushrebaseParams {
                     flags: PushrebaseFlags {
@@ -1294,6 +1299,7 @@ mod test {
                     preloaded_commit_graph_blobstore_key: None,
                 },
                 deep_sharding_config: Some(ShardingModeConfig { status: hashmap!() }),
+                everstore_local_path: None,
             },
         );
 
@@ -1368,6 +1374,7 @@ mod test {
                 update_logging_config: UpdateLoggingConfig::default(),
                 commit_graph_config: CommitGraphConfig::default(),
                 deep_sharding_config: None,
+                everstore_local_path: None,
             },
         );
         assert_eq!(

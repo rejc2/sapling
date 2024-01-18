@@ -25,7 +25,8 @@ import {islDrawerState} from './drawerState';
 import {GettingStartedModal} from './gettingStarted/GettingStartedModal';
 import {I18nSupport, t, T} from './i18n';
 import platform from './platform';
-import {useMainContentWidth} from './responsive';
+import {DEFAULT_RESET_CSS} from './resetStyle';
+import {useMainContentWidth, zoomUISettingAtom} from './responsive';
 import {applicationinfo, repositoryInfo} from './serverAPIState';
 import {themeState} from './theme';
 import {ModalContainer} from './useModal';
@@ -42,6 +43,7 @@ import './index.css';
 export default function App() {
   return (
     <React.StrictMode>
+      <ResetStyle />
       <I18nSupport>
         <RecoilRoot>
           <AccessGlobalRecoil />
@@ -63,8 +65,14 @@ export default function App() {
   );
 }
 
+function ResetStyle() {
+  const resetCSS = platform.theme?.resetCSS ?? DEFAULT_RESET_CSS;
+  return resetCSS.length > 0 ? <style>{resetCSS}</style> : null;
+}
+
 function ISLRoot({children}: {children: ReactNode}) {
   const theme = useRecoilValue(themeState);
+  useRecoilValue(zoomUISettingAtom);
   return (
     <div
       className={`isl-root ${theme}-theme`}

@@ -23,11 +23,12 @@ use manifest::Manifest;
 use manifest_tree::testutil::TestStore;
 use manifest_tree::TreeManifest;
 use manifest_tree::TreeStore;
-use storemodel::futures::stream;
 use storemodel::futures::StreamExt;
+use storemodel::BoxIterator;
 use storemodel::FileStore;
+use storemodel::KeyStore;
 use storemodel::ReadRootTreeIds;
-use storemodel::TreeFormat;
+use storemodel::SerializationFormat;
 use tracing_test::traced_test;
 use types::HgId;
 use types::Key;
@@ -75,7 +76,7 @@ impl CopyTraceTestCase {
 
         let mut commit_to_tree: HashMap<Vertex, HgId> = Default::default();
         let mut copies: HashMap<Key, Key> = Default::default();
-        let tree_store = Arc::new(TestStore::new().with_format(TreeFormat::Git));
+        let tree_store = Arc::new(TestStore::new().with_format(SerializationFormat::Git));
         let changes = Change::build_changes(changes);
         let config: BTreeMap<&'static str, &'static str> = Default::default();
 
@@ -184,33 +185,18 @@ impl ReadRootTreeIds for CopyTraceTestCase {
 }
 
 #[async_trait]
-impl FileStore for CopyTraceTestCase {
-    #[allow(dead_code)]
-    async fn get_content_stream(
-        &self,
-        _keys: Vec<Key>,
-    ) -> stream::BoxStream<anyhow::Result<(storemodel::minibytes::Bytes, Key)>> {
-        // We will need this for computing content similarity score later.
-        todo!()
-    }
+impl KeyStore for CopyTraceTestCase {}
 
-    async fn get_rename_stream(
+#[async_trait]
+impl FileStore for CopyTraceTestCase {
+    fn get_rename_iter(
         &self,
         keys: Vec<Key>,
-    ) -> stream::BoxStream<anyhow::Result<(Key, Option<Key>)>> {
-        let renames: Vec<_> = {
-            keys.iter()
-                .map(|k| Ok((k.clone(), self.inner.copies.get(k).cloned())))
-                .collect()
-        };
-        stream::iter(renames).boxed()
-    }
-
-    fn get_local_content(
-        &self,
-        _key: &Key,
-    ) -> anyhow::Result<Option<storemodel::minibytes::Bytes>> {
-        Ok(None)
+    ) -> anyhow::Result<BoxIterator<anyhow::Result<(Key, Key)>>> {
+        let iter = keys
+            .into_iter()
+            .filter_map(|k| self.inner.copies.get(&k).cloned().map(|v| Ok((k, v))));
+        Ok(Box::new(iter))
     }
 }
 
@@ -295,7 +281,7 @@ macro_rules! assert_trace_rename {
     }};
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_linear_single_rename() {
     let ascii = r#"
     C
@@ -321,7 +307,7 @@ async fn test_linear_single_rename() {
     assert_trace_rename!(c A C, d -> !);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[traced_test]
 async fn test_non_linear_single_rename() {
     let ascii = r#"
@@ -344,7 +330,7 @@ async fn test_non_linear_single_rename() {
     assert_trace_rename!(c B C, b -> a);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[traced_test]
 async fn test_linear_multiple_renames() {
     let ascii = r#"
@@ -373,7 +359,7 @@ async fn test_linear_multiple_renames() {
     assert_trace_rename!(c X A, d -> a);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_linear_multiple_renames_with_deletes() {
     let ascii = r#"
     Z
@@ -397,7 +383,7 @@ async fn test_linear_multiple_renames_with_deletes() {
     assert_trace_rename!(c Z A, b2 -> !+B b2);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_non_linear_multiple_renames() {
     let ascii = r#"
     1..10..1023
@@ -434,7 +420,7 @@ async fn test_non_linear_multiple_renames() {
     assert_trace_rename!(c 1023 Z, d -> a2);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_non_linear_multiple_renames_with_deletes() {
     let ascii = r#"
     1..10..1023
@@ -458,7 +444,7 @@ async fn test_non_linear_multiple_renames_with_deletes() {
     assert_trace_rename!(c Z 1023, a2 -> !-1001 d);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_multiple_copies_ordering_default() {
     let ascii = r#"
     C
@@ -472,7 +458,7 @@ async fn test_multiple_copies_ordering_default() {
     assert_trace_rename!(c A C, a -> b);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_multiple_copies_ordering_same_basename_win() {
     let ascii = r#"
     C
@@ -489,7 +475,7 @@ async fn test_multiple_copies_ordering_same_basename_win() {
     assert_trace_rename!(c A C, a -> "z/a");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_multiple_copies_ordering_same_directory_win() {
     let ascii = r#"
     C
@@ -504,7 +490,7 @@ async fn test_multiple_copies_ordering_same_directory_win() {
     assert_trace_rename!(c A C, a -> b);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[traced_test]
 async fn test_linear_dir_move() {
     let ascii = r#"

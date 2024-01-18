@@ -108,7 +108,7 @@ export function resetTestMessages() {
   testMessageBus.resetTestMessages();
 }
 
-function commitInfoIsOpen() {
+export function commitInfoIsOpen(): boolean {
   return (
     screen.queryByTestId('commit-info-view') != null ||
     screen.queryByTestId('commit-info-view-loading') != null
@@ -292,6 +292,7 @@ export function dragAndDropCommits(draggedCommit: Hash | HTMLElement, onto: Hash
 
   act(() => {
     dragAndDrop(draggableCommit as HTMLElement, dragTargetComit as HTMLElement);
+    jest.advanceTimersByTime(2);
   });
 }
 

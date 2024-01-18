@@ -116,6 +116,9 @@ function DiffInfoInner({
       data-testid={`${provider.name}-diff-info`}>
       <DiffSignalSummary diff={info} />
       <DiffBadge provider={provider} diff={info} url={info.url} syncStatus={syncStatus} />
+      {provider.DiffLandButtonContent && (
+        <provider.DiffLandButtonContent diff={info} commit={commit} />
+      )}
       <DiffComments diff={info} />
       <DiffNumber>{provider.formatDiffNumber(diffId)}</DiffNumber>
       {hideActions === true ? null : syncStatus === SyncStatus.RemoteIsNewer ? (
@@ -171,6 +174,7 @@ function ResubmitSyncButton({
       title={t('This commit has changed locally since it was last submitted. Click to resubmit.')}>
       <VSCodeButton
         appearance="icon"
+        data-testid="commit-submit-button"
         onClick={async () => {
           const confirmation = await confirmShouldSubmit('submit', [commit]);
           if (!confirmation) {
@@ -184,7 +188,7 @@ function ResubmitSyncButton({
           );
         }}>
         <Icon icon="cloud-upload" slot="start" />
-        <T>Sync</T>
+        <T>Submit</T>
       </VSCodeButton>
     </Tooltip>
   );

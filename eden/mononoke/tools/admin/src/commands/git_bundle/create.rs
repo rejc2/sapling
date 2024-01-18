@@ -30,6 +30,7 @@ use packfile::types::PackfileItem;
 use protocol::generator::generate_pack_item_stream;
 use protocol::types::DeltaInclusion;
 use protocol::types::PackItemStreamRequest;
+use protocol::types::PackfileItemInclusion;
 use protocol::types::RequestedRefs;
 use protocol::types::RequestedSymrefs;
 use protocol::types::TagInclusion;
@@ -90,6 +91,9 @@ pub struct FromRepoArgs {
     /// The concurrency with which the stream objects will be prefetched while writing to the bundle
     #[clap(long, default_value_t = 1000)]
     concurrency: usize,
+    /// Should the packfile items for base objects be generated on demand or fetched from store
+    #[clap(long, default_value_t, value_enum)]
+    packfile_item_inclusion: PackfileItemInclusion,
 }
 
 /// Args for creating a Git bundle from an on-disk Git repo
@@ -164,6 +168,7 @@ pub async fn create_from_mononoke_repo(
         create_args.have_heads,
         delta_inclusion,
         TagInclusion::AsIs,
+        create_args.packfile_item_inclusion,
     );
     let response = generate_pack_item_stream(ctx, &repo, request)
         .await

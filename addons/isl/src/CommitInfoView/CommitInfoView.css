@@ -87,7 +87,10 @@
   word-break: break-word;
 }
 
+.commit-info-rendered-field:focus-visible,
+.commit-info-rendered-title:focus-visible,
 .commit-info-rendered-textarea:focus-visible {
+  outline: var(--focus-border) 1px auto;
   outline-offset: -1px;
 }
 
@@ -121,6 +124,22 @@
   flex-direction: row;
   gap: var(--pad);
   margin-left: auto;
+}
+.commit-info-actions-bar-row {
+  width: 100%;
+  display: flex;
+  justify-content: flex-end;
+  flex-direction: row;
+  gap: var(--pad);
+  margin-left: auto;
+}
+
+.commit-info-actions-bar-row {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .commit-info-view-toolbar-top {

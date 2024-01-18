@@ -149,6 +149,7 @@ cpp_library(
     headers = FILTERED_BACKING_STORE_HEADERS,
     deps = [
         "//eden/fs/model:model",
+        "//eden/fs/utils:filter_utils",
         "//eden/fs/utils:immediate_future",
         "//folly:varint",
     ],
@@ -186,6 +187,7 @@ cpp_library(
         "//folly:portability",
         "//folly:string",
         "//folly:varint",
+        "//folly/futures:core",
         "//folly/io:iobuf",
         "//folly/lang:bits",
     ],
@@ -211,7 +213,6 @@ cpp_library(
         "//folly/container:evicting_cache_map",
         "//folly/container:f14_hash",
         "//folly/experimental:string_keyed_unordered_map",
-        "//folly/futures:core",
         "//folly/logging:logging",
         "//folly/synchronization:distributed_mutex",
     ],

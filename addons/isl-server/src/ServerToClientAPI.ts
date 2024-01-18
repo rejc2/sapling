@@ -23,6 +23,8 @@ import type {
   ClientToServerMessageWithPayload,
   FetchedCommits,
   FetchedUncommittedChanges,
+  LandInfo,
+  CodeReviewProviderSpecificClientToServerMessages,
 } from 'isl/src/types';
 import type {ExportStack, ImportedStack} from 'shared/types/stack';
 
@@ -633,6 +635,40 @@ export default class ServerToClientAPI {
         repo.codeReviewProvider?.triggerDiffSummariesFetch(data.diffIds ?? repo.getAllDiffIds());
         break;
       }
+      case 'fetchLandInfo': {
+        repo.codeReviewProvider
+          ?.fetchLandInfo?.(data.topOfStack)
+          ?.then((landInfo: LandInfo) => {
+            this.postMessage({
+              type: 'fetchedLandInfo',
+              topOfStack: data.topOfStack,
+              landInfo: {value: landInfo},
+            });
+          })
+          .catch(err => {
+            this.postMessage({
+              type: 'fetchedLandInfo',
+              topOfStack: data.topOfStack,
+              landInfo: {error: err as Error},
+            });
+          });
+
+        break;
+      }
+      case 'confirmLand': {
+        if (data.landConfirmationInfo == null) {
+          break;
+        }
+        repo.codeReviewProvider
+          ?.confirmLand?.(data.landConfirmationInfo)
+          ?.then((result: Result<undefined>) => {
+            this.postMessage({
+              type: 'confirmedLand',
+              result,
+            });
+          });
+        break;
+      }
       case 'fetchAvatars': {
         repo.codeReviewProvider?.fetchAvatars?.(data.authors)?.then(avatars => {
           this.postMessage({
@@ -640,6 +676,21 @@ export default class ServerToClientAPI {
             avatars,
           });
         });
+        break;
+      }
+      case 'renderMarkup': {
+        repo.codeReviewProvider
+          ?.renderMarkup?.(data.markup)
+          ?.then(html => {
+            this.postMessage({
+              type: 'renderedMarkup',
+              id: data.id,
+              html,
+            });
+          })
+          ?.catch(err => {
+            this.logger.error('Error rendering markup:', err);
+          });
         break;
       }
       case 'getSuggestedReviewers': {
@@ -743,9 +794,12 @@ export default class ServerToClientAPI {
         break;
       }
       default: {
+        if (repo.codeReviewProvider?.handleClientToServerMessage?.(data) === true) {
+          break;
+        }
         this.platform.handleMessageFromClient(
           repo,
-          data,
+          data as Exclude<typeof data, CodeReviewProviderSpecificClientToServerMessages>,
           message => this.postMessage(message),
           (dispose: () => unknown) => {
             this.repoDisposables.push({dispose});
@@ -777,7 +831,7 @@ export default class ServerToClientAPI {
           undefined,
           this.tracker,
         ),
-        Internal.getCustomDefaultCommitTemplate?.(),
+        Internal.getCustomDefaultCommitTemplate?.(repo),
       ]);
 
       let template = result.stdout

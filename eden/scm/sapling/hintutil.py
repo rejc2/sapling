@@ -12,14 +12,6 @@ from .i18n import _
 
 
 hinttable = {
-    "hgignore-deprecate": lambda path: (
-        (
-            "hgignore format is being deprecated. "
-            "Consider updating %s to gitignore format. "
-            "Check fburl.com/gitignore to learn more."
-        )
-        % path
-    ),
     "branch-command-deprecate": lambda: _(
         "'@prog@ branch' command does not do what you want, and is being removed. "
         "It always prints 'default' for now. "
@@ -37,6 +29,14 @@ hinttable = {
         'date("%s") performs a slow scan. Consider bsearch(date(">%s"),%s) instead.'
     )
     % (ds, ds, top),
+    "date-option": lambda ds, top: _(
+        "--date performs a slow scan. Consider using --rev 'bsearch(date(\">%s\"),%s)' instead."
+    )
+    % (ds, top)
+    if "<" not in ds
+    else _(
+        "--date performs a slow scan. Consider using `bsearch` revset (@prog@ help revset) instead."
+    ),
     "match-full-traversal": lambda pats: _(
         'the patterns "%s" may be slow since they traverse the entire repo (see "@prog@ help patterns")',
     )

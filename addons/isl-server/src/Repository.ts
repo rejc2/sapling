@@ -6,6 +6,7 @@
  */
 
 import type {CodeReviewProvider} from './CodeReviewProvider';
+import type {KindOfChange, PollKind} from './WatchForChanges';
 import type {TrackEventName} from './analytics/eventNames';
 import type {ServerSideTracker} from './analytics/serverSideTracker';
 import type {Logger} from './logger';
@@ -74,7 +75,9 @@ const FIELDS = {
   hash: '{node}',
   title: '{desc|firstline}',
   author: '{author}',
-  date: '{date|isodatesec}',
+  // We prefer committerdate over authordate as authordate sometimes makes
+  // amended or rebased commits look stale
+  date: '{committerdate|isodatesec}',
   phase: '{phase}',
   bookmarks: `{bookmarks % '{bookmark}${ESCAPED_NULL_CHAR}'}`,
   remoteBookmarks: `{remotenames % '{remotename}${ESCAPED_NULL_CHAR}'}`,
@@ -203,6 +206,15 @@ export class Repository {
   private pageFocusTracker = new PageFocusTracker();
   public codeReviewProvider?: CodeReviewProvider;
 
+  /**
+   * Config: milliseconds to hold off log/status refresh during the start of a command.
+   * This is to avoid showing messy indeterminate states (like millions of files changed
+   * during a long distance checkout, or commit graph changed but '.' is out of sync).
+   *
+   * Default: 10 seconds. Can be set by the `isl.hold-off-refresh-ms` setting.
+   */
+  public configHoldOffRefreshMs = 10000;
+
   private currentVisibleCommitRangeIndex = 0;
   private visibleCommitRanges: Array<number | undefined> = [
     DEFAULT_DAYS_OF_COMMITS_TO_LOAD,
@@ -230,7 +242,31 @@ export class Repository {
       this.codeReviewProvider = new Internal.PhabricatorCodeReviewProvider(remote, logger);
     }
 
-    this.watchForChanges = new WatchForChanges(info, logger, this.pageFocusTracker, kind => {
+    const shouldWait = (): boolean => {
+      const startTime = this.operationQueue.getRunningOperationStartTime();
+      if (startTime == null) {
+        return false;
+      }
+      // Prevent auto-refresh during the first 10 seconds of a running command.
+      // When a command is running, the intermediate state can be messy:
+      // - status errors out (edenfs), is noisy (long distance goto)
+      // - commit graph and the `.` are updated separately and hard to predict
+      // Let's just rely on optimistic state to provide the "clean" outcome.
+      // In case the command takes a long time to run, allow refresh after
+      // the time period.
+      // Fundementally, the intermediate states have no choice but have to
+      // be messy because filesystems are not transactional (and reading in
+      // `sl` is designed to be lock-free).
+      const elapsedMs = Date.now() - startTime.valueOf();
+      const result = elapsedMs < this.configHoldOffRefreshMs;
+      return result;
+    };
+    const callback = (kind: KindOfChange, pollKind?: PollKind) => {
+      if (pollKind !== 'force' && shouldWait()) {
+        // Do nothing. This is fine because after the operation
+        // there will be a refresh.
+        return;
+      }
       if (kind === 'uncommitted changes') {
         this.fetchUncommittedChanges();
       } else if (kind === 'commits') {
@@ -248,7 +284,8 @@ export class Repository {
           this.getAllDiffIds(),
         );
       }
-    });
+    };
+    this.watchForChanges = new WatchForChanges(info, logger, this.pageFocusTracker, callback);
 
     this.operationQueue = new OperationQueue(
       this.logger,
@@ -315,6 +352,8 @@ export class Repository {
     this.checkForMergeConflicts();
 
     this.disposables.push(() => subscription.dispose());
+
+    this.applyConfigInBackground();
   }
 
   public nextVisibleCommitRangeInDays(): number | undefined {
@@ -497,15 +536,17 @@ export class Repository {
 
   private normalizeOperationArgs(cwd: string, args: Array<CommandArg>): Array<string> {
     const repoRoot = unwrap(this.info.repoRoot);
-    return args.map(arg => {
+    return args.flatMap(arg => {
       if (typeof arg === 'object') {
         switch (arg.type) {
+          case 'config':
+            return ['--config', `${arg.key}=${arg.value}`];
           case 'repo-relative-file':
-            return path.normalize(path.relative(cwd, path.join(repoRoot, arg.path)));
+            return [path.normalize(path.relative(cwd, path.join(repoRoot, arg.path)))];
           case 'exact-revset':
-            return arg.revset;
+            return [arg.revset];
           case 'succeedable-revset':
-            return `max(successors(${arg.revset}))`;
+            return [`max(successors(${arg.revset}))`];
         }
       }
       return arg;
@@ -1013,6 +1054,18 @@ export class Repository {
       configName,
       configValue,
     );
+  }
+
+  /** Load and apply configs to `this` in background. */
+  private applyConfigInBackground() {
+    this.getConfig('isl.hold-off-refresh-ms').then(configValue => {
+      if (configValue != null) {
+        const numberValue = parseInt(configValue, 10);
+        if (numberValue >= 0) {
+          this.configHoldOffRefreshMs = numberValue;
+        }
+      }
+    });
   }
 }
 

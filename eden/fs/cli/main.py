@@ -30,6 +30,7 @@ import thrift.transport
 
 from cli.py import par_telemetry
 from eden.fs.cli.buck import get_buck_command, run_buck_command
+from eden.fs.cli.config import HG_REPO_TYPES
 from eden.fs.cli.telemetry import TelemetrySample
 from eden.fs.cli.util import (
     check_health_using_lockfile,
@@ -755,7 +756,11 @@ class CloneCmd(Subcmd):
 
         parser.add_argument(
             "--backing-store",
-            help="Clone path as backing store instead of a source control repository. Currently only support 'recas' and 'http' (Linux only)",
+            help=(
+                "Clone the path with a specified Backing Store implementation. "
+                "Currently only supports 'filteredhg' (all), 'recas' (Linux), "
+                "and 'http' (Linux)."
+            ),
         )
 
         parser.add_argument(
@@ -865,14 +870,15 @@ is case-sensitive. This is not recommended and is intended only for testing."""
                 args.overlay_type,
                 args.backing_store,
                 args.re_use_case,
-                args.enable_windows_symlinks,
+                args.enable_windows_symlinks
+                or instance.get_config_bool("experimental.windows-symlinks", False),
             )
         except RepoError as ex:
             print_stderr("error: {}", ex)
             return 1
 
         # If it's source control respository
-        if not args.backing_store:
+        if not args.backing_store or args.backing_store in HG_REPO_TYPES:
             # Find the commit to check out
             if args.rev is not None:
                 try:
@@ -1811,6 +1817,8 @@ class StartCmd(Subcmd):
 
         if config_mod.should_migrate_mount_protocol_to_nfs(instance):
             config_mod._do_nfs_migration(instance, get_migration_success_message)
+        if config_mod.should_migrate_inode_catalog_to_in_memory(instance):
+            config_mod._do_in_memory_inode_catalog_migration(instance)
         return daemon.start_edenfs_service(instance, daemon_binary, args.edenfs_args)
 
     def start_in_foreground(
@@ -2388,30 +2396,32 @@ def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="edenfsctl", description="Manage EdenFS checkouts."
     )
+    global_opts = parser.add_argument_group("global options")
+
     # TODO: We should probably rename this argument to --state-dir.
     # This directory contains materialized file state and the list of managed checkouts,
     # but doesn't really contain configuration.
-    parser.add_argument(
+    global_opts.add_argument(
         "--config-dir",
-        help="The path to the directory where EdenFS stores its internal state.",
+        help="Path to directory where EdenFS stores its internal state",
     )
-    parser.add_argument(
+    global_opts.add_argument(
         "--etc-eden-dir",
-        help="Path to directory that holds the system configuration files.",
+        help="Path to directory that holds the system configuration files",
     )
-    parser.add_argument(
-        "--home-dir", help="Path to directory where .edenrc config file is stored."
+    global_opts.add_argument(
+        "--home-dir", help="Path to directory where .edenrc config file is stored"
     )
-    parser.add_argument("--checkout-dir", help=argparse.SUPPRESS)
-    parser.add_argument(
-        "--version", "-v", action="store_true", help="Print EdenFS version."
+    global_opts.add_argument("--checkout-dir", help=argparse.SUPPRESS)
+    global_opts.add_argument(
+        "--version", "-v", action="store_true", help="Print EdenFS version"
     )
-    parser.add_argument(
+    global_opts.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug mode (more verbose logging, traceback, etc..)",
     )
-    parser.add_argument(
+    global_opts.add_argument(
         "--press-to-continue",
         action="store_true",
         help=argparse.SUPPRESS,

@@ -5,6 +5,7 @@
  * GNU General Public License version 2.
  */
 
+use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,6 +50,7 @@ use edenapi_types::HgMutationEntryContent;
 use edenapi_types::HistoryEntry;
 use edenapi_types::Key;
 use edenapi_types::LandStackResponse;
+use edenapi_types::SetBookmarkResponse;
 use edenapi_types::SnapshotRawData;
 use edenapi_types::TreeAttributes;
 use edenapi_types::TreeEntry;
@@ -186,8 +188,9 @@ py_class!(pub class client |py| {
         bookmark: String,
         to: Serde<Option<HgId>>,
         from: Serde<Option<HgId>>,
-        pushvars: Vec<(String, String)> = Vec::new(),
-    ) -> PyResult<bool> {
+        pushvars: Serde<Option<HashMap<String, String>>> = Serde(None),
+    ) -> PyResult<Serde<SetBookmarkResponse>> {
+        let pushvars = pushvars.0.unwrap_or_else(HashMap::new);
         self.inner(py).as_ref().set_bookmark_py(py, bookmark, to.0, from.0, pushvars)
     }
 
@@ -199,8 +202,9 @@ py_class!(pub class client |py| {
         bookmark: String,
         head: Serde<HgId>,
         base: Serde<HgId>,
-        pushvars: Vec<(String, String)> = Vec::new(),
+        pushvars: Serde<Option<HashMap<String, String>>> = Serde(None),
     ) -> PyResult<Serde<LandStackResponse>> {
+        let pushvars = pushvars.0.unwrap_or_else(HashMap::new);
         self.inner(py).as_ref().land_stack_py(py, bookmark, head.0, base.0, pushvars)
     }
 

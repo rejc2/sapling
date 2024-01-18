@@ -18,8 +18,8 @@ use rand::Rng;
 use serde::Deserialize;
 use serde::Serialize;
 
-const ENV_SAPLING_CLIENT_ENTRY_POINT: &str = "SAPLING_CLIENT_ENTRY_POINT";
-const ENV_SAPLING_CLIENT_CORRELATOR: &str = "SAPLING_CLIENT_CORRELATOR";
+pub const ENV_SAPLING_CLIENT_ENTRY_POINT: &str = "SAPLING_CLIENT_ENTRY_POINT";
+pub const ENV_SAPLING_CLIENT_CORRELATOR: &str = "SAPLING_CLIENT_CORRELATOR";
 
 const DEFAULT_CLIENT_ENTRY_POINT_SAPLING: ClientEntryPoint = ClientEntryPoint::Sapling;
 const DEFAULT_CLIENT_ENTRY_POINT_EDENFS: ClientEntryPoint = ClientEntryPoint::EdenFs;
@@ -111,6 +111,7 @@ pub struct ClientRequestInfo {
 pub enum ClientEntryPoint {
     Sapling,
     EdenFs,
+    Fbclone,
     ScsServer,
     ScmQuery,
     EdenApi,
@@ -133,6 +134,8 @@ pub enum ClientEntryPoint {
     MirrorHgCommits,
     StreamingClone,
     ScmDaemon,
+    BookmarkService,
+    BookmarkServiceClientCli,
 }
 
 impl ClientRequestInfo {
@@ -186,6 +189,7 @@ impl Display for ClientEntryPoint {
         let out = match self {
             ClientEntryPoint::Sapling => "sapling",
             ClientEntryPoint::EdenFs => "edenfs",
+            ClientEntryPoint::Fbclone => "fbclone",
             ClientEntryPoint::ScsServer => "scs",
             ClientEntryPoint::ScmQuery => "scm_query",
             ClientEntryPoint::EdenApi => "eden_api",
@@ -208,6 +212,8 @@ impl Display for ClientEntryPoint {
             ClientEntryPoint::MirrorHgCommits => "mirror_hg_commits",
             ClientEntryPoint::StreamingClone => "streaming_clone",
             ClientEntryPoint::ScmDaemon => "scm_daemon",
+            ClientEntryPoint::BookmarkService => "bookmark_service",
+            ClientEntryPoint::BookmarkServiceClientCli => "bookmark_service_client_cli",
         };
         write!(f, "{}", out)
     }
@@ -220,6 +226,7 @@ impl TryFrom<&str> for ClientEntryPoint {
         match value {
             "sapling" => Ok(ClientEntryPoint::Sapling),
             "edenfs" => Ok(ClientEntryPoint::EdenFs),
+            "fbclone" => Ok(ClientEntryPoint::Fbclone),
             "scs" => Ok(ClientEntryPoint::ScsServer),
             "scm_query" => Ok(ClientEntryPoint::ScmQuery),
             "eden_api" => Ok(ClientEntryPoint::EdenApi),
@@ -242,6 +249,8 @@ impl TryFrom<&str> for ClientEntryPoint {
             "mirror_hg_commits" => Ok(ClientEntryPoint::MirrorHgCommits),
             "streaming_clone" => Ok(ClientEntryPoint::StreamingClone),
             "scm_daemon" => Ok(ClientEntryPoint::ScmDaemon),
+            "bookmark_service" => Ok(ClientEntryPoint::BookmarkService),
+            "bookmark_service_client_clie" => Ok(ClientEntryPoint::BookmarkServiceClientCli),
             _ => Err(anyhow!("Invalid client entry point")),
         }
     }
@@ -293,6 +302,10 @@ mod tests {
         assert_eq!(
             Some(ClientEntryPoint::EdenFs),
             ClientEntryPoint::try_from(ClientEntryPoint::EdenFs.to_string().as_ref()).ok()
+        );
+        assert_eq!(
+            Some(ClientEntryPoint::Fbclone),
+            ClientEntryPoint::try_from(ClientEntryPoint::Fbclone.to_string().as_ref()).ok()
         );
         assert_eq!(
             Some(ClientEntryPoint::ScsServer),

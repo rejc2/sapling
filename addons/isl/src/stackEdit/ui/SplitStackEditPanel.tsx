@@ -6,7 +6,7 @@
  */
 
 import type {CommitMessageFields} from '../../CommitInfoView/types';
-import type {CommitStackState} from '../commitStackState';
+import type {CommitStackState, FileMetadata} from '../commitStackState';
 import type {FileStackState, Rev} from '../fileStackState';
 import type {UseStackEditState} from './stackEditState';
 import type {EnsureAssignedTogether} from 'shared/EnsureAssignedTogether';
@@ -18,7 +18,7 @@ import {
   commitMessageFieldsSchema,
   commitMessageFieldsToString,
 } from '../../CommitInfoView/CommitMessageFields';
-import {FileHeader} from '../../ComparisonView/SplitDiffView/SplitDiffFileHeader';
+import {FileHeader, IconType} from '../../ComparisonView/SplitDiffView/SplitDiffFileHeader';
 import {useTokenizedContentsOnceVisible} from '../../ComparisonView/SplitDiffView/syntaxHighlighting';
 import {Column, Row, ScrollX, ScrollY} from '../../ComponentUtils';
 import {EmptyState} from '../../EmptyState';
@@ -27,6 +27,7 @@ import {Tooltip} from '../../Tooltip';
 import {tracker} from '../../analytics';
 import {t, T} from '../../i18n';
 import {firstLine} from '../../utils';
+import {isAbsent} from '../commitStackState';
 import {computeLinesForFileStackEditor} from './FileStackEditorLines';
 import {bumpStackEditMetric, SplitRangeRecord, useStackEditState} from './stackEditState';
 import {VSCodeButton, VSCodeTextField} from '@vscode/webview-ui-toolkit/react';
@@ -37,7 +38,6 @@ import {useContextMenu} from 'shared/ContextMenu';
 import {Icon} from 'shared/Icon';
 import {type LineIdx, splitLines, diffBlocks} from 'shared/diff';
 import {useThrottledEffect} from 'shared/hooks';
-import {DiffType} from 'shared/patch/parse';
 import {unwrap} from 'shared/utils';
 
 import './SplitStackEditPanel.css';
@@ -104,7 +104,7 @@ export function SplitStackEditPanel() {
 
   return (
     <div className="interactive-split">
-      <ScrollX maxSize="calc(100vw - 50px)">
+      <ScrollX maxSize="calc((100vw / var(--zoom)) - 50px)">
         <Row style={{padding: '0 var(--pad)'}}>{columns}</Row>
       </ScrollX>
     </div>
@@ -146,37 +146,73 @@ function SplitColumn(props: SplitColumnProps) {
 
   const [collapsedFiles, setCollapsedFiles] = useState(new Set());
 
+  const toggleCollapsed = (path: RepoPath) => {
+    const updated = new Set(collapsedFiles);
+    updated.has(path) ? updated.delete(path) : updated.add(path);
+    setCollapsedFiles(updated);
+  };
+
   const commit = subStack.get(rev);
   const commitMessage = commit?.text ?? '';
+
+  // File stacks contain text (content-editable) files.
+  // Note: subStack might contain files that are not editable
+  // (ex. currently binary, but previously absent). Filter them out.
+  const editablePaths = new Set(subStack.getPaths(rev, {text: true}));
   const sortedFileStacks = subStack.fileStacks
-    .map((fileStack, fileIdx): [RepoPath, FileStackState, Rev] => {
-      return [subStack.getFileStackPath(fileIdx, 0) ?? '', fileStack, fileIdx];
+    .flatMap((fileStack, fileIdx): Array<[RepoPath, FileStackState, Rev]> => {
+      const path = subStack.getFileStackPath(fileIdx, 0) ?? '';
+      return editablePaths.has(path) ? [[path, fileStack, fileIdx]] : [];
     })
     .sortBy(t => t[0]);
 
-  const editors = sortedFileStacks.flatMap(([path, fileStack, fileIdx]) => {
+  // There might be non-text (ex. binary, or too large) files.
+  const nonEditablePaths = subStack.getPaths(rev, {text: false}).sort();
+
+  const editables = sortedFileStacks.flatMap(([path, fileStack, fileIdx]) => {
     // subStack is a "dense" stack. fileRev is commitRev + 1.
     const fileRev = rev + 1;
-    const isModified = fileRev > 0 && fileStack.getRev(fileRev - 1) !== fileStack.getRev(fileRev);
+    const isModified =
+      (fileRev > 0 && fileStack.getRev(fileRev - 1) !== fileStack.getRev(fileRev)) ||
+      subStack.changedFileMetadata(rev, path) != null;
     const editor = (
       <SplitEditorWithTitle
         key={path}
         subStack={subStack}
+        rev={rev}
         path={path}
         fileStack={fileStack}
         fileIdx={fileIdx}
         fileRev={fileRev}
         collapsed={collapsedFiles.has(path)}
-        toggleCollapsed={() => {
-          const updated = new Set(collapsedFiles);
-          updated.has(path) ? updated.delete(path) : updated.add(path);
-          setCollapsedFiles(updated);
-        }}
+        toggleCollapsed={() => toggleCollapsed(path)}
       />
     );
     const result = isModified ? [editor] : [];
     return result;
   });
+
+  const nonEditables = nonEditablePaths.flatMap(path => {
+    const file = subStack.getFile(rev, path);
+    const prev = subStack.getFile(rev - 1, path);
+    const isModified = !file.equals(prev);
+    if (!isModified) {
+      return [];
+    }
+    const editor = (
+      <SplitEditorWithTitle
+        key={path}
+        subStack={subStack}
+        rev={rev}
+        path={path}
+        collapsed={collapsedFiles.has(path)}
+        toggleCollapsed={() => toggleCollapsed(path)}
+      />
+    );
+    return [editor];
+  });
+
+  const editors = editables.concat(nonEditables);
 
   const body = editors.isEmpty() ? (
     <EmptyState small>
@@ -188,7 +224,7 @@ function SplitColumn(props: SplitColumnProps) {
       </Column>
     </EmptyState>
   ) : (
-    <ScrollY maxSize="calc(100vh - 280px)" hideBar={true}>
+    <ScrollY maxSize="calc((100vh / var(--zoom)) - 280px)" hideBar={true}>
       {editors}
     </ScrollY>
   );
@@ -242,10 +278,11 @@ function SplitColumn(props: SplitColumnProps) {
 
 type SplitEditorWithTitleProps = {
   subStack: CommitStackState;
+  rev: Rev;
   path: RepoPath;
-  fileStack: FileStackState;
-  fileIdx: number;
-  fileRev: Rev;
+  fileStack?: FileStackState;
+  fileIdx?: number;
+  fileRev?: Rev;
   collapsed: boolean;
   toggleCollapsed: () => unknown;
 };
@@ -254,10 +291,10 @@ function SplitEditorWithTitle(props: SplitEditorWithTitleProps) {
   const stackEdit = useStackEditState();
 
   const {commitStack} = stackEdit;
-  const {subStack, path, fileStack, fileIdx, fileRev, collapsed, toggleCollapsed} = props;
+  const {subStack, path, fileStack, fileIdx, fileRev, collapsed, toggleCollapsed, rev} = props;
+  const file = subStack.getFile(rev, path);
 
-  const setStack = (newFileStack: FileStackState) => {
-    const newSubStack = subStack.setFileStack(fileIdx, newFileStack);
+  const setSubStack = (newSubStack: CommitStackState) => {
     const [startRev, endRev] = findStartEndRevs(stackEdit);
     if (startRev != null && endRev != null) {
       const newCommitStack = commitStack.applySubStack(startRev, endRev + 1, newSubStack);
@@ -271,54 +308,76 @@ function SplitEditorWithTitle(props: SplitEditorWithTitleProps) {
     }
   };
 
-  const moveEntireFile = (dir: 'left' | 'right') => {
-    const aRev = fileRev - 1;
-    const bRev = fileRev;
-
-    const newFileStack = fileStack.mapAllLines(line => {
-      let newRevs = line.revs;
-      const inA = line.revs.has(aRev);
-      const inB = line.revs.has(bRev);
-      const isContext = inA && inB;
-      if (!isContext) {
-        if (inA) {
-          // This is a deletion.
-          if (dir === 'right') {
-            // Move deletion right - add it in bRev.
-            newRevs = newRevs.add(bRev);
-          } else {
-            // Move deletion left - drop it from aRev.
-            newRevs = newRevs.remove(aRev);
-          }
-        }
-        if (inB) {
-          // This is an insertion.
-          if (dir === 'right') {
-            // Move insertion right - drop it in bRev.
-            newRevs = newRevs.remove(bRev);
-          } else {
-            // Move insertion left - add it to aRev.
-            newRevs = newRevs.add(aRev);
-          }
-        }
-      }
-      return newRevs === line.revs ? line : line.set('revs', newRevs);
-    });
-    bumpStackEditMetric('splitMoveFile');
-
-    setStack(newFileStack);
+  const setStack = (newFileStack: FileStackState) => {
+    if (fileIdx == null || fileRev == null) {
+      return;
+    }
+    const newSubStack = subStack.setFileStack(fileIdx, newFileStack);
+    setSubStack(newSubStack);
   };
+
+  const moveEntireFile = (dir: 'left' | 'right') => {
+    // Suppose the file has 5 versions, and current version is 'v3':
+    //             v1--v2--v3--v4--v5
+    // Move left:
+    //             v1--v3--v3--v4--v5 (replace v2 with v3)
+    //             If v3 has 'copyFrom', drop 'copyFrom' on the second 'v3'.
+    //             If v2 had 'copyFrom', preserve it on the first 'v3'.
+    // Move right:
+    //             v1--v2--v2--v4--v5 (replace v3 with v2)
+    //             If v3 has 'copyFrom', update 'copyFrom' on 'v4'.
+    //             v4 should not have 'copyFrom'.
+    const [fromRev, toRev] = dir === 'left' ? [rev, rev - 1] : [rev - 1, rev];
+    const fromFile = subStack.getFile(fromRev, path);
+    let newStack = subStack.setFile(toRev, path, oldFile => {
+      if (dir === 'left' && oldFile.copyFrom != null) {
+        return fromFile.set('copyFrom', oldFile.copyFrom);
+      }
+      return fromFile;
+    });
+    if (file.copyFrom != null) {
+      if (dir === 'right') {
+        newStack = newStack.setFile(rev + 1, path, f => f.set('copyFrom', file.copyFrom));
+      } else {
+        newStack = newStack.setFile(rev, path, f => f.remove('copyFrom'));
+      }
+    }
+    bumpStackEditMetric('splitMoveFile');
+    setSubStack(newStack);
+  };
+
+  const changedMeta = subStack.changedFileMetadata(rev, path, false);
+  let iconType = IconType.Modified;
+  if (changedMeta != null) {
+    const [oldMeta, newMeta] = changedMeta;
+    if (isAbsent(oldMeta) && !isAbsent(newMeta)) {
+      iconType = IconType.Added;
+    } else if (!isAbsent(oldMeta) && isAbsent(newMeta)) {
+      iconType = IconType.Removed;
+    }
+  }
+  const canMoveLeft =
+    rev > 0 && (file.copyFrom == null || isAbsent(subStack.getFile(rev - 1, path)));
+  let copyFromText = undefined;
+  if (file.copyFrom != null) {
+    const copyFromFile = subStack.getFile(rev - 1, file.copyFrom);
+    try {
+      // This will throw if copyFromFile is non-text (binary, or too large).
+      copyFromText = subStack.getUtf8Data(copyFromFile);
+    } catch {}
+  }
 
   return (
     <div className="split-commit-file">
       <FileHeader
         path={path}
-        diffType={DiffType.Modified}
+        copyFrom={file.copyFrom}
+        iconType={iconType}
         open={!collapsed}
         onChangeOpen={toggleCollapsed}
         fileActions={
           <div className="split-commit-file-arrows">
-            {fileRev > 1 /* rev == 0 corresponds to fileRev == 1  */ ? (
+            {canMoveLeft ? (
               <VSCodeButton appearance="icon" onClick={() => moveEntireFile('left')}>
                 ⬅
               </VSCodeButton>
@@ -330,8 +389,69 @@ function SplitEditorWithTitle(props: SplitEditorWithTitleProps) {
         }
       />
       {!collapsed && (
-        <SplitFile key={fileIdx} rev={fileRev} stack={fileStack} setStack={setStack} path={path} />
+        <>
+          <ModeChangeHints changedMeta={changedMeta} />
+          {fileRev != null && fileStack != null ? (
+            <SplitFile
+              key={fileIdx}
+              rev={fileRev}
+              stack={fileStack}
+              setStack={setStack}
+              path={path}
+              copyFromText={copyFromText}
+            />
+          ) : (
+            <NonEditable />
+          )}
+        </>
       )}
+    </div>
+  );
+}
+
+const FLAG_TO_MESSAGE = new Map<string, string>([
+  ['', t('regular')],
+  ['l', t('symlink')],
+  ['x', t('executable')],
+  ['m', t('Git submodule')],
+]);
+
+function ModeChangeHints(props: {changedMeta?: [FileMetadata, FileMetadata]}) {
+  const {changedMeta} = props;
+  if (changedMeta == null) {
+    return null;
+  }
+
+  const [oldMeta, newMeta] = changedMeta;
+  const oldFlag = oldMeta.flags ?? '';
+  const newFlag = newMeta.flags ?? '';
+  let message = null;
+
+  if (!isAbsent(newMeta)) {
+    const newDesc = FLAG_TO_MESSAGE.get(newFlag);
+    // Show hint for newly added non-regular files.
+    if (newFlag !== '' && isAbsent(oldMeta)) {
+      if (newDesc != null) {
+        message = t('File type: $new', {replace: {$new: newDesc}});
+      }
+    } else {
+      // Show hint when the flag (mode) has changed.
+      if (newFlag !== oldFlag) {
+        const oldDesc = FLAG_TO_MESSAGE.get(oldFlag);
+        if (oldDesc != null && newDesc != null && oldDesc !== newDesc) {
+          message = t('File type change: $old → $new', {replace: {$old: oldDesc, $new: newDesc}});
+        }
+      }
+    }
+  }
+
+  return message == null ? null : <div className="split-header-hint">{message}</div>;
+}
+
+function NonEditable() {
+  return (
+    <div className="split-header-hint">
+      <T>Binary or large file content is not editable.</T>
     </div>
   );
 }
@@ -569,6 +689,14 @@ type SplitFileProps = {
    */
   stack: FileStackState;
 
+  /**
+   * Override the "left side" text (diff against).
+   *
+   * This is useful to provide the text from the "copyFrom" file.
+   * Once set, move left buttons will be disabled.
+   */
+  copyFromText?: string;
+
   /** Function to update the stack. */
   setStack: (stack: FileStackState) => void;
 
@@ -595,7 +723,7 @@ export function SplitFile(props: SplitFileProps) {
   const mainContentRef = useRef<HTMLTableElement | null>(null);
   const [expandedLines, setExpandedLines] = useState<ImSet<LineIdx>>(ImSet);
   const [selectedLineIds, setSelectedLineIds] = useState<ImSet<string>>(ImSet);
-  const {stack, rev, setStack} = props;
+  const {stack, rev, setStack, copyFromText} = props;
 
   // Selection change is a document event, not a <pre> event.
   useEffect(() => {
@@ -628,13 +756,14 @@ export function SplitFile(props: SplitFileProps) {
 
   // Diff with the left side.
   const bText = stack.getRev(rev);
-  const aText = stack.getRev(Math.max(0, rev - 1));
+  const aText = copyFromText ?? stack.getRev(Math.max(0, rev - 1));
   // memo to avoid syntax highlighting repeatedly even when the text hasn't changed
   const bLines = useMemo(() => splitLines(bText), [bText]);
   const aLines = useMemo(() => splitLines(aText), [aText]);
   const abBlocks = diffBlocks(aLines, bLines);
 
   const highlights = useTokenizedContentsOnceVisible(props.path, aLines, bLines, mainContentRef);
+  const hasCopyFrom = copyFromText != null;
 
   const {leftGutter, leftButtons, mainContent, rightGutter, rightButtons, lineKind} =
     computeLinesForFileStackEditor(
@@ -655,6 +784,7 @@ export function SplitFile(props: SplitFileProps) {
       [],
       false,
       false,
+      hasCopyFrom,
     );
 
   const rows = mainContent.map((line, i) => (
@@ -671,11 +801,11 @@ export function SplitFile(props: SplitFileProps) {
     <div className="split-file">
       <table ref={mainContentRef}>
         <colgroup>
-          <col width={50} /> {/* left arrows */}
-          <col width={50} /> {/* before line numbers */}
-          <col width={'100%'} /> {/* diff content */}
-          <col width={50} /> {/* after line numbers */}
-          <col width={50} /> {/* rightarrow  */}
+          <col width={50}>{/* left arrows */}</col>
+          <col width={50}>{/* before line numbers */}</col>
+          <col width={'100%'}>{/* diff content */}</col>
+          <col width={50}>{/* after line numbers */}</col>
+          <col width={50}>{/* rightarrow  */}</col>
         </colgroup>
         <tbody>{rows}</tbody>
       </table>

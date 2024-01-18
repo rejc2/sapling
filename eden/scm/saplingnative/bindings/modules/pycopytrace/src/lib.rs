@@ -31,7 +31,7 @@ use dag::Vertex;
 use parking_lot::Mutex;
 use storemodel::FileStore;
 use storemodel::ReadRootTreeIds;
-use storemodel::TreeFormat;
+use storemodel::SerializationFormat;
 use storemodel::TreeStore;
 
 pub fn init_module(py: Python, package: &str) -> PyResult<PyModule> {
@@ -39,6 +39,14 @@ pub fn init_module(py: Python, package: &str) -> PyResult<PyModule> {
     let m = PyModule::new(py, &name)?;
     m.add_class::<gitcopytrace>(py)?;
     m.add_class::<dagcopytrace>(py)?;
+    m.add(
+        py,
+        "is_content_similar",
+        py_fn!(py, is_content_similar(
+    a: PyBytes,
+    b: PyBytes,
+    config: ImplInto<Arc<dyn Config + Send + Sync>>)),
+    )?;
     Ok(m)
 }
 
@@ -75,8 +83,8 @@ py_class!(pub class dagcopytrace |py| {
         let tree_store = tree_store.into();
         let config = config.into();
         let rename_finder: Arc<dyn RenameFinder + Send + Sync> = match tree_store.format() {
-            TreeFormat::Hg => Arc::new(MetadataRenameFinder::new(file_reader.into(), config).map_pyerr(py)?),
-            TreeFormat::Git => Arc::new(ContentSimilarityRenameFinder::new(file_reader.into(), config).map_pyerr(py)?),
+            SerializationFormat::Hg => Arc::new(MetadataRenameFinder::new(file_reader.into(), config).map_pyerr(py)?),
+            SerializationFormat::Git => Arc::new(ContentSimilarityRenameFinder::new(file_reader.into(), config).map_pyerr(py)?),
         };
         let dag = dag.into();
 
@@ -128,3 +136,16 @@ py_class!(pub class dagcopytrace |py| {
         Ok(Serde(trace_result))
     }
 });
+
+fn is_content_similar(
+    py: Python,
+    a: PyBytes,
+    b: PyBytes,
+    config: ImplInto<Arc<dyn Config + Send + Sync>>,
+) -> PyResult<bool> {
+    let a = a.data(py);
+    let b = b.data(py);
+    let config = config.into();
+    py.allow_threads(|| copytrace::is_content_similar(a, b, &config))
+        .map_pyerr(py)
+}

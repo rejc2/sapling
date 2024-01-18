@@ -17,6 +17,7 @@
 #include "eden/fs/store/BackingStore.h"
 #include "eden/fs/store/filter/Filter.h"
 #include "eden/fs/store/filter/FilteredObjectId.h"
+#include "eden/fs/utils/FilterUtils.h"
 #include "eden/fs/utils/ImmediateFuture.h"
 
 namespace facebook::eden {
@@ -65,26 +66,6 @@ FilteredBackingStore::pathAffectedByFilterChange(
         // can guarantee that they're different.
         return ObjectComparison::Different;
       });
-}
-
-std::tuple<RootId, std::string> parseFilterIdFromRootId(const RootId& rootId) {
-  auto rootRange = folly::range(rootId.value());
-  auto expectedLength = folly::tryDecodeVarint(rootRange);
-  if (UNLIKELY(!expectedLength)) {
-    throwf<std::invalid_argument>(
-        "Could not decode varint; FilteredBackingStore expects a root ID in "
-        "the form of <hashLengthVarint><scmHash><filterId>, got {}",
-        rootId.value());
-  }
-  auto root = RootId{std::string{rootRange.begin(), expectedLength.value()}};
-  auto filterId = std::string{rootRange.begin() + expectedLength.value()};
-  XLOGF(
-      DBG7,
-      "Decoded Original RootId Length: {}, Original RootId: {}, FilterID: {}",
-      expectedLength.value(),
-      filterId,
-      root.value());
-  return {std::move(root), std::move(filterId)};
 }
 
 ObjectComparison FilteredBackingStore::compareObjectsById(
@@ -375,11 +356,18 @@ folly::SemiFuture<BackingStore::GetBlobResult> FilteredBackingStore::getBlob(
 folly::SemiFuture<folly::Unit> FilteredBackingStore::prefetchBlobs(
     ObjectIdRange ids,
     const ObjectFetchContextPtr& context) {
-  std::vector<ObjectId> nonFilteredIds;
-  std::transform(ids.begin(), ids.end(), nonFilteredIds.begin(), [](auto id) {
-    return FilteredObjectId::fromObjectId(id).object();
-  });
-  return backingStore_->prefetchBlobs(nonFilteredIds, context);
+  std::vector<ObjectId> unfilteredIds;
+  unfilteredIds.reserve(ids.size());
+  std::transform(
+      ids.begin(), ids.end(), std::back_inserter(unfilteredIds), [](auto& id) {
+        return FilteredObjectId::fromObjectId(id).object();
+      });
+  // prefetchBlobs() expects that the caller guarantees the ids live at least
+  // longer than this future takes to complete. Therefore, we ensure the
+  // lifetime of the newlly created unfilteredIds.
+  auto fut = backingStore_->prefetchBlobs(unfilteredIds, context);
+  return std::move(fut).deferEnsure(
+      [unfilteredIds = std::move(unfilteredIds)]() {});
 }
 
 void FilteredBackingStore::periodicManagementTask() {
@@ -416,17 +404,23 @@ RootId FilteredBackingStore::parseRootId(folly::StringPiece rootId) {
 }
 
 std::string FilteredBackingStore::renderRootId(const RootId& rootId) {
-  auto [underlyingRootId, filterId] = parseFilterIdFromRootId(rootId);
-  return createFilteredRootId(
-      std::move(underlyingRootId).value(), std::move(filterId));
+  auto [underlyingRootId, _] = parseFilterIdFromRootId(rootId);
+  return backingStore_->renderRootId(underlyingRootId);
 }
 
 ObjectId FilteredBackingStore::parseObjectId(folly::StringPiece objectId) {
-  return backingStore_->parseObjectId(objectId);
+  auto oid = ObjectId{objectId};
+  auto foid = FilteredObjectId::fromObjectId(oid);
+  return ObjectId{foid.getValue()};
 }
 
 std::string FilteredBackingStore::renderObjectId(const ObjectId& id) {
-  return backingStore_->renderObjectId(id);
+  auto filteredId = FilteredObjectId::fromObjectId(id);
+  auto object = filteredId.object();
+  auto underlyingOid = backingStore_->renderObjectId(object);
+  auto filterIdString = filteredId.getValue();
+  auto prefix = filterIdString.substr(filterIdString.size() - object.size());
+  return fmt::format("{}{}", folly::hexlify(prefix), underlyingOid);
 }
 
 std::optional<folly::StringPiece> FilteredBackingStore::getRepoName() {
@@ -453,5 +447,4 @@ std::string FilteredBackingStore::createFilteredRootId(
       filterId);
   return buf;
 }
-
 } // namespace facebook::eden

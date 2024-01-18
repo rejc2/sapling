@@ -24,7 +24,6 @@
 
 namespace facebook::eden {
 
-class HgImporter;
 struct ImporterOptions;
 class EdenStats;
 class LocalStore;
@@ -32,6 +31,7 @@ class UnboundedQueueExecutor;
 class ReloadableConfig;
 class HgProxyHash;
 class StructuredLogger;
+class FaultInjector;
 
 using EdenStatsPtr = RefPtr<EdenStats>;
 
@@ -50,7 +50,8 @@ class HgBackingStore {
       UnboundedQueueExecutor* serverThreadPool,
       std::shared_ptr<ReloadableConfig> config,
       EdenStatsPtr edenStats,
-      std::shared_ptr<StructuredLogger> logger);
+      std::shared_ptr<StructuredLogger> logger,
+      FaultInjector* FOLLY_NONNULL faultInjector);
 
   /**
    * Create an HgBackingStore suitable for use in unit tests. It uses an inline
@@ -59,10 +60,10 @@ class HgBackingStore {
    */
   HgBackingStore(
       AbsolutePathPiece repository,
-      HgImporter* importer,
       std::shared_ptr<ReloadableConfig> config,
       std::shared_ptr<LocalStore> localStore,
-      EdenStatsPtr);
+      EdenStatsPtr,
+      FaultInjector* FOLLY_NONNULL faultInjector);
 
   ~HgBackingStore();
 
@@ -158,12 +159,6 @@ class HgBackingStore {
       ObjectId edenTreeID,
       RelativePath path,
       std::shared_ptr<LocalStore::WriteBatch> writeBatch);
-  TreePtr processTree(
-      std::unique_ptr<folly::IOBuf> content,
-      const Hash20& manifestNode,
-      const ObjectId& edenTreeID,
-      RelativePathPiece path,
-      LocalStore::WriteBatch* writeBatch);
 
   std::shared_ptr<LocalStore> localStore_;
   EdenStatsPtr stats_;

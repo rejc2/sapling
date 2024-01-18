@@ -286,7 +286,7 @@ def Popen4(cmd, wd, timeout, env=None):
             if p.returncode is None:
                 terminate(p)
 
-        threading.Thread(target=t, name=f"Timeout tracker {cmd=}").start()
+        threading.Thread(target=t, name=f"Timeout tracker {cmd=}", daemon=True).start()
 
     return p
 
@@ -1521,7 +1521,7 @@ class Test(unittest.TestCase):
         keys_to_del = (
             "HG HGPROF CDPATH GREP_OPTIONS http_proxy no_proxy "
             + "HGPLAIN HGPLAINEXCEPT EDITOR VISUAL PAGER "
-            + "NO_PROXY CHGDEBUG HGDETECTRACE RUST_BACKTRACE RUST_LIB_BACKTRACE "
+            + "NO_PROXY CHGDEBUG RUST_BACKTRACE RUST_LIB_BACKTRACE "
             + " EDENSCM_TRACE_LEVEL EDENSCM_TRACE_OUTPUT"
             + " EDENSCM_TRACE_PY TRACING_DATA_FAKE_CLOCK"
             + " EDENSCM_LOG LOG FAILPOINTS"
@@ -1623,6 +1623,13 @@ class Test(unittest.TestCase):
                 lines.append(line)
                 if len(lines) > 50000:
                     log(f"Test command '{cmd}' outputs too many lines")
+                    cleanup()
+                    break
+
+                # defend against very large outputs
+                # 10_000_000 = 50_000 * 200 (assuming each line has 200 bytes)
+                if sum(len(s) for s in lines) > 10_000_000:
+                    log(f"Test command '{cmd}' outputs too large")
                     cleanup()
                     break
 
@@ -2402,7 +2409,7 @@ class IOLockWithProgress:
 iolock = showprogress and IOLockWithProgress() or _iolock
 
 
-class TestResult(unittest._TextTestResult):
+class TestResult(unittest.TextTestResult):
     """Holds results when executing via unittest."""
 
     # Don't worry too much about accessing the non-public _TextTestResult.
@@ -2459,7 +2466,7 @@ class TestResult(unittest._TextTestResult):
 
     def addSuccess(self, test):
         if showprogress and not self.showAll:
-            super(unittest._TextTestResult, self).addSuccess(test)
+            super(unittest.TextTestResult, self).addSuccess(test)
         else:
             with iolock:
                 super(TestResult, self).addSuccess(test)
@@ -2467,7 +2474,7 @@ class TestResult(unittest._TextTestResult):
 
     def addError(self, test, err):
         if showprogress and not self.showAll:
-            super(unittest._TextTestResult, self).addError(test, err)
+            super(unittest.TextTestResult, self).addError(test, err)
         else:
             with iolock:
                 super(TestResult, self).addError(test, err)

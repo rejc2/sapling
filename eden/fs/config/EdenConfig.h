@@ -226,6 +226,15 @@ class EdenConfig : private ConfigSettingManager {
   // [config]
 
   /**
+   * If EdenFS should auto migrate non inmemory inode catalogs to inmemory on
+   * Windows.
+   */
+  ConfigSetting<bool> migrateToInMemoryCatalog{
+      "core:migrate_existing_to_in_memory_catalog",
+      true,
+      this};
+
+  /**
    * How often the on-disk config information should be checked for changes.
    */
   ConfigSetting<std::chrono::nanoseconds> configReloadInterval{
@@ -411,6 +420,15 @@ class EdenConfig : private ConfigSettingManager {
       5,
       this};
 
+  /**
+   * The maximum number blob SHA-1s and sizes to keep in memory per mount. See
+   * the comment on `ObjectStore::metadataCache_` for more details.
+   */
+  ConfigSetting<uint64_t> metadataCacheSize{
+      "store:metadata-cache-size",
+      1'000'000,
+      this};
+
   // [fuse]
 
   /**
@@ -490,20 +508,6 @@ class EdenConfig : private ConfigSettingManager {
    * Controls whether Mountd will register itself against rpcbind.
    */
   ConfigSetting<bool> registerMountd{"nfs:register-mountd", false, this};
-
-  /**
-   * Number of threads that will service the NFS requests.
-   */
-  ConfigSetting<uint64_t> numNfsThreads{"nfs:num-servicing-threads", 8, this};
-
-  /**
-   * Maximum number of pending NFS requests. If more requests are inflight, the
-   * NFS code will block.
-   */
-  ConfigSetting<uint64_t> maxNfsInflightRequests{
-      "nfs:max-inflight-requests",
-      1000,
-      this};
 
   /**
    * Buffer size for read and writes requests. Default to 16 KiB.
@@ -637,6 +641,25 @@ class EdenConfig : private ConfigSettingManager {
       true,
       this};
 
+  // [fschannel]
+
+  /**
+   * Number of threads that will service the background FS channel requests.
+   */
+  ConfigSetting<uint64_t> numFsChannelThreads{
+      "fschannel:num-servicing-threads",
+      std::thread::hardware_concurrency(),
+      this};
+
+  /**
+   * Maximum number of pending FS channel requests. If more requests are
+   * inflight, the FS channel code will block.
+   */
+  ConfigSetting<uint64_t> maxFsChannelInflightRequests{
+      "fschannel:max-inflight-requests",
+      1000,
+      this};
+
   // [hg]
 
   /**
@@ -704,20 +727,10 @@ class EdenConfig : private ConfigSettingManager {
       this};
 
   /**
-   * Whether fetching trees should fall back on an external hg importer process.
+   * Whether fetching objects should fall back to hg importer process.
    */
-  ConfigSetting<bool> hgTreeFetchFallback{"hg:tree-fetch-fallback", true, this};
-
-  /**
-   * Whether fetching blobs should fall back on an external hg importer process.
-   */
-  ConfigSetting<bool> hgBlobFetchFallback{"hg:blob-fetch-fallback", true, this};
-
-  /**
-   * Whether fetching blob metadata should fall back to fetching blobs.
-   */
-  ConfigSetting<bool> hgBlobMetaFetchFallback{
-      "hg:blobmeta-fetch-fallback",
+  ConfigSetting<bool> hgImporterFetchFallback{
+      "hg:importer-fetch-fallback",
       true,
       this};
 
@@ -976,6 +989,16 @@ class EdenConfig : private ConfigSettingManager {
    */
   ConfigSetting<bool> alwaysInvalidateDirectory{
       "experimental:always-invalidate-directories",
+      folly::kIsWindows,
+      this};
+
+  /**
+   * Controls whether EdenFS symlinks are enabled on Windows.
+   *
+   * On Windows this is on by default but can be disabled via this setting.
+   */
+  ConfigSetting<bool> windowsSymlinksEnabled{
+      "experimental:windows-symlinks-enabled",
       folly::kIsWindows,
       this};
 
@@ -1254,6 +1277,57 @@ class EdenConfig : private ConfigSettingManager {
   ConfigSetting<bool> doctorEnableKerberosCheck{
       "doctor:enable-kerberos-check",
       false,
+      this};
+
+  /**
+   * The minimum kernel version required for EdenFS to work correctly.
+   */
+  ConfigSetting<std::string> doctorMinimumKernelVersion{
+      "doctor:minimum-kernel-version",
+      "4.11.3-67",
+      this};
+
+  /**
+   * Known bad kernel versions for which we should print a warning in `edenfsctl
+   * doctor`.
+   */
+  ConfigSetting<std::string> doctorKnownBadKernelVersions{
+      "doctor:known-bad-kernel-versions",
+      "TODO,TEST",
+      this};
+
+  /**
+   * Extensions that may do bad things that we want to warn about in
+   * doctor.
+   */
+  ConfigSetting<std::vector<std::string>> doctorExtensionWarnList{
+      "doctor:vscode-extensions-warn-list",
+      {},
+      this};
+
+  /**
+   * Extensions that will do bad things that we definitely want to advise
+   * against using.
+   */
+  ConfigSetting<std::vector<std::string>> doctorExtensionBlockList{
+      "doctor:vscode-extensions-block-list",
+      {},
+      this};
+
+  /**
+   * Extensions that we know are fine and should not be warned against.
+   */
+  ConfigSetting<std::vector<std::string>> doctorExtensionAllowList{
+      "doctor:vscode-extensions-allow-list",
+      {},
+      this};
+
+  /**
+   * Extensions authors that are known and we should not warn about.
+   */
+  ConfigSetting<std::vector<std::string>> doctorExtensionAuthorAllowList{
+      "doctor:vscode-extensions-author-allow-list",
+      {},
       this};
 
   // [hash]

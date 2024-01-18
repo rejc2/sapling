@@ -231,6 +231,10 @@ impl Convert for RawPushParams {
         let default = PushParams::default();
         Ok(PushParams {
             pure_push_allowed: self.pure_push_allowed.unwrap_or(default.pure_push_allowed),
+            unbundle_commit_limit: self
+                .unbundle_commit_limit
+                .map(|limit| limit.try_into())
+                .transpose()?,
         })
     }
 }
@@ -540,7 +544,7 @@ impl Convert for RawSegmentedChangelogConfig {
             default: Option<Duration>,
         ) -> Result<Option<Duration>> {
             match maybe_secs {
-                Some(secs) if secs == 0 => Ok(None),
+                Some(0) => Ok(None),
                 Some(secs) => Ok(Some(Duration::from_secs(secs.try_into()?))),
                 None => Ok(default),
             }

@@ -7,18 +7,16 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::SystemTime;
 
 use anyhow::anyhow;
 use anyhow::Result;
 use configmodel::Config;
 use configmodel::ConfigExt;
-use io::IO;
 use manifest_tree::ReadTreeManifest;
+use manifest_tree::TreeManifest;
 use parking_lot::Mutex;
 use pathmatcher::AlwaysMatcher;
 use pathmatcher::DynMatcher;
@@ -27,6 +25,7 @@ use progress_model::ProgressBar;
 use repolock::RepoLocker;
 use serde::Deserialize;
 use serde::Serialize;
+use termlogger::TermLogger;
 use treestate::filestate::StateFlags;
 use treestate::treestate::TreeState;
 use types::path::ParseError;
@@ -122,20 +121,24 @@ impl WatchmanFileSystem {
             .resolve_root(CanonicalPath::canonicalize(self.inner.vfs.root())?)
             .await?;
 
-        let mut expr = None;
-        if !ignore_dirs.is_empty() {
-            expr = Some(Expr::Not(Box::new(Expr::Any(
-                ignore_dirs
-                    .into_iter()
-                    .map(|p| {
-                        Expr::DirName(DirNameTerm {
-                            path: p,
-                            depth: None,
-                        })
-                    })
-                    .collect(),
-            ))));
-        }
+        let mut not_exprs = vec![
+            // This files under nested ".hg" directories. Note that we don't have a good
+            // way to ignore regular files in the nested repo (e.g. we can ignore
+            // "dir/.hg/file", but not "dir/file".
+            Expr::Match(MatchTerm {
+                glob: format!("**/{}/**", self.inner.dot_dir),
+                wholename: true,
+                include_dot_files: true,
+                ..Default::default()
+            }),
+        ];
+
+        not_exprs.extend(ignore_dirs.into_iter().map(|p| {
+            Expr::DirName(DirNameTerm {
+                path: p,
+                depth: None,
+            })
+        }));
 
         // The crawl is done - display a generic "we're querying" spinner.
         let _bar = ProgressBar::new_adhoc("querying watchman", 0, "");
@@ -145,7 +148,7 @@ impl WatchmanFileSystem {
                 &resolved,
                 QueryRequestCommon {
                     since: config.clock,
-                    expression: expr,
+                    expression: Some(Expr::Not(Box::new(Expr::Any(not_exprs)))),
                     sync_timeout: config.sync_timeout.into(),
                     ..Default::default()
                 },
@@ -156,52 +159,7 @@ impl WatchmanFileSystem {
 
         Ok(result)
     }
-}
 
-async fn crawl_progress(root: PathBuf, approx_file_count: u64) -> Result<()> {
-    let client = {
-        let _bar = ProgressBar::new_detached("connecting watchman", 0, "");
-
-        // If watchman just started (and we issued "watch-project" from
-        // query_files), this connect gets stuck indefinitely. Work around by
-        // timing out and retrying until we get through.
-        loop {
-            match tokio::time::timeout(Duration::from_secs(1), Connector::new().connect()).await {
-                Ok(client) => break client?,
-                Err(_) => {}
-            };
-
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-    };
-
-    let mut bar = None;
-
-    let req = DebugRootStatusRequest(
-        "debug-root-status",
-        CanonicalPath::canonicalize(root)?.into_path_buf(),
-    );
-
-    loop {
-        let response: DebugRootStatusResponse = client.generic_request(req.clone()).await?;
-
-        if let Some(RootStatus {
-            recrawl_info: Some(RecrawlInfo { stats: Some(stats) }),
-        }) = response.root_status
-        {
-            bar.get_or_insert_with(|| {
-                ProgressBar::new_detached("crawling", approx_file_count, "files (approx)")
-            })
-            .set_position(stats);
-        } else if bar.is_some() {
-            return Ok(());
-        }
-
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-impl FileSystem for WatchmanFileSystem {
     #[tracing::instrument(skip_all)]
     fn pending_changes(
         &self,
@@ -209,9 +167,8 @@ impl FileSystem for WatchmanFileSystem {
         ignore_matcher: DynMatcher,
         ignore_dirs: Vec<PathBuf>,
         include_ignored: bool,
-        last_write: SystemTime,
         config: &dyn Config,
-        io: &IO,
+        lgr: &TermLogger,
     ) -> Result<Box<dyn Iterator<Item = Result<PendingChange>>>> {
         let ts = &mut *self.inner.treestate.lock();
 
@@ -265,10 +222,13 @@ impl FileSystem for WatchmanFileSystem {
                         })?,
                 },
                 ignore_dirs,
-            ))?
+            ))
         };
 
+        // Make sure we always abort - even in case of error.
         progress_handle.abort();
+
+        let result = result?;
 
         tracing::debug!(
             target: "watchman_info",
@@ -279,7 +239,7 @@ impl FileSystem for WatchmanFileSystem {
         let should_warn = config.get_or_default("fsmonitor", "warn-fresh-instance")?;
         if result.is_fresh_instance && should_warn {
             let _ = warn_about_fresh_instance(
-                io,
+                lgr,
                 parse_watchman_pid(prev_clock.as_ref()),
                 parse_watchman_pid(Some(&result.clock)),
             );
@@ -351,7 +311,6 @@ impl FileSystem for WatchmanFileSystem {
 
         let detector = FileChangeDetector::new(
             self.inner.vfs.clone(),
-            last_write.try_into()?,
             manifests[0].clone(),
             self.inner.store.clone(),
             config.get_opt("workingcopy", "worker-count")?,
@@ -397,38 +356,130 @@ impl FileSystem for WatchmanFileSystem {
 
         Ok(Box::new(pending_changes.into_iter()))
     }
+}
+
+async fn crawl_progress(root: PathBuf, approx_file_count: u64) -> Result<()> {
+    let client = {
+        let _bar = ProgressBar::new_detached("connecting watchman", 0, "");
+
+        // If watchman just started (and we issued "watch-project" from
+        // query_files), this connect gets stuck indefinitely. Work around by
+        // timing out and retrying until we get through.
+        loop {
+            match tokio::time::timeout(Duration::from_secs(1), Connector::new().connect()).await {
+                Ok(client) => break client?,
+                Err(_) => {}
+            };
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    };
+
+    let mut bar = None;
+
+    let req = DebugRootStatusRequest(
+        "debug-root-status",
+        CanonicalPath::canonicalize(root)?.into_path_buf(),
+    );
+
+    loop {
+        let response: DebugRootStatusResponse = client.generic_request(req.clone()).await?;
+
+        if let Some(RootStatus {
+            recrawl_info: Some(RecrawlInfo { stats: Some(stats) }),
+        }) = response.root_status
+        {
+            bar.get_or_insert_with(|| {
+                ProgressBar::new_detached("crawling", approx_file_count, "files (approx)")
+            })
+            .set_position(stats);
+        } else if bar.is_some() {
+            return Ok(());
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+impl FileSystem for WatchmanFileSystem {
+    fn pending_changes(
+        &self,
+        matcher: DynMatcher,
+        ignore_matcher: DynMatcher,
+        ignore_dirs: Vec<PathBuf>,
+        include_ignored: bool,
+        config: &dyn Config,
+        lgr: &TermLogger,
+    ) -> Result<Box<dyn Iterator<Item = Result<PendingChange>>>> {
+        let result = self.pending_changes(
+            matcher.clone(),
+            ignore_matcher.clone(),
+            ignore_dirs.clone(),
+            include_ignored,
+            config,
+            lgr,
+        );
+
+        match result {
+            Ok(result) => Ok(result),
+            Err(err) if err.is::<watchman_client::Error>() => {
+                if !config.get_or("fsmonitor", "fallback-on-watchman-exception", || true)? {
+                    return Err(err);
+                }
+
+                // On watchman error, fall back to manual walk. This is important for errors such as:
+                //   - "watchman" binary not in PATH
+                //   - unsupported filesystem (e.g. NFS)
+                //
+                // A better approach might be an allowlist of errors to fall
+                // back on so we can fail hard in cases where watchman "should"
+                // work, but that is probably still an unacceptable UX in general.
+
+                tracing::debug!(target: "watchman_info", watchmanfallback=1);
+                tracing::warn!(?err, "watchman error - falling back to slow crawl");
+                self.inner.pending_changes(
+                    matcher,
+                    ignore_matcher,
+                    ignore_dirs,
+                    include_ignored,
+                    config,
+                    lgr,
+                )
+            }
+            Err(err) => Err(err),
+        }
+    }
 
     fn sparse_matcher(
         &self,
-        manifests: &[Arc<parking_lot::RwLock<manifest_tree::TreeManifest>>],
+        manifests: &[Arc<TreeManifest>],
         dot_dir: &'static str,
     ) -> Result<Option<DynMatcher>> {
         self.inner.sparse_matcher(manifests, dot_dir)
     }
 }
 
-fn warn_about_fresh_instance(io: &IO, old_pid: Option<u32>, new_pid: Option<u32>) -> Result<()> {
-    let mut output = io.error();
+fn warn_about_fresh_instance(
+    lgr: &TermLogger,
+    old_pid: Option<u32>,
+    new_pid: Option<u32>,
+) -> Result<()> {
     match (old_pid, new_pid) {
         (Some(old_pid), Some(new_pid)) if old_pid != new_pid => {
-            writeln!(
-                &mut output,
+            lgr.warn(format!(
                 "warning: watchman has recently restarted (old pid {}, new pid {}) - operation will be slower than usual",
                 old_pid, new_pid
-            )?;
+            ));
         }
         (None, Some(new_pid)) => {
-            writeln!(
-                &mut output,
+            lgr.warn(format!(
                 "warning: watchman has recently started (pid {}) - operation will be slower than usual",
                 new_pid
-            )?;
+            ));
         }
         _ => {
-            writeln!(
-                &mut output,
-                "warning: watchman failed to catch up with file change events and requires a full scan - operation will be slower than usual"
-            )?;
+            lgr.warn(
+                "warning: watchman failed to catch up with file change events and requires a full scan - operation will be slower than usual");
         }
     }
 
@@ -525,6 +576,7 @@ pub(crate) fn detect_changes(
             ts,
             Arc::new(AlwaysMatcher::new()),
             StateFlags::EXIST_NEXT,
+            StateFlags::empty(),
             StateFlags::NEED_CHECK,
             |path, _state| {
                 if !wm_need_check.contains_key(&path) {
@@ -539,6 +591,7 @@ pub(crate) fn detect_changes(
             ts,
             Arc::new(AlwaysMatcher::new()),
             StateFlags::NEED_CHECK,
+            StateFlags::empty(),
             StateFlags::EXIST_NEXT | StateFlags::EXIST_P1 | StateFlags::EXIST_P2,
             |path, _state| {
                 if !wm_need_check.contains_key(&path) {

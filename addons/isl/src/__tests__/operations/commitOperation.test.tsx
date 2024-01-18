@@ -54,8 +54,8 @@ describe('CommitOperation', () => {
     fireEvent.click(quickCommitButton as Element);
   };
 
-  const clickCheckboxForFile = async (inside: HTMLElement, fileName: string) => {
-    await act(async () => {
+  const clickCheckboxForFile = (inside: HTMLElement, fileName: string) => {
+    act(() => {
       const checkbox = within(within(inside).getByTestId(`changed-file-${fileName}`)).getByTestId(
         'file-selection-checkbox',
       );
@@ -70,7 +70,12 @@ describe('CommitOperation', () => {
     expectMessageSentToServer({
       type: 'runOperation',
       operation: {
-        args: ['commit', '--addremove', '--message', 'Temporary Commit'],
+        args: [
+          'commit',
+          '--addremove',
+          '--message',
+          `Temporary Commit at ${new Date().toLocaleString()}`,
+        ],
         id: expect.anything(),
         runner: CommandRunner.Sapling,
         trackEventName: 'CommitOperation',
@@ -78,9 +83,9 @@ describe('CommitOperation', () => {
     });
   });
 
-  it('runs commit with subset of files selected', async () => {
+  it('runs commit with subset of files selected', () => {
     const commitTree = screen.getByTestId('commit-tree-root');
-    await clickCheckboxForFile(commitTree, 'file2.txt');
+    clickCheckboxForFile(commitTree, 'file2.txt');
 
     clickQuickCommit();
 
@@ -91,7 +96,7 @@ describe('CommitOperation', () => {
           'commit',
           '--addremove',
           '--message',
-          'Temporary Commit',
+          expect.stringContaining(`Temporary Commit at`),
           {type: 'repo-relative-file', path: 'file1.txt'},
           {type: 'repo-relative-file', path: 'file3.txt'},
         ],
@@ -102,9 +107,9 @@ describe('CommitOperation', () => {
     });
   });
 
-  it('changed files are shown in commit info view', async () => {
+  it('changed files are shown in commit info view', () => {
     const commitTree = screen.getByTestId('commit-tree-root');
-    await clickCheckboxForFile(commitTree, 'file2.txt');
+    clickCheckboxForFile(commitTree, 'file2.txt');
 
     const quickInput = screen.getByTestId('quick-commit-title');
 

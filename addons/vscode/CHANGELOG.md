@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.1.34
+
+### Dec 14 2023
+
+- Multiple improvements to Interactive Split
+  - Handles binary and copied/renamed files
+  - Shows file flag changes, like making a file executable
+  - Show file status (added/removed) in file header
+  - Long filenames wrap to multiple lines and don't break up the left/right arrows
+  - Show how a file was renamed or copied
+- Don't run status refreshing commands while an operation is running, to fix lots of random files being shown.
+- Fix conflicts sometimes not being shown when they should be
+
+## 0.1.33
+
+### Dec 11 2023
+
+- Add UI zoom setting
+- Confirm when uncommitting
+- Add date to temporary commit titles
+- Increase number of uncommitted files shown at once
+- Previewing system was rewritten with several improvements, such as commits not appearing duplicated during a rebase
+
+## 0.1.32
+
+### Nov 30 2023
+
+- Added "Combine" button when selecting multiple adjacent commits in a stack, to fold them together.
+  - The combine is previewed before running, so you can adjust the combined commit message.
+- Added Bulk actions dropdown to the top bar to add actions that act on all commits at once
+  - "rebase all draft commits" button to bulk rebase onto suggested locations
+  - "clean up all" button to hide all closed commits
+  - "select all" to select all draft commits, so you can take further actions in the sidebar
+  - Added shortcut to select all commits
+- When multiple commits are selected, allow rebasing them all from the selection sidebar
+- Commit titles are no longer directly focusable, so the UI doesn't show conflicting highlights. Buttons have better Aria labels to compensate.
+- Use more consistent focus colors
+- Fix "Temporary Commit" appearing in commit title by default
+- [#781](https://github.com/facebook/sapling/pull/781): Increase width of split column on large screens
+- [#782](https://github.com/facebook/sapling/pull/782): Reduces number of PRs fetched from GitHub to improve performance
+
+## 0.1.31
+
+### Nov 16 2023
+
+- Added more keyboard shortcuts and a list of shortcuts openable via Shift-?
+- Add config for amend restacking. This now defaults to "Always" instead of "No Conflict"
+- Allow drag & drop rebase when uncommitted changes have been optimistically removed
+- Fix empty titles eating into the summary
+- Add explicit ">" button next to commits to open them in the sidebar
+- Remove duplicates from values in typeaheads
+- Simplify "Hide" context menu item for non-stack commits
+- Rewrote edited messages implementation, fixing some weird behaviors
+
 ## 0.1.30
 
 ### Nov 8 2023

@@ -146,4 +146,4 @@
   $ git rev-list --objects --all | git cat-file --batch-check='%(objectname) %(objecttype) %(rest)' | sort > $TESTTMP/new_object_list
 
 # Ensure that there are no differences between the set of objects by diffing both object list files
-  $ diff -w $TESTTMP/new_object_list $TESTTMP/object_list  
+  $ diff -w $TESTTMP/new_object_list $TESTTMP/object_list

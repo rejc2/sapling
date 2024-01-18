@@ -5,7 +5,6 @@
  * GNU General Public License version 2.
  */
 
-use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,13 +15,12 @@ use configmodel::convert::ByteCount;
 use configmodel::Config;
 use configmodel::ConfigExt;
 use fs_err as fs;
-use hgstore::strip_metadata;
+use hgstore::strip_hg_file_metadata;
 use hgtime::HgTime;
 use minibytes::Bytes;
 use regex::Regex;
 use tracing::info_span;
 use types::Key;
-use types::RepoPathBuf;
 
 use crate::datastore::ContentDataStore;
 use crate::datastore::ContentMetadata;
@@ -127,25 +125,17 @@ impl ContentStore {
 
 impl LegacyStore for ContentStore {
     /// Some blobs may contain copy-from metadata, let's strip it. For more details about the
-    /// copy-from metadata, see `strip_metadata`.
+    /// copy-from metadata, see `strip_hg_file_metadata`.
     ///
     /// XXX: This should only be used on `ContentStore` that are storing actual
     /// file content, tree stores should use the `get` method instead.
     fn get_file_content(&self, key: &Key) -> Result<Option<Bytes>> {
         if let StoreResult::Found(vec) = self.get(StoreKey::hgid(key.clone()))? {
             let bytes = vec.into();
-            let (bytes, _) = strip_metadata(&bytes)?;
+            let (bytes, _) = strip_hg_file_metadata(&bytes)?;
             Ok(Some(bytes))
         } else {
             Ok(None)
-        }
-    }
-
-    fn get_logged_fetches(&self) -> HashSet<RepoPathBuf> {
-        if let Some(remote_store) = &self.remote_store {
-            remote_store.take_seen()
-        } else {
-            HashSet::new()
         }
     }
 

@@ -14,10 +14,6 @@ use std::io;
 use std::io::BufRead;
 use std::io::BufReader;
 
-use futures::executor;
-use futures::future::BoxFuture;
-use futures::future::FutureExt;
-use futures::Future;
 use once_cell::sync::Lazy;
 use pathmatcher::DirectoryMatch;
 use pathmatcher::Matcher as MatcherTrait;
@@ -27,7 +23,23 @@ use pathmatcher::UnionMatcher;
 use regex::Regex;
 use types::RepoPath;
 
-#[derive(Default, Debug)]
+#[cfg(feature = "async")]
+mod extra_use {
+    pub(crate) use futures::executor;
+    pub(crate) use futures::future::BoxFuture;
+    pub(crate) use futures::future::FutureExt;
+    pub(crate) use futures::Future;
+}
+
+#[cfg(not(feature = "async"))]
+mod extra_use {
+    pub(crate) use syncify::syncify;
+    pub(crate) type BoxFuture<'a, T> = T;
+}
+
+use extra_use::*;
+
+#[derive(Default, Debug, Clone)]
 pub struct Profile {
     // Where this profile came from (typically a file path).
     source: String,
@@ -58,11 +70,12 @@ pub enum Pattern {
     Exclude(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ProfileEntry {
     // Pattern plus additional source for this rule (e.g. "hgrc.dynamic").
     Pattern(Pattern, Option<String>),
-    Profile(String),
+    ProfileName(String),
+    Profile(Profile),
 }
 
 #[derive(PartialEq)]
@@ -110,10 +123,25 @@ pub enum Error {
     GlobsetError(#[from] globset::Error),
 }
 
+#[cfg_attr(not(feature="async"), syncify([<B: ____>] => [], [B] => [anyhow::Result<Option<Vec<u8>>>], [Send + Sync] => []))]
 impl Root {
     pub fn from_bytes(data: impl AsRef<[u8]>, source: String) -> Result<Self, io::Error> {
         Ok(Self {
             prof: Profile::from_bytes(data, source)?,
+            version_override: None,
+            skip_catch_all: false,
+        })
+    }
+
+    /// Load a single top-level-profile as if you had a root profile that simply %include'd it.
+    /// This allows you to create an adhoc v2 profile without needing a root config.
+    pub fn single_profile(data: impl AsRef<[u8]>, source: String) -> Result<Self, io::Error> {
+        Ok(Self {
+            prof: Profile {
+                source: "dummy root".to_string(),
+                entries: vec![ProfileEntry::Profile(Profile::from_bytes(data, source)?)],
+                ..Default::default()
+            },
             version_override: None,
             skip_catch_all: false,
         })
@@ -168,42 +196,44 @@ impl Root {
 
         let mut only_v1 = true;
         for entry in self.prof.entries.iter() {
-            match entry {
-                ProfileEntry::Pattern(p, src) => push_rule((
-                    p.clone(),
-                    join_source(self.prof.source.clone(), src.as_deref()),
-                )),
-                ProfileEntry::Profile(child_path) => {
-                    let mut child = match fetch(child_path.clone()).await? {
-                        Some(data) => Profile::from_bytes(data, child_path.clone())?,
-                        None => continue,
-                    };
+            let mut child = match entry {
+                ProfileEntry::Pattern(p, src) => {
+                    push_rule((
+                        p.clone(),
+                        join_source(self.prof.source.clone(), src.as_deref()),
+                    ));
+                    continue;
+                }
+                ProfileEntry::ProfileName(child_path) => match fetch(child_path.clone()).await? {
+                    Some(data) => Profile::from_bytes(data, child_path.clone())?,
+                    None => continue,
+                },
+                ProfileEntry::Profile(prof) => prof.clone(),
+            };
 
-                    if let Some(version_override) = &self.version_override {
-                        child.version = Some(version_override.clone());
-                    }
+            if let Some(version_override) = &self.version_override {
+                child.version = Some(version_override.clone());
+            }
 
-                    let child_rules: VecDeque<(Pattern, String)> = child
-                        .rules(&mut fetch)
-                        .await?
-                        .into_iter()
-                        .map(|(p, s)| (p, format!("{} -> {}", self.prof.source, s)))
-                        .collect();
+            let child_rules: VecDeque<(Pattern, String)> = child
+                .rules(&mut fetch)
+                .await?
+                .into_iter()
+                .map(|(p, s)| (p, format!("{} -> {}", self.prof.source, s)))
+                .collect();
 
-                    if child.is_v2() {
-                        only_v1 = false;
+            if child.is_v2() {
+                only_v1 = false;
 
-                        let (matcher_rules, origins) = prepare_rules(child_rules)?;
-                        matchers.push(TreeMatcher::from_rules(
-                            matcher_rules.iter(),
-                            self.prof.case_sensitive,
-                        )?);
-                        rule_origins.push(origins);
-                    } else {
-                        for rule in child_rules {
-                            push_rule(rule);
-                        }
-                    }
+                let (matcher_rules, origins) = prepare_rules(child_rules)?;
+                matchers.push(TreeMatcher::from_rules(
+                    matcher_rules.iter(),
+                    self.prof.case_sensitive,
+                )?);
+                rule_origins.push(origins);
+            } else {
+                for rule in child_rules {
+                    push_rule(rule);
                 }
             }
         }
@@ -238,15 +268,13 @@ impl Root {
         // TODO(cuev): Add a warning when sparse profiles contain a %include.
         // Filters don't support that.
         let matcher =
-            executor::block_on(
-                async move { self.matcher(|_| async move { Ok(Some(vec![])) }).await },
-            )
-            .unwrap();
+            executor::block_on(self.matcher(|_| async move { Ok(Some(vec![])) })).unwrap();
         let repo_path = RepoPath::from_str(path).unwrap();
         !matcher.matches(repo_path).unwrap_or(true)
     }
 }
 
+#[cfg_attr(not(feature="async"), syncify([B: ____>] => [>], [B] => [anyhow::Result<Option<Vec<u8>>>], [Send + Sync] => []))]
 impl Profile {
     fn from_bytes(data: impl AsRef<[u8]>, source: String) -> Result<Self, io::Error> {
         let mut prof = Profile {
@@ -297,7 +325,7 @@ impl Profile {
                 }
 
                 prof.entries
-                    .push(ProfileEntry::Profile(p.trim().to_string()));
+                    .push(ProfileEntry::ProfileName(p.trim().to_string()));
             } else if let Some(section_start) = SectionType::from_str(trimmed) {
                 section_type = section_start;
                 current_metadata_val = None;
@@ -390,7 +418,7 @@ impl Profile {
                         ProfileEntry::Pattern(p, psrc) => {
                             rules.push((p.clone(), join_source(source.clone(), psrc.as_deref())))
                         }
-                        ProfileEntry::Profile(child_path) => {
+                        ProfileEntry::ProfileName(child_path) => {
                             let entry = seen.entry(child_path.clone());
                             let data = match entry {
                                 Entry::Occupied(e) => match e.into_mut() {
@@ -408,12 +436,15 @@ impl Profile {
                                 }
                             };
 
-                            let mut child = Profile::from_bytes(data, child_path.clone())?;
-                            rules_inner(&mut child, fetch, rules, Some(&source), seen).await?;
+                            let child = Profile::from_bytes(data, child_path.clone())?;
+                            rules_inner(&child, fetch, rules, Some(&source), seen).await?;
 
                             if let Some((_, in_progress)) = seen.get_mut(child_path) {
                                 *in_progress = false;
                             }
+                        }
+                        ProfileEntry::Profile(child) => {
+                            rules_inner(child, fetch, rules, Some(&source), seen).await?;
                         }
                     }
                 }
@@ -601,6 +632,7 @@ fn convert_regex_to_glob(pat: &str) -> Option<Vec<String>> {
 }
 
 #[cfg(test)]
+#[cfg_attr(not(feature = "async"), syncify)]
 mod tests {
     use anyhow::anyhow;
 
@@ -613,7 +645,8 @@ mod tests {
             match entry {
                 ProfileEntry::Pattern(Pattern::Include(p), _) => inc.push(p.as_ref()),
                 ProfileEntry::Pattern(Pattern::Exclude(p), _) => exc.push(p.as_ref()),
-                ProfileEntry::Profile(p) => profs.push(p.as_ref()),
+                ProfileEntry::ProfileName(p) => profs.push(p.as_ref()),
+                ProfileEntry::Profile(p) => profs.push(p.source.as_ref()),
             }
         }
         (inc, exc, profs)
@@ -1173,5 +1206,32 @@ path:foo
             .await
             .unwrap();
         assert!(!matcher.matches("foo".try_into().unwrap()).unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_single_profile() {
+        let single = b"
+[metadata]
+version = 2
+
+[exclude]
+foo/bar
+
+[include]
+foo
+";
+
+        // Sanity check that normal loading of this profile does not get v2 semantics.
+        let not_single = Root::from_bytes(single, "base".to_string()).unwrap();
+        let matcher = not_single
+            .matcher(|_| async { unreachable!() })
+            .await
+            .unwrap();
+        assert!(!matcher.matches("foo/bar".try_into().unwrap()).unwrap());
+
+        // Using single_profile gets v2 semantics.
+        let single = Root::single_profile(single, "base".to_string()).unwrap();
+        let matcher = single.matcher(|_| async { unreachable!() }).await.unwrap();
+        assert!(matcher.matches("foo/bar".try_into().unwrap()).unwrap());
     }
 }

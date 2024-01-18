@@ -9,16 +9,12 @@
 
 #![allow(non_camel_case_types)]
 
-use std::fs::read_dir;
-use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::format_err;
 use anyhow::Error;
-use async_runtime::block_on;
-use async_runtime::stream_to_iter as block_on_stream;
 use configmodel::Config;
 use configmodel::ConfigExt;
 use cpython::*;
@@ -29,11 +25,9 @@ use cpython_ext::PyNone;
 use cpython_ext::PyPath;
 use cpython_ext::PyPathBuf;
 use cpython_ext::ResultPyErrExt;
-use io::IO;
 use parking_lot::RwLock;
 use pyconfigloader::config;
 use revisionstore::repack;
-use revisionstore::scmstore::file_to_async_key_stream;
 use revisionstore::scmstore::FetchMode;
 use revisionstore::scmstore::FileAttributes;
 use revisionstore::scmstore::FileStore;
@@ -276,39 +270,6 @@ py_class!(class datapack |py| {
     }
 });
 
-/// Scan the filesystem for files with `extensions`, and compute their size.
-fn compute_store_size<P: AsRef<Path>>(
-    storepath: P,
-    extensions: Vec<&str>,
-) -> Result<(usize, usize)> {
-    let dirents = read_dir(storepath)?;
-
-    assert_eq!(extensions.len(), 2);
-
-    let mut count = 0;
-    let mut size = 0;
-
-    for dirent in dirents {
-        let dirent = dirent?;
-        let path = dirent.path();
-
-        if let Some(file_ext) = path.extension() {
-            for extension in &extensions {
-                if extension == &file_ext {
-                    size += dirent.metadata()?.len();
-                    count += 1;
-                    break;
-                }
-            }
-        }
-    }
-
-    // We did count the indexes too, but we do not want them counted.
-    count /= 2;
-
-    Ok((size as usize, count))
-}
-
 py_class!(class datapackstore |py| {
     data store: Box<DataPackStore>;
     data path: PathBuf;
@@ -346,18 +307,6 @@ py_class!(class datapackstore |py| {
     def markforrefresh(&self) -> PyResult<PyObject> {
         self.store(py).force_rescan();
         Ok(Python::None(py))
-    }
-
-    def getmetrics(&self) -> PyResult<PyDict> {
-        let (size, count) = match compute_store_size(self.path(py), vec!["datapack", "dataidx"]) {
-            Ok((size, count)) => (size, count),
-            Err(_) => (0, 0),
-        };
-
-        let res = PyDict::new(py);
-        res.set_item(py, "numpacks", count)?;
-        res.set_item(py, "totalpacksize", size)?;
-        Ok(res)
     }
 });
 
@@ -427,18 +376,6 @@ py_class!(class historypackstore |py| {
     def markforrefresh(&self) -> PyResult<PyObject> {
         self.store(py).force_rescan();
         Ok(Python::None(py))
-    }
-
-    def getmetrics(&self) -> PyResult<PyDict> {
-        let (size, count) = match compute_store_size(self.path(py), vec!["histpack", "histidx"]) {
-            Ok((size, count)) => (size, count),
-            Err(_) => (0, 0),
-        };
-
-        let res = PyDict::new(py);
-        res.set_item(py, "numpacks", count)?;
-        res.set_item(py, "totalpacksize", size)?;
-        Ok(res)
     }
 });
 
@@ -1046,11 +983,6 @@ py_class!(pub class contentstore |py| {
         store.metadata_py(py, name, node)
     }
 
-    def getloggedfetches(&self) -> PyResult<Vec<PyPathBuf>> {
-        let store = self.store(py);
-        Ok(store.get_logged_fetches().into_iter().map(|p| p.into()).collect::<Vec<PyPathBuf>>())
-    }
-
     def getsharedmutable(&self) -> PyResult<mutabledeltastore> {
         let store = self.store(py);
         mutabledeltastore::create_instance(py, store.get_shared_mutable())
@@ -1241,26 +1173,6 @@ py_class!(pub class filescmstore |py| {
         contentstore::create_instance(py, self.contentstore(py).clone())
     }
 
-    def test_fetch(&self, path: PyPathBuf, local: bool) -> PyResult<PyNone> {
-        let fetch_mode = if local {  FetchMode::LocalOnly } else { FetchMode::AllowRemote };
-        let keys: Vec<_> = block_on_stream(block_on(file_to_async_key_stream(path.to_path_buf())).map_pyerr(py)?).collect();
-        let fetch_result = self.store(py).fetch(keys.into_iter(), FileAttributes { content: true, aux_data: true }, fetch_mode);
-
-        let io = IO::main().map_pyerr(py)?;
-        let mut stdout = io.output();
-
-        let (found, missing, _errors) = fetch_result.consume();
-
-        for (_, file) in found.into_iter() {
-            write!(stdout, "Successfully fetched file: {:#?}\n", file).map_pyerr(py)?;
-        }
-        for (key, _) in missing.into_iter() {
-            write!(stdout, "Failed to fetch file: {:#?}\n", key).map_pyerr(py)?;
-        }
-
-        Ok(PyNone)
-    }
-
     def fetch_contentsha256(&self, keys: PyList) -> PyResult<PyList> {
         let keys = keys
             .iter(py)
@@ -1353,11 +1265,6 @@ py_class!(pub class filescmstore |py| {
     def metadata(&self, name: &PyPath, node: &PyBytes) -> PyResult<PyDict> {
         let store = self.store(py);
         store.metadata_py(py, name, node)
-    }
-
-    def getloggedfetches(&self) -> PyResult<Vec<PyPathBuf>> {
-        let store = self.store(py);
-        Ok(store.get_logged_fetches().into_iter().map(|p| p.into()).collect::<Vec<PyPathBuf>>())
     }
 
     def getmetrics(&self) -> PyResult<Vec<PyTuple>> {
@@ -1494,25 +1401,6 @@ py_class!(pub class treescmstore |py| {
         contentstore::create_instance(py, self.contentstore(py).clone())
     }
 
-    def test_fetch(&self, path: PyPathBuf, local: bool) -> PyResult<PyNone> {
-        let fetch_mode = if local {  FetchMode::LocalOnly } else { FetchMode::AllowRemote };
-        let keys: Vec<_> = block_on_stream(block_on(file_to_async_key_stream(path.to_path_buf())).map_pyerr(py)?).collect();
-        let fetch_result = self.store(py).fetch_batch(keys.into_iter(), fetch_mode);
-
-        let io = IO::main().map_pyerr(py)?;
-        let mut stdout = io.output();
-
-        let (found, missing, _errors) = fetch_result.consume();
-        for complete in found.into_iter() {
-            write!(stdout, "Successfully fetched tree: {:#?}\n", complete).map_pyerr(py)?;
-        }
-        for incomplete in missing.into_iter() {
-            write!(stdout, "Failed to fetch tree: {:#?}\n", incomplete).map_pyerr(py)?;
-        }
-
-        Ok(PyNone)
-    }
-
     def get(&self, name: PyPathBuf, node: &PyBytes) -> PyResult<PyBytes> {
         let store = self.store(py);
         store.get_py(py, &name, node)
@@ -1571,12 +1459,6 @@ py_class!(pub class treescmstore |py| {
     def metadata(&self, name: &PyPath, node: &PyBytes) -> PyResult<PyDict> {
         let store = self.store(py);
         store.metadata_py(py, name, node)
-    }
-
-    def getloggedfetches(&self) -> PyResult<Vec<PyPathBuf>> {
-        let _ = py;
-        // TODO(meyer): Make sure we're only supposed to be tracking fetches for files, not trees.
-        Ok(Vec::new())
     }
 
     def getsharedmutable(&self) -> PyResult<mutabledeltastore> {

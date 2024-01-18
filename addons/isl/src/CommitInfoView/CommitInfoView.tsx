@@ -8,9 +8,8 @@
 import type {CommitInfo, DiffId} from '../types';
 import type {CommitInfoMode, EditedMessageUnlessOptimistic} from './CommitInfoState';
 import type {CommitMessageFields, FieldConfig, FieldsBeingEdited} from './types';
-import type {Dispatch, SetStateAction} from 'react';
 
-import {Banner} from '../Banner';
+import {Banner, BannerKind} from '../Banner';
 import {ChangedFilesWithFetching} from '../ChangedFilesWithFetching';
 import serverAPI from '../ClientToServerAPI';
 import {Commit} from '../Commit';
@@ -22,20 +21,23 @@ import {OperationDisabledButton} from '../OperationDisabledButton';
 import {SubmitUpdateMessageInput} from '../SubmitUpdateMessageInput';
 import {Subtle} from '../Subtle';
 import {latestSuccessorUnlessExplicitlyObsolete} from '../SuccessionTracker';
+import {SuggestedRebaseButton} from '../SuggestedRebase';
 import {Tooltip} from '../Tooltip';
 import {UncommittedChanges} from '../UncommittedChanges';
 import {tracker} from '../analytics';
 import {
   allDiffSummaries,
   codeReviewProvider,
-  latestCommitMessage,
+  latestCommitMessageFields,
 } from '../codeReview/CodeReviewInfo';
 import {submitAsDraft, SubmitAsDraftCheckbox} from '../codeReview/DraftCheckbox';
+import {FoldButton, useRunFoldPreview} from '../fold';
 import {t, T} from '../i18n';
 import {messageSyncingEnabledState, updateRemoteMessage} from '../messageSyncing';
 import {AmendMessageOperation} from '../operations/AmendMessageOperation';
 import {getAmendOperation} from '../operations/AmendOperation';
 import {getCommitOperation} from '../operations/CommitOperation';
+import {FOLD_COMMIT_PREVIEW_HASH_PREFIX} from '../operations/FoldOperation';
 import {GhStackSubmitOperation} from '../operations/GhStackSubmitOperation';
 import {PrSubmitOperation} from '../operations/PrSubmitOperation';
 import {SetConfigOperation} from '../operations/SetConfigOperation';
@@ -43,16 +45,17 @@ import {useUncommittedSelection} from '../partialSelection';
 import platform from '../platform';
 import {CommitPreview, uncommittedChangesWithPreviews} from '../previews';
 import {selectedCommits} from '../selection';
-import {latestHeadCommit, repositoryInfo, useRunOperation} from '../serverAPIState';
+import {commitByHash, latestHeadCommit, repositoryInfo, useRunOperation} from '../serverAPIState';
 import {succeedableRevset} from '../types';
 import {useModal} from '../useModal';
 import {assert, firstLine, firstOfIterable} from '../utils';
 import {CommitInfoField} from './CommitInfoField';
 import {
+  forceNextCommitToEditAllFields,
+  unsavedFieldsBeingEdited,
   diffUpdateMessagesState,
   commitInfoViewCurrentCommits,
   assertNonOptimistic,
-  commitFieldsBeingEdited,
   commitMode,
   editedCommitMessages,
   hasUnsavedEditedCommitMessage,
@@ -61,10 +64,11 @@ import {
   commitMessageFieldsToString,
   commitMessageFieldsSchema,
   parseCommitMessageFields,
-  allFieldsBeingEdited,
   findFieldsBeingEdited,
-  noFieldsBeingEdited,
   findEditedDiffNumber,
+  applyEditedFields,
+  editedMessageSubset,
+  removeNoopEdits,
 } from './CommitMessageFields';
 import {CommitTitleByline, getTopmostEditedField, Section, SmallCapsTitle} from './utils';
 import {
@@ -138,9 +142,17 @@ export function MultiCommitInfo({selectedCommits}: {selectedCommits: Array<Commi
         ))}
       </div>
       <div className="commit-info-actions-bar">
+        <div className="commit-info-actions-bar-row">
+          <SuggestedRebaseButton
+            sources={selectedCommits.map(commit => succeedableRevset(commit.hash))}
+          />
+        </div>
         {commitsWithDiffs.length === 0 ? null : (
           <SubmitUpdateMessageInput commits={selectedCommits} />
         )}
+        <div className="commit-info-actions-bar-row">
+          <FoldButton />
+        </div>
         <div className="commit-info-actions-bar-left">
           <SubmitAsDraftCheckbox commitsToBeSubmit={selectedCommits} />
         </div>
@@ -197,52 +209,66 @@ export function CommitInfoDetails({commit}: {commit: CommitInfo}) {
   const uncommittedChanges = useRecoilValue(uncommittedChangesWithPreviews);
   const schema = useRecoilValue(commitMessageFieldsSchema);
 
+  const isFoldPreview = commit.hash.startsWith(FOLD_COMMIT_PREVIEW_HASH_PREFIX);
+  const isOptimistic =
+    useRecoilValue(commitByHash(commit.hash)) == null && !isCommitMode && !isFoldPreview;
+
   const isPublic = mode === 'amend' && commit.phase === 'public';
 
-  const [fieldsBeingEdited, setFieldsBeingEdited] =
-    useRecoilState<FieldsBeingEdited>(commitFieldsBeingEdited);
+  const fieldsBeingEdited = useRecoilValue(unsavedFieldsBeingEdited(hashOrHead));
+
+  useDebounceFetchDiffDetails(commit.diffId);
+
+  const [forceEditAll, setForceEditAll] = useRecoilState(forceNextCommitToEditAllFields);
+
+  useEffect(() => {
+    if (editedMessage.type === 'optimistic') {
+      // invariant: if mode === 'commit', editedMessage.type !== 'optimistic'.
+      assert(!isCommitMode, 'Should not be in commit mode while editedMessage.type is optimistic');
+      return;
+    }
+    if (isCommitMode && commit.isHead) {
+      // no use resetting edited state for commit mode, where it's always being edited.
+      return;
+    }
+
+    if (!forceEditAll) {
+      // If the selected commit is changed, the fields being edited should slim down to only fields
+      // that are meaningfully edited on the new commit.
+      if (Object.keys(editedMessage.fields).length > 0) {
+        const trimmedEdits = removeNoopEdits(schema, parsedFields, editedMessage.fields);
+        if (Object.keys(trimmedEdits).length !== Object.keys(editedMessage.fields).length) {
+          setEditedCommitMessage({fields: trimmedEdits});
+        }
+      }
+    }
+    setForceEditAll(false);
+
+    // We only want to recompute this when the commit/mode changes.
+    // we expect the edited message to change constantly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commit.hash, isCommitMode]);
+
+  const parsedFields = useRecoilValue(latestCommitMessageFields(hashOrHead));
 
   const startEditingField = (field: string) => {
     assert(
       editedMessage.type !== 'optimistic',
       'Cannot start editing fields when viewing optimistic commit',
     );
-    setFieldsBeingEdited({...fieldsBeingEdited, [field]: true});
-  };
-
-  useDebounceFetchDiffDetails(commit.diffId);
-
-  const [latestTitle, latestMessage] = useRecoilValue(latestCommitMessage(commit.hash));
-
-  const parsedFields = parseCommitMessageFields(schema, latestTitle, latestMessage);
-
-  useEffect(() => {
-    if (editedMessage.type === 'optimistic') {
-      // invariant: if mode === 'commit', editedMessage.type !== 'optimistic'.
-      assert(!isCommitMode, 'Should not be in commit mode while editedMessage.type is optimistic');
-
-      // no fields are edited during optimistic state
-      setFieldsBeingEdited(noFieldsBeingEdited(schema));
-      return;
-    }
-    if (fieldsBeingEdited.forceWhileOnHead && commit.isHead) {
-      // `forceWhileOnHead` is used to allow fields to be marked as edited externally,
-      // even though they would get reset here after rendering.
-      // This will get reset when the user cancels or changes to a different commit.
-      return;
-    }
-    // If the selected commit is changed, the fields being edited should reset;
-    // except for fields that are being edited on this commit, too
-    setFieldsBeingEdited(
-      isCommitMode
-        ? allFieldsBeingEdited(schema)
-        : findFieldsBeingEdited(schema, editedMessage.fields, parsedFields),
+    // Set the latest message value for the edited message of this field.
+    // fieldsBeingEdited is derived from this.
+    setEditedCommitMessage(last =>
+      last.type === 'optimistic'
+        ? last
+        : {
+            fields: {
+              ...last.fields,
+              [field]: parsedFields[field],
+            },
+          },
     );
-
-    // We only want to recompute this when the commit/mode changes.
-    // we expect the edited message to change constantly.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [commit.hash, isCommitMode]);
+  };
 
   const topmostEditedField = getTopmostEditedField(schema, fieldsBeingEdited);
 
@@ -282,21 +308,29 @@ export function CommitInfoDetails({commit}: {commit: CommitInfo}) {
                     },
               );
 
+            let editedFieldValue = editedMessage.fields?.[field.key];
+            if (editedFieldValue == null && mode === 'commit' && commit.isHead) {
+              // If the field is supposed to edited but not in the editedMessage,
+              // it means we're loading from a blank slate. This is when we can load from the commit template.
+              editedFieldValue = parsedFields[field.key];
+            }
+
             return (
               <CommitInfoField
                 key={field.key}
                 field={field}
                 content={parsedFields[field.key as keyof CommitMessageFields]}
                 autofocus={topmostEditedField === field.key}
-                readonly={editedMessage.type === 'optimistic' || isPublic}
+                readonly={isOptimistic || isPublic}
                 isBeingEdited={fieldsBeingEdited[field.key]}
                 startEditingField={() => startEditingField(field.key)}
-                editedField={editedMessage.fields?.[field.key]}
+                editedField={editedFieldValue}
                 setEditedField={setField}
                 extra={
                   mode !== 'commit' && field.key === 'Title' ? (
                     <>
                       <CommitTitleByline commit={commit} />
+                      {isFoldPreview && <FoldPreviewBanner />}
                       <ShowingRemoteMessageBanner
                         commit={commit}
                         latestFields={parsedFields}
@@ -354,14 +388,18 @@ export function CommitInfoDetails({commit}: {commit: CommitInfo}) {
       </div>
       {!isPublic && (
         <div className="commit-info-view-toolbar-bottom">
-          <ActionsBar
-            commit={commit}
-            editedMessage={editedMessage}
-            fieldsBeingEdited={fieldsBeingEdited}
-            setFieldsBeingEdited={setFieldsBeingEdited}
-            isCommitMode={isCommitMode}
-            setMode={setMode}
-          />
+          {isFoldPreview ? (
+            <FoldPreviewActions />
+          ) : (
+            <ActionsBar
+              commit={commit}
+              latestMessage={parsedFields}
+              editedMessage={editedMessage}
+              fieldsBeingEdited={fieldsBeingEdited}
+              isCommitMode={isCommitMode}
+              setMode={setMode}
+            />
+          )}
         </div>
       )}
     </div>
@@ -387,6 +425,20 @@ function areTextFieldsUnchanged(
   return true;
 }
 
+function FoldPreviewBanner() {
+  return (
+    <Banner
+      kind={BannerKind.green}
+      icon={<Icon icon="info" />}
+      tooltip={t(
+        'This is the commit message after combining these commits with the fold command. ' +
+          'You can edit this message before confirming and running fold.',
+      )}>
+      <T>Previewing result of combined commits</T>
+    </Banner>
+  );
+}
+
 function ShowingRemoteMessageBanner({
   commit,
   latestFields,
@@ -404,12 +456,12 @@ function ShowingRemoteMessageBanner({
   const loadLocalMessage = useRecoilCallback(({set}) => () => {
     const originalFields = parseCommitMessageFields(schema, commit.title, commit.description);
     const beingEdited = findFieldsBeingEdited(schema, originalFields, latestFields);
-    set(commitFieldsBeingEdited, beingEdited);
+
     set(editedCommitMessages(editedCommitMessageKey), previous => {
       if (previous.type === 'optimistic') {
         return previous;
       }
-      return {fields: originalFields};
+      return editedMessageSubset(originalFields, beingEdited);
     });
   });
 
@@ -466,18 +518,34 @@ function ShowingRemoteMessageBanner({
   );
 }
 
+function FoldPreviewActions() {
+  const [cancel, run] = useRunFoldPreview();
+  return (
+    <div className="commit-info-actions-bar" data-testid="commit-info-actions-bar">
+      <div className="commit-info-actions-bar-right">
+        <VSCodeButton appearance="secondary" onClick={cancel}>
+          <T>Cancel</T>
+        </VSCodeButton>
+        <VSCodeButton appearance="primary" onClick={run}>
+          <T>Run Combine</T>
+        </VSCodeButton>
+      </div>
+    </div>
+  );
+}
+
 function ActionsBar({
   commit,
+  latestMessage,
   editedMessage,
   fieldsBeingEdited,
-  setFieldsBeingEdited,
   isCommitMode,
   setMode,
 }: {
   commit: CommitInfo;
+  latestMessage: CommitMessageFields;
   editedMessage: EditedMessageUnlessOptimistic;
   fieldsBeingEdited: FieldsBeingEdited;
-  setFieldsBeingEdited: Dispatch<SetStateAction<FieldsBeingEdited>>;
   isCommitMode: boolean;
   setMode: (mode: CommitInfoMode) => unknown;
 }) {
@@ -531,11 +599,14 @@ function ActionsBar({
         }
 
         reset(editedCommitMessages(isCommitMode ? 'head' : commit.hash));
-        setFieldsBeingEdited(noFieldsBeingEdited(schema));
       },
   );
   const doAmendOrCommit = () => {
-    const message = commitMessageFieldsToString(schema, assertNonOptimistic(editedMessage).fields);
+    const updatedMessage = applyEditedFields(
+      latestMessage,
+      assertNonOptimistic(editedMessage).fields,
+    );
+    const message = commitMessageFieldsToString(schema, updatedMessage);
     const headHash = headCommit?.hash ?? '.';
     const allFiles = uncommittedChanges.map(file => file.path);
 
@@ -608,9 +679,12 @@ function ActionsBar({
               disabled={!anythingToCommit || editedMessage == null || areImageUploadsOngoing}
               runOperation={async () => {
                 if (!isCommitMode) {
-                  const messageFields = assertNonOptimistic(editedMessage).fields;
-                  const stringifiedMessage = commitMessageFieldsToString(schema, messageFields);
-                  const diffId = findEditedDiffNumber(messageFields) ?? commit.diffId;
+                  const updatedMessage = applyEditedFields(
+                    latestMessage,
+                    assertNonOptimistic(editedMessage).fields,
+                  );
+                  const stringifiedMessage = commitMessageFieldsToString(schema, updatedMessage);
+                  const diffId = findEditedDiffNumber(updatedMessage) ?? commit.diffId;
                   // if there's a diff attached, we should also update the remote message
                   if (messageSyncEnabled && diffId) {
                     const shouldAbort = await tryToUpdateRemoteMessage(
@@ -651,9 +725,12 @@ function ActionsBar({
               data-testid="amend-message-button"
               disabled={!isAnythingBeingEdited || editedMessage == null || areImageUploadsOngoing}
               runOperation={async () => {
-                const messageFields = assertNonOptimistic(editedMessage).fields;
-                const stringifiedMessage = commitMessageFieldsToString(schema, messageFields);
-                const diffId = findEditedDiffNumber(messageFields) ?? commit.diffId;
+                const updatedMessage = applyEditedFields(
+                  latestMessage,
+                  assertNonOptimistic(editedMessage).fields,
+                );
+                const stringifiedMessage = commitMessageFieldsToString(schema, updatedMessage);
+                const diffId = findEditedDiffNumber(updatedMessage) ?? commit.diffId;
                 // if there's a diff attached, we should also update the remote message
                 if (messageSyncEnabled && diffId) {
                   const shouldAbort = await tryToUpdateRemoteMessage(

@@ -12,6 +12,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Error;
+use async_stream::try_stream;
 use async_trait::async_trait;
 use blobstore::Loadable;
 use edenapi_types::wire::WireCommitHashToLocationRequestBatch;
@@ -65,6 +66,7 @@ use mercurial_types::HgChangesetId;
 use mercurial_types::HgNodeHash;
 use mononoke_api::CreateInfo;
 use mononoke_api::MononokeError;
+use mononoke_api::XRepoLookupSyncBehaviour;
 use mononoke_api_hg::HgRepoContext;
 use mononoke_types::hash::GitSha1;
 use mononoke_types::ChangesetId;
@@ -701,30 +703,31 @@ impl EdenApiHandler for GraphSegmentsHandler {
             .map(|hg_id| HgChangesetId::new(HgNodeHash::from(hg_id)))
             .collect();
 
-        let graph_segment_entries =
-            repo.graph_segments(common, heads)
-                .await?
-                .into_iter()
-                .map(|segment| {
-                    Ok(CommitGraphSegmentsEntry {
-                        head: HgId::from(segment.head.into_nodehash()),
-                        base: HgId::from(segment.base.into_nodehash()),
-                        length: segment.length,
-                        parents: segment
-                            .parents
-                            .into_iter()
-                            .map(|parent| CommitGraphSegmentParent {
-                                hgid: HgId::from(parent.hgid.into_nodehash()),
-                                location: parent.location.map(|location| {
-                                    location.map_descendant(|descendant| {
-                                        HgId::from(descendant.into_nodehash())
-                                    })
-                                }),
-                            })
-                            .collect(),
-                    })
-                });
-        Ok(stream::iter(graph_segment_entries).boxed())
+        Ok(try_stream! {
+            let graph_segments = repo.graph_segments(common, heads).await?;
+
+            for await segment in graph_segments {
+                let segment = segment?;
+                yield CommitGraphSegmentsEntry {
+                    head: HgId::from(segment.head.into_nodehash()),
+                    base: HgId::from(segment.base.into_nodehash()),
+                    length: segment.length,
+                    parents: segment
+                        .parents
+                        .into_iter()
+                        .map(|parent| CommitGraphSegmentParent {
+                            hgid: HgId::from(parent.hgid.into_nodehash()),
+                            location: parent.location.map(|location| {
+                                location.map_descendant(|descendant| {
+                                    HgId::from(descendant.into_nodehash())
+                                })
+                            }),
+                        })
+                        .collect(),
+                }
+            }
+        }
+        .boxed())
     }
 }
 
@@ -832,7 +835,12 @@ impl EdenApiHandler for CommitTranslateId {
                         (
                             id,
                             from_repo
-                                .xrepo_commit_lookup(&to_repo, bs.clone(), None)
+                                .xrepo_commit_lookup(
+                                    &to_repo,
+                                    bs.clone(),
+                                    None,
+                                    XRepoLookupSyncBehaviour::SyncIfAbsent,
+                                )
                                 .await,
                         )
                     }

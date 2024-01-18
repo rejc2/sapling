@@ -16,6 +16,7 @@ use blobrepo::AsBlobRepo;
 use blobrepo::BlobRepo;
 use blobstore::Loadable;
 use bonsai_git_mapping::BonsaiGitMapping;
+use bonsai_globalrev_mapping::BonsaiGlobalrevMapping;
 use bonsai_hg_mapping::BonsaiHgMapping;
 use bonsai_hg_mapping::BonsaiHgMappingRef;
 use bookmarks::BookmarkKey;
@@ -30,7 +31,6 @@ use context::CoreContext;
 use cross_repo_sync::rewrite_commit;
 use cross_repo_sync::update_mapping_with_version;
 use cross_repo_sync::CommitSyncContext;
-use cross_repo_sync::CommitSyncDataProvider;
 use cross_repo_sync::CommitSyncRepos;
 use cross_repo_sync::CommitSyncer;
 use cross_repo_sync::Repo;
@@ -56,7 +56,10 @@ use mononoke_types::NonRootMPath;
 use mononoke_types::RepositoryId;
 use mutable_counters::MutableCounters;
 use phases::Phases;
+use pushrebase_mutation_mapping::PushrebaseMutationMapping;
 use repo_blobstore::RepoBlobstore;
+use repo_bookmark_attrs::RepoBookmarkAttrs;
+use repo_cross_repo::RepoCrossRepo;
 use repo_derived_data::RepoDerivedData;
 use repo_identity::RepoIdentity;
 use sql_construct::SqlConstruct;
@@ -75,6 +78,9 @@ pub struct TestRepo {
         dyn BookmarkUpdateLog,
         dyn BonsaiHgMapping,
         dyn BonsaiGitMapping,
+        dyn BonsaiGlobalrevMapping,
+        dyn PushrebaseMutationMapping,
+        RepoBookmarkAttrs,
         dyn Changesets,
         dyn ChangesetFetcher,
         dyn Filenodes,
@@ -87,6 +93,9 @@ pub struct TestRepo {
         CommitGraph,
     )]
     pub blob_repo: BlobRepo,
+
+    #[facet]
+    pub repo_cross_repo: RepoCrossRepo,
 
     #[facet]
     pub repo_config: RepoConfig,
@@ -144,6 +153,7 @@ where
             &map,
             mover,
             source_repo,
+            Default::default(),
             Default::default(),
         )
         .await?
@@ -240,13 +250,13 @@ pub async fn init_small_large_repo(
         large_repo_id: RepositoryId::new(1),
     });
 
-    let commit_sync_data_provider = CommitSyncDataProvider::Live(Arc::new(sync_config.clone()));
+    let live_commit_sync_config = Arc::new(sync_config.clone());
 
-    let small_to_large_commit_syncer = CommitSyncer::new_with_provider(
+    let small_to_large_commit_syncer = CommitSyncer::new_with_live_commit_sync_config(
         ctx,
         mapping.clone(),
         repos.clone(),
-        commit_sync_data_provider.clone(),
+        live_commit_sync_config.clone(),
     );
 
     let repos = CommitSyncRepos::LargeToSmall {
@@ -254,11 +264,11 @@ pub async fn init_small_large_repo(
         large_repo: megarepo.clone(),
     };
 
-    let large_to_small_commit_syncer = CommitSyncer::new_with_provider(
+    let large_to_small_commit_syncer = CommitSyncer::new_with_live_commit_sync_config(
         ctx,
         mapping.clone(),
         repos.clone(),
-        commit_sync_data_provider,
+        live_commit_sync_config,
     );
 
     let first_bcs_id = CreateCommitContext::new_root(ctx, &smallrepo)
@@ -380,6 +390,7 @@ pub fn base_commit_sync_config(large_repo: &TestRepo, small_repo: &TestRepo) -> 
             NonRootMPath::new("prefix").unwrap(),
         ),
         map: hashmap! {},
+        git_submodules_action: Default::default(),
     };
     CommitSyncConfig {
         large_repo_id: large_repo.repo_identity().id(),
@@ -439,6 +450,7 @@ fn get_small_repo_sync_config_noop() -> SmallRepoCommitSyncConfig {
     SmallRepoCommitSyncConfig {
         default_action: DefaultSmallToLargeCommitSyncPathAction::Preserve,
         map: hashmap! {},
+        git_submodules_action: Default::default(),
     }
 }
 
@@ -448,6 +460,7 @@ fn get_small_repo_sync_config_1() -> SmallRepoCommitSyncConfig {
             NonRootMPath::new("prefix").unwrap(),
         ),
         map: hashmap! {},
+        git_submodules_action: Default::default(),
     }
 }
 
@@ -459,5 +472,8 @@ fn get_small_repo_sync_config_2() -> SmallRepoCommitSyncConfig {
         map: hashmap! {
             NonRootMPath::new("special").unwrap() => NonRootMPath::new("special").unwrap(),
         },
+        git_submodules_action: Default::default(),
     }
 }
+
+// TODO(T168676855): define small repo config that strips submodules and add tests

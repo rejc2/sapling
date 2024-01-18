@@ -36,6 +36,7 @@ use util::path::remove_file;
 use vfs::VFS;
 use workingcopy::sparse;
 
+use crate::errors::CheckoutError;
 use crate::file_state;
 use crate::ActionMap;
 use crate::Checkout;
@@ -72,14 +73,6 @@ impl std::fmt::Display for CheckoutStats {
         Ok(())
     }
 }
-
-#[derive(Debug, thiserror::Error)]
-#[error("checkout error: {source}")]
-pub struct CheckoutError {
-    pub resumable: bool,
-    pub source: anyhow::Error,
-}
-
 /// A somewhat simplified/specialized checkout suitable for use during a clone.
 #[instrument(skip_all, fields(path=%dot_path.display(), %target), err)]
 pub fn checkout(
@@ -139,7 +132,7 @@ impl CheckoutState {
                     sparse::repo_matcher_with_overrides(
                         &vfs,
                         dot_path,
-                        target_mf.clone(),
+                        target_mf,
                         file_store.clone(),
                         &overrides,
                     )?
@@ -179,7 +172,7 @@ impl CheckoutState {
             f.write_all(target.to_hex().as_bytes())
         })?;
 
-        plan.apply_store(&file_store)?;
+        plan.apply_store(file_store.as_ref())?;
 
         ts.set_metadata(BTreeMap::from([("p1".to_string(), target.to_hex())]))?;
 

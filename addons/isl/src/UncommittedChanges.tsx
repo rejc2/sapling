@@ -7,7 +7,6 @@
 
 import type {CommitMessageFields} from './CommitInfoView/types';
 import type {UseUncommittedSelection} from './partialSelection';
-import type {PathTree} from './pathTree';
 import type {ChangedFile, ChangedFileType, MergeConflicts, RepoRelativePath} from './types';
 import type {MutableRefObject, ReactNode} from 'react';
 import type {Comparison} from 'shared/Comparison';
@@ -20,26 +19,29 @@ import {
 } from './ChangedFileDisplayTypePicker';
 import {Collapsable} from './Collapsable';
 import {
-  commitFieldsBeingEdited,
   commitMessageTemplate,
   commitMode,
   editedCommitMessages,
+  forceNextCommitToEditAllFields,
 } from './CommitInfoView/CommitInfoState';
 import {
-  allFieldsBeingEdited,
   commitMessageFieldsSchema,
   commitMessageFieldsToString,
 } from './CommitInfoView/CommitMessageFields';
+import {temporaryCommitTitle} from './CommitTitle';
 import {OpenComparisonViewButton} from './ComparisonView/OpenComparisonViewButton';
 import {ErrorNotice} from './ErrorNotice';
+import {FileTree, FileTreeFolderHeader} from './FileTree';
 import {
   generatedStatusToLabel,
   generatedStatusDescription,
   useGeneratedFileStatuses,
 } from './GeneratedFile';
+import {Internal} from './Internal';
 import {PartialFileSelectionWithMode} from './PartialFileSelection';
 import {SuspenseBoundary} from './SuspenseBoundary';
 import {DOCUMENTATION_DELAY, Tooltip} from './Tooltip';
+import {latestCommitMessageFields} from './codeReview/CodeReviewInfo';
 import {islDrawerState} from './drawerState';
 import {T, t} from './i18n';
 import {AbortMergeOperation} from './operations/AbortMergeOperation';
@@ -55,7 +57,6 @@ import {ResolveOperation, ResolveTool} from './operations/ResolveOperation';
 import {RevertOperation} from './operations/RevertOperation';
 import {getShelveOperation} from './operations/ShelveOperation';
 import {useUncommittedSelection} from './partialSelection';
-import {buildPathTree} from './pathTree';
 import platform from './platform';
 import {
   optimisticMergeConflicts,
@@ -119,7 +120,7 @@ const holdingAltAtom = atom<boolean>({
   ],
 });
 
-type UIChangedFile = {
+export type UIChangedFile = {
   path: RepoRelativePath;
   // disambiguated path, or rename with arrow
   label: string;
@@ -198,6 +199,37 @@ const sortKeyForStatus: Record<VisualChangedFileType, number> = {
   Resolved: 8,
 };
 
+type SectionProps = Omit<React.ComponentProps<typeof LinearFileList>, 'files'> & {
+  filesByPrefix: Map<string, Array<UIChangedFile>>;
+};
+
+function SectionedFileList({filesByPrefix, ...rest}: SectionProps) {
+  const [collapsedSections, setCollapsedSections] = useState(new Set<string>());
+  return (
+    <div className="file-tree">
+      {Array.from(filesByPrefix.entries(), ([prefix, files]) => {
+        const isCollapsed = collapsedSections.has(prefix);
+        return (
+          <div className="file-tree-section" key={prefix}>
+            <FileTreeFolderHeader
+              isCollapsed={isCollapsed}
+              toggleCollapsed={() =>
+                setCollapsedSections(previous =>
+                  previous.has(prefix)
+                    ? new Set(Array.from(previous).filter(e => e !== prefix))
+                    : new Set(Array.from(previous).concat(prefix)),
+                )
+              }
+              folder={prefix}
+            />
+            {!isCollapsed ? <LinearFileList {...rest} files={files} /> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /**
  * Display a list of changed files.
  *
@@ -220,8 +252,8 @@ export function ChangedFiles(props: {
 }) {
   const displayType = useRecoilValue(changedFilesDisplayType);
   const {filesSubset, totalFiles, ...rest} = props;
-  const PAGE_SIZE = 25;
-  const PAGE_FETCH_COUNT = 16;
+  const PAGE_SIZE = 500;
+  const PAGE_FETCH_COUNT = 2;
   const [pageNum, setPageNum] = useState(0);
   const isLastPage = pageNum >= Math.floor((totalFiles - 1) / PAGE_SIZE);
   const rangeStart = pageNum * PAGE_SIZE;
@@ -248,8 +280,32 @@ export function ChangedFiles(props: {
     return genStatA - genStatB;
   });
   const filesToShow = filesToSort.slice(rangeStart - fetchRangeStart, rangeEnd - fetchRangeStart);
-
   const processedFiles = useDeepMemo(() => processCopiesAndRenames(filesToShow), [filesToShow]);
+
+  const prefixes: {key: string; prefix: string}[] = useMemo(
+    () => Internal.repoPrefixes ?? [{key: 'default', prefix: ''}],
+    [],
+  );
+  const firstNonDefaultPrefix = prefixes.find(
+    p => p.prefix.length > 0 && filesToSort.some(f => f.path.indexOf(p.prefix) === 0),
+  );
+  const shouldShowRepoHeaders =
+    prefixes.length > 1 &&
+    firstNonDefaultPrefix != null &&
+    filesToSort.find(f => f.path.indexOf(firstNonDefaultPrefix?.prefix) === -1) != null;
+
+  const filesByPrefix = new Map<string, Array<UIChangedFile>>();
+  for (const file of processedFiles) {
+    for (const {key, prefix} of prefixes) {
+      if (file.path.indexOf(prefix) === 0) {
+        if (!filesByPrefix.has(key)) {
+          filesByPrefix.set(key, []);
+        }
+        filesByPrefix.get(key)?.push(file);
+        break;
+      }
+    }
+  }
 
   useEffect(() => {
     // If the list of files is updated to have fewer files, we need to reset
@@ -314,6 +370,13 @@ export function ChangedFiles(props: {
       )}
       {displayType === 'tree' ? (
         <FileTree {...rest} files={processedFiles} displayType={displayType} />
+      ) : shouldShowRepoHeaders ? (
+        <SectionedFileList
+          {...rest}
+          filesByPrefix={filesByPrefix}
+          displayType={displayType}
+          generatedStatuses={generatedStatuses}
+        />
       ) : (
         <LinearFileList
           {...rest}
@@ -381,62 +444,7 @@ function LinearFileList(props: {
   );
 }
 
-function FileTree(props: {
-  files: Array<UIChangedFile>;
-  displayType: ChangedFilesDisplayType;
-  comparison: Comparison;
-  selection?: UseUncommittedSelection;
-  place?: Place;
-}) {
-  const {files, ...rest} = props;
-
-  const tree = useDeepMemo(
-    () => buildPathTree(Object.fromEntries(files.map(file => [file.path, file]))),
-    [files],
-  );
-
-  const [collapsed, setCollapsed] = useState(new Set());
-
-  function renderTree(tree: PathTree<UIChangedFile>, accumulatedPath = '') {
-    return (
-      <>
-        {[...tree.entries()].map(([folder, inner]) => {
-          const folderKey = `${accumulatedPath}/${folder}`;
-          const isCollapsed = collapsed.has(folderKey);
-          return (
-            <div className="file-tree-level" key={folderKey}>
-              {inner instanceof Map ? (
-                <>
-                  <span className="file-tree-folder-path">
-                    <VSCodeButton
-                      appearance="icon"
-                      onClick={() => {
-                        setCollapsed(last =>
-                          isCollapsed
-                            ? new Set([...last].filter(v => v !== folderKey))
-                            : new Set([...last, folderKey]),
-                        );
-                      }}>
-                      <Icon icon={isCollapsed ? 'chevron-right' : 'chevron-down'} slot="start" />
-                      {folder}
-                    </VSCodeButton>
-                  </span>
-                  {isCollapsed ? null : renderTree(inner, folderKey)}
-                </>
-              ) : (
-                <File key={inner.path} {...rest} file={inner} />
-              )}
-            </div>
-          );
-        })}
-      </>
-    );
-  }
-
-  return renderTree(tree);
-}
-
-function File({
+export function File({
   file,
   displayType,
   comparison,
@@ -592,12 +600,12 @@ function FileSelectionCheckbox({
   );
 }
 
-type Place = 'main' | 'amend sidebar' | 'commit sidebar';
+export type Place = 'main' | 'amend sidebar' | 'commit sidebar';
 
 export function UncommittedChanges({place}: {place: Place}) {
   const uncommittedChanges = useRecoilValue(uncommittedChangesWithPreviews);
   const error = useRecoilValue(uncommittedChangesFetchError);
-  // TODO: use treeWithPreviews instead, and update CommitOperation
+  // TODO: use dagWithPreviews instead, and update CommitOperation
   const headCommit = useRecoilValue(latestHeadCommit);
   const schema = useRecoilValue(commitMessageFieldsSchema);
   const template = useRecoilValue(commitMessageTemplate);
@@ -609,39 +617,48 @@ export function UncommittedChanges({place}: {place: Place}) {
 
   const runOperation = useRunOperation();
 
-  const openCommitForm = useRecoilCallback(({set, reset}) => (which: 'commit' | 'amend') => {
-    // make sure view is expanded
-    set(islDrawerState, val => ({...val, right: {...val.right, collapsed: false}}));
+  const openCommitForm = useRecoilCallback(
+    ({set, reset, snapshot}) =>
+      (which: 'commit' | 'amend') => {
+        // make sure view is expanded
+        set(islDrawerState, val => ({...val, right: {...val.right, collapsed: false}}));
 
-    // show head commit & set to correct mode
-    reset(selectedCommits);
-    set(commitMode, which);
+        // show head commit & set to correct mode
+        reset(selectedCommits);
+        set(commitMode, which);
 
-    // Start editing fields when amending so you can go right into typing.
-    if (which === 'amend') {
-      set(commitFieldsBeingEdited, {
-        ...allFieldsBeingEdited(schema),
-        // we have to explicitly keep this change to fieldsBeingEdited because otherwise it would be reset by effects.
-        forceWhileOnHead: true,
-      });
-    }
+        // Start editing fields when amending so you can go right into typing.
+        if (which === 'amend') {
+          set(forceNextCommitToEditAllFields, true);
+          if (headCommit != null) {
+            const latestMessage = snapshot
+              .getLoadable(latestCommitMessageFields(headCommit.hash))
+              .valueMaybe();
+            if (latestMessage) {
+              set(editedCommitMessages(headCommit.hash), {
+                fields: {...latestMessage},
+              });
+            }
+          }
+        }
 
-    const quickCommitTyped = commitTitleRef.current?.value;
-    if (which === 'commit' && quickCommitTyped != null && quickCommitTyped != '') {
-      set(editedCommitMessages('head'), value => ({
-        ...value,
-        fields: {...value.fields, Title: quickCommitTyped},
-      }));
-      // delete what was written in the quick commit form
-      commitTitleRef.current != null && (commitTitleRef.current.value = '');
-    }
-  });
+        const quickCommitTyped = commitTitleRef.current?.value;
+        if (which === 'commit' && quickCommitTyped != null && quickCommitTyped != '') {
+          set(editedCommitMessages('head'), value => ({
+            ...value,
+            fields: {...value.fields, Title: quickCommitTyped},
+          }));
+          // delete what was written in the quick commit form
+          commitTitleRef.current != null && (commitTitleRef.current.value = '');
+        }
+      },
+  );
 
   const onConfirmQuickCommit = () => {
     const title =
       (commitTitleRef.current as HTMLInputElement | null)?.value ||
       template?.fields.Title ||
-      t('Temporary Commit');
+      temporaryCommitTitle();
     // use the template, unless a specific quick title is given
     const fields: CommitMessageFields = {...template?.fields, Title: title};
     const message = commitMessageFieldsToString(schema, fields);
@@ -655,7 +672,7 @@ export function UncommittedChanges({place}: {place: Place}) {
   if (error) {
     return <ErrorNotice title={t('Failed to fetch Uncommitted Changes')} error={error} />;
   }
-  if (uncommittedChanges.length === 0) {
+  if (uncommittedChanges.length === 0 && conflicts == null) {
     return null;
   }
   const allFilesSelected = selection.isEverythingSelected();

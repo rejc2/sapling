@@ -77,6 +77,13 @@ fn register_error_handlers() {
         if let Some(e) = e.downcast_ref::<std::io::Error>() {
             return Some(cpython_ext::error::translate_io_error(py, e));
         }
+        // Try harder about io::Error by checking the error source.
+        {
+            let cause = e.root_cause();
+            if let Some(e) = cause.downcast_ref::<std::io::Error>() {
+                return Some(cpython_ext::error::translate_io_error(py, e));
+            }
+        }
 
         if let Some(revlogindex::Error::Corruption(e)) = e.downcast_ref::<revlogindex::Error>() {
             if let revlogindex::errors::CorruptionError::Io(e) = e.as_ref() {
@@ -156,6 +163,8 @@ fn register_error_handlers() {
                 )) => Some(PyErr::new::<TlsError, _>(py, e.to_string())),
                 _ => Some(PyErr::new::<HttpError, _>(py, e.to_string())),
             }
+        } else if let Some(e) = e.downcast_ref::<edenapi::types::ServerError>() {
+            Some(PyErr::new::<HttpError, _>(py, e.to_string()))
         } else if e.is::<auth::MissingCerts>() {
             Some(PyErr::new::<CertificateError, _>(py, format!("{}", e)))
         } else if e.is::<auth::X509Error>() {

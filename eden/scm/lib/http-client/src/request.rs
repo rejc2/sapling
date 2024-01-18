@@ -18,7 +18,6 @@ use std::time::Duration;
 use std::time::SystemTime;
 
 use clientinfo::CLIENT_INFO_HEADER;
-use curl::easy::Easy2;
 use curl::easy::HttpVersion;
 use curl::easy::List;
 use http::header;
@@ -43,6 +42,7 @@ use crate::receiver::ChannelReceiver;
 use crate::receiver::Receiver;
 use crate::response::AsyncResponse;
 use crate::response::Response;
+use crate::Easy2H;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Method {
@@ -588,7 +588,7 @@ impl Request {
     /// concurrent requests or large requests that require
     /// progress reporting.
     pub fn send(self) -> Result<Response, HttpClientError> {
-        let mut easy: Easy2<Buffered> = self.try_into()?;
+        let mut easy: Easy2H = self.try_into()?;
         let res = easy.perform();
         let ctx = easy.get_mut().request_context_mut();
         let info = ctx.info().clone();
@@ -610,7 +610,7 @@ impl Request {
     pub async fn send_async(self) -> Result<AsyncResponse, HttpClientError> {
         let request_info = self.ctx().info().clone();
         let (receiver, streams) = ChannelReceiver::new();
-        let request = self.into_streaming(receiver);
+        let request = self.into_streaming(Box::new(receiver));
 
         // Spawn the request as another task, which will block
         // the worker it is scheduled on until completion.
@@ -630,7 +630,7 @@ impl Request {
     /// Turn this `Request` into a streaming request. The
     /// received data for this request will be passed as
     /// it arrives to the given `Receiver`.
-    pub fn into_streaming<R>(self, receiver: R) -> StreamRequest<R> {
+    pub fn into_streaming(self, receiver: Box<dyn Receiver>) -> StreamRequest {
         StreamRequest {
             request: self,
             receiver,
@@ -639,10 +639,10 @@ impl Request {
 
     /// Turn this `Request` into a `curl::Easy2` handle using the given
     /// `Handler` to process the response.
-    pub(crate) fn into_handle<H: HandlerExt>(
+    pub(crate) fn into_handle(
         mut self,
-        create_handler: impl FnOnce(RequestContext) -> H,
-    ) -> Result<Easy2<H>, HttpClientError> {
+        create_handler: impl FnOnce(RequestContext) -> Box<dyn HandlerExt>,
+    ) -> Result<Easy2H, HttpClientError> {
         // Allow request creation listeners to configure the Request before we
         // use it, potentially overriding settings explicitly configured via
         // the methods on Request.
@@ -665,7 +665,7 @@ impl Request {
         }
         let handler = create_handler(self.ctx);
 
-        let mut easy = Easy2::new(handler);
+        let mut easy = Easy2H::new(handler);
 
         easy.url(url.as_str())?;
         easy.verbose(self.verbose)?;
@@ -801,22 +801,22 @@ impl Request {
     }
 }
 
-impl TryFrom<Request> for Easy2<Buffered> {
+impl TryFrom<Request> for Easy2H {
     type Error = HttpClientError;
 
     fn try_from(req: Request) -> Result<Self, Self::Error> {
-        req.into_handle(Buffered::new)
+        req.into_handle(|c| Box::new(Buffered::new(c)))
     }
 }
 
-pub struct StreamRequest<R> {
+pub struct StreamRequest {
     pub(crate) request: Request,
-    pub(crate) receiver: R,
+    pub(crate) receiver: Box<dyn Receiver>,
 }
 
-impl<R: Receiver> StreamRequest<R> {
+impl StreamRequest {
     pub fn send(self) -> Result<(), HttpClientError> {
-        let mut easy: Easy2<Streaming<R>> = self.try_into()?;
+        let mut easy: Easy2H = self.try_into()?;
         let res = easy.perform().map_err(Into::into);
         let _ = easy
             .get_mut()
@@ -827,12 +827,12 @@ impl<R: Receiver> StreamRequest<R> {
     }
 }
 
-impl<R: Receiver> TryFrom<StreamRequest<R>> for Easy2<Streaming<R>> {
+impl TryFrom<StreamRequest> for Easy2H {
     type Error = HttpClientError;
 
-    fn try_from(req: StreamRequest<R>) -> Result<Self, Self::Error> {
+    fn try_from(req: StreamRequest) -> Result<Self, Self::Error> {
         let StreamRequest { request, receiver } = req;
-        request.into_handle(|ctx| Streaming::new(receiver, ctx))
+        request.into_handle(|ctx| Box::new(Streaming::new(receiver, ctx)))
     }
 }
 

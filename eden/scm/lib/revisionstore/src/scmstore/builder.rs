@@ -61,7 +61,7 @@ impl<'a> FileStoreBuilder<'a> {
             config,
             local_path: None,
             suffix: None,
-            store_aux_data: false,
+            store_aux_data: config.get_or("store", "aux", || true).unwrap_or(true),
             override_edenapi: None,
             indexedlog_local: None,
             indexedlog_cache: None,
@@ -430,7 +430,6 @@ impl<'a> FileStoreBuilder<'a> {
 
 // Return remotefilelog cache path, or None if there is no cache path
 // (e.g. because we have no repo name).
-#[context("failed to get cache path")]
 fn cache_path(config: &dyn Config, suffix: &Option<PathBuf>) -> Result<Option<PathBuf>> {
     match crate::util::get_cache_path(config, suffix) {
         Ok(p) => Ok(Some(p)),

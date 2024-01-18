@@ -10,6 +10,7 @@
 #include <folly/Portability.h>
 #include <folly/dynamic.h>
 #include <optional>
+
 #include "eden/fs/config/InodeCatalogType.h"
 #include "eden/fs/config/MountProtocol.h"
 #include "eden/fs/config/ParentCommit.h"
@@ -76,6 +77,12 @@ class CheckoutConfig {
   ParentCommit getParentCommit() const;
 
   /**
+   * Gets the last active FilterID (if any). This will return std::nullopt if a
+   * FilteredBackingStore is not in use.
+   */
+  std::optional<std::string> getLastActiveFilter() const;
+
+  /**
    * Set the currently checked out commit of the working copy.
    */
   void setCheckedOutCommit(const RootId& commit) const;
@@ -102,7 +109,8 @@ class CheckoutConfig {
   /**
    * Get the repository type.
    *
-   * Currently supported types include "git", "hg", and "recas".
+   * Currently supported types include "git", "hg", "filteredhg", "empty", and
+   * "recas".
    */
   const std::string& getRepoType() const {
     return repoType_;

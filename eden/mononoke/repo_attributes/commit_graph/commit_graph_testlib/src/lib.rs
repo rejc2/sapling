@@ -5,6 +5,8 @@
  * GNU General Public License version 2.
  */
 
+#![feature(trait_upcasting)]
+
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -25,7 +27,15 @@ use vec1::vec1;
 
 use crate::utils::*;
 
+#[cfg(test)]
+pub mod tests;
 pub mod utils;
+
+pub trait CommitGraphStorageTest: CommitGraphStorage {
+    fn flush(&self) {}
+}
+
+impl CommitGraphStorageTest for InMemoryCommitGraphStorage {}
 
 #[macro_export]
 macro_rules! impl_commit_graph_tests {
@@ -46,6 +56,11 @@ macro_rules! impl_commit_graph_tests {
             test_children,
             test_ancestors_difference_segments_1,
             test_ancestors_difference_segments_2,
+            test_ancestors_difference_segments_3,
+            test_locations_to_changeset_ids,
+            test_changeset_ids_to_locations,
+            test_process_topologically,
+            test_minimize_frontier,
         );
     };
 }
@@ -64,7 +79,7 @@ macro_rules! impl_commit_graph_tests_internal {
 
 pub async fn test_storage_store_and_fetch(
     ctx: CoreContext,
-    storage: Arc<dyn CommitGraphStorage>,
+    storage: Arc<dyn CommitGraphStorageTest>,
 ) -> Result<()> {
     let graph = from_dag(
         &ctx,
@@ -76,6 +91,7 @@ pub async fn test_storage_store_and_fetch(
         storage.clone(),
     )
     .await?;
+    storage.flush();
 
     // Check the public API.
     assert!(graph.exists(&ctx, name_cs_id("A")).await?);
@@ -290,7 +306,10 @@ pub async fn test_storage_store_and_fetch(
     Ok(())
 }
 
-pub async fn test_skip_tree(ctx: CoreContext, storage: Arc<dyn CommitGraphStorage>) -> Result<()> {
+pub async fn test_skip_tree(
+    ctx: CoreContext,
+    storage: Arc<dyn CommitGraphStorageTest>,
+) -> Result<()> {
     let graph = from_dag(
         &ctx,
         r"
@@ -303,6 +322,7 @@ pub async fn test_skip_tree(ctx: CoreContext, storage: Arc<dyn CommitGraphStorag
         storage.clone(),
     )
     .await?;
+    storage.flush();
 
     assert_eq!(
         storage
@@ -343,7 +363,7 @@ pub async fn test_skip_tree(ctx: CoreContext, storage: Arc<dyn CommitGraphStorag
 
 pub async fn test_p1_linear_tree(
     ctx: CoreContext,
-    storage: Arc<dyn CommitGraphStorage>,
+    storage: Arc<dyn CommitGraphStorageTest>,
 ) -> Result<()> {
     let graph = from_dag(
         &ctx,
@@ -357,6 +377,7 @@ pub async fn test_p1_linear_tree(
         storage.clone(),
     )
     .await?;
+    storage.flush();
 
     assert_p1_linear_skew_ancestor(&storage, &ctx, "A", None).await?;
     assert_p1_linear_skew_ancestor(&storage, &ctx, "B", Some("A")).await?;
@@ -388,7 +409,7 @@ pub async fn test_p1_linear_tree(
 
 pub async fn test_ancestors_difference(
     ctx: CoreContext,
-    storage: Arc<dyn CommitGraphStorage>,
+    storage: Arc<dyn CommitGraphStorageTest>,
 ) -> Result<()> {
     let graph = from_dag(
         &ctx,
@@ -402,6 +423,7 @@ pub async fn test_ancestors_difference(
         storage.clone(),
     )
     .await?;
+    storage.flush();
 
     assert_ancestors_difference(
         &graph,
@@ -512,7 +534,7 @@ pub async fn test_ancestors_difference(
 
 pub async fn test_find_by_prefix(
     ctx: CoreContext,
-    storage: Arc<dyn CommitGraphStorage>,
+    storage: Arc<dyn CommitGraphStorageTest>,
 ) -> Result<()> {
     let graph = from_dag(
         &ctx,
@@ -527,6 +549,7 @@ pub async fn test_find_by_prefix(
         storage.clone(),
     )
     .await?;
+    storage.flush();
 
     assert_eq!(
         graph
@@ -577,7 +600,7 @@ pub async fn test_find_by_prefix(
 
 pub async fn test_add_recursive(
     ctx: CoreContext,
-    storage: Arc<dyn CommitGraphStorage>,
+    storage: Arc<dyn CommitGraphStorageTest>,
 ) -> Result<()> {
     let reference_storage = Arc::new(InMemoryCommitGraphStorage::new(RepositoryId::new(1)));
 
@@ -594,7 +617,7 @@ pub async fn test_add_recursive(
         .await?,
     );
 
-    let graph = CommitGraph::new(storage);
+    let graph = CommitGraph::new(storage.clone());
     assert_eq!(
         graph
             .add_recursive(
@@ -615,6 +638,7 @@ pub async fn test_add_recursive(
             .await?,
         1
     );
+    storage.flush();
 
     assert!(graph.exists(&ctx, name_cs_id("A")).await?);
 
@@ -652,7 +676,7 @@ pub async fn test_add_recursive(
 
 pub async fn test_add_recursive_many_changesets(
     ctx: CoreContext,
-    storage: Arc<dyn CommitGraphStorage>,
+    storage: Arc<dyn CommitGraphStorageTest>,
 ) -> Result<()> {
     let reference_storage = Arc::new(InMemoryCommitGraphStorage::new(RepositoryId::new(1)));
 
@@ -669,7 +693,7 @@ pub async fn test_add_recursive_many_changesets(
         .await?,
     );
 
-    let graph = CommitGraph::new(storage);
+    let graph = CommitGraph::new(storage.clone());
     assert_eq!(
         graph
             .add_recursive(
@@ -685,6 +709,7 @@ pub async fn test_add_recursive_many_changesets(
             .await?,
         13
     );
+    storage.flush();
 
     assert_eq!(
         graph
@@ -726,7 +751,7 @@ pub async fn test_add_recursive_many_changesets(
 
 pub async fn test_ancestors_frontier_with(
     ctx: CoreContext,
-    storage: Arc<dyn CommitGraphStorage>,
+    storage: Arc<dyn CommitGraphStorageTest>,
 ) -> Result<()> {
     let graph = from_dag(
         &ctx,
@@ -740,6 +765,7 @@ pub async fn test_ancestors_frontier_with(
         storage.clone(),
     )
     .await?;
+    storage.flush();
 
     let set1 = ["A", "B", "C", "D", "E", "F", "G", "H", "I"]
         .into_iter()
@@ -828,7 +854,7 @@ pub async fn test_ancestors_frontier_with(
 
 pub async fn test_range_stream(
     ctx: CoreContext,
-    storage: Arc<dyn CommitGraphStorage>,
+    storage: Arc<dyn CommitGraphStorageTest>,
 ) -> Result<()> {
     let graph = from_dag(
         &ctx,
@@ -842,6 +868,7 @@ pub async fn test_range_stream(
         storage.clone(),
     )
     .await?;
+    storage.flush();
 
     assert_range_stream(
         &graph,
@@ -860,7 +887,7 @@ pub async fn test_range_stream(
 
 pub async fn test_common_base(
     ctx: CoreContext,
-    storage: Arc<dyn CommitGraphStorage>,
+    storage: Arc<dyn CommitGraphStorageTest>,
 ) -> Result<()> {
     let graph = from_dag(
         &ctx,
@@ -876,6 +903,7 @@ pub async fn test_common_base(
         storage.clone(),
     )
     .await?;
+    storage.flush();
 
     assert_common_base(&graph, &ctx, "J", "J", vec!["J"]).await?;
     assert_common_base(&graph, &ctx, "K", "J", vec!["J"]).await?;
@@ -893,7 +921,7 @@ pub async fn test_common_base(
 
 pub async fn test_slice_ancestors(
     ctx: CoreContext,
-    storage: Arc<dyn CommitGraphStorage>,
+    storage: Arc<dyn CommitGraphStorageTest>,
 ) -> Result<()> {
     let graph = from_dag(
         &ctx,
@@ -907,6 +935,7 @@ pub async fn test_slice_ancestors(
         storage.clone(),
     )
     .await?;
+    storage.flush();
 
     assert_slice_ancestors(
         &graph,
@@ -963,7 +992,10 @@ pub async fn test_slice_ancestors(
     Ok(())
 }
 
-pub async fn test_children(ctx: CoreContext, storage: Arc<dyn CommitGraphStorage>) -> Result<()> {
+pub async fn test_children(
+    ctx: CoreContext,
+    storage: Arc<dyn CommitGraphStorageTest>,
+) -> Result<()> {
     let graph = from_dag(
         &ctx,
         r"
@@ -973,9 +1005,10 @@ pub async fn test_children(ctx: CoreContext, storage: Arc<dyn CommitGraphStorage
              \     /  /
               I-J-K--/
         ",
-        storage,
+        storage.clone(),
     )
     .await?;
+    storage.flush();
 
     assert_children(&graph, &ctx, "A", vec!["B"]).await?;
     assert_children(&graph, &ctx, "B", vec!["C", "F"]).await?;
@@ -997,7 +1030,7 @@ pub async fn test_children(ctx: CoreContext, storage: Arc<dyn CommitGraphStorage
 
 pub async fn test_ancestors_difference_segments_1(
     ctx: CoreContext,
-    storage: Arc<dyn CommitGraphStorage>,
+    storage: Arc<dyn CommitGraphStorageTest>,
 ) -> Result<()> {
     let graph = from_dag(
         &ctx,
@@ -1006,13 +1039,14 @@ pub async fn test_ancestors_difference_segments_1(
            \         \    /
             F-G-H     M  /
              \       /  /
-              I-J---K--/
+              I-J---K--/---Q---R
                  \
                   \---------P
         ",
-        storage,
+        storage.clone(),
     )
     .await?;
+    storage.flush();
 
     assert_ancestors_difference_segments(&ctx, &graph, vec!["N"], vec![], 3).await?;
     assert_ancestors_difference_segments(&ctx, &graph, vec!["N"], vec!["D"], 3).await?;
@@ -1024,13 +1058,15 @@ pub async fn test_ancestors_difference_segments_1(
     assert_ancestors_difference_segments(&ctx, &graph, vec!["O", "P"], vec!["H"], 4).await?;
     assert_ancestors_difference_segments(&ctx, &graph, vec!["O", "P"], vec!["D", "I"], 4).await?;
     assert_ancestors_difference_segments(&ctx, &graph, vec!["F"], vec!["H"], 0).await?;
+    assert_ancestors_difference_segments(&ctx, &graph, vec!["M"], vec!["K"], 2).await?;
+    assert_ancestors_difference_segments(&ctx, &graph, vec!["N", "R"], vec![], 3).await?;
 
     Ok(())
 }
 
 pub async fn test_ancestors_difference_segments_2(
     ctx: CoreContext,
-    storage: Arc<dyn CommitGraphStorage>,
+    storage: Arc<dyn CommitGraphStorageTest>,
 ) -> Result<()> {
     let graph = from_dag(
         &ctx,
@@ -1043,9 +1079,10 @@ pub async fn test_ancestors_difference_segments_2(
              \     \
               \-P   \--I--N----O
         ",
-        storage,
+        storage.clone(),
     )
     .await?;
+    storage.flush();
 
     assert_ancestors_difference_segments(&ctx, &graph, vec!["K"], vec![], 1).await?;
     assert_ancestors_difference_segments(&ctx, &graph, vec!["L"], vec![], 1).await?;
@@ -1068,6 +1105,186 @@ pub async fn test_ancestors_difference_segments_2(
         ],
         vec![],
         7,
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn test_ancestors_difference_segments_3(
+    ctx: CoreContext,
+    storage: Arc<dyn CommitGraphStorageTest>,
+) -> Result<()> {
+    let graph = from_dag(
+        &ctx,
+        r"
+        A--B--C--D
+            \  \
+             E--F
+        ",
+        storage.clone(),
+    )
+    .await?;
+    storage.flush();
+
+    assert_ancestors_difference_segments(&ctx, &graph, vec!["F"], vec!["D"], 2).await?;
+
+    Ok(())
+}
+
+pub async fn test_locations_to_changeset_ids(
+    ctx: CoreContext,
+    storage: Arc<dyn CommitGraphStorageTest>,
+) -> Result<()> {
+    let graph = from_dag(
+        &ctx,
+        r"
+        A-B-C-D-E---L------N----O
+           \         \    /
+            F-G-H     M  /
+             \       /  /
+              I-J---K--/---Q---R
+                 \
+                  \---------P
+        ",
+        storage.clone(),
+    )
+    .await?;
+    storage.flush();
+
+    assert_locations_to_changeset_ids(&ctx, &graph, "L", 2, 4, vec!["D", "C", "B", "A"]).await?;
+    assert_locations_to_changeset_ids(&ctx, &graph, "H", 0, 5, vec!["H", "G", "F", "B", "A"])
+        .await?;
+    assert_locations_to_changeset_ids(&ctx, &graph, "R", 1, 2, vec!["Q", "K"]).await?;
+    assert_locations_to_changeset_ids(&ctx, &graph, "R", 2, 2, vec!["K", "J"]).await?;
+    assert_locations_to_changeset_ids(&ctx, &graph, "R", 3, 2, vec!["J", "I"]).await?;
+    assert_locations_to_changeset_ids(&ctx, &graph, "R", 4, 2, vec!["I", "F"]).await?;
+    assert_locations_to_changeset_ids(&ctx, &graph, "M", 0, 1, vec!["M"]).await?;
+    assert_locations_to_changeset_ids_errors(&ctx, &graph, "M", 1, 1).await?;
+    assert_locations_to_changeset_ids(&ctx, &graph, "O", 0, 1, vec!["O"]).await?;
+    assert_locations_to_changeset_ids(&ctx, &graph, "O", 0, 2, vec!["O", "N"]).await?;
+    assert_locations_to_changeset_ids_errors(&ctx, &graph, "O", 0, 3).await?;
+
+    Ok(())
+}
+
+pub async fn test_changeset_ids_to_locations(
+    ctx: CoreContext,
+    storage: Arc<dyn CommitGraphStorageTest>,
+) -> Result<()> {
+    let graph = from_dag(
+        &ctx,
+        r"
+        A-B-C-D-E---L------N----O
+           \         \    /
+            F-G-H     M  /
+             \       /  /
+              I-J---K--/---Q---R
+                 \
+                  \---------P
+        ",
+        storage.clone(),
+    )
+    .await?;
+    storage.flush();
+
+    assert_changeset_ids_to_locations(
+        &ctx,
+        &graph,
+        vec!["O"],
+        vec![
+            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q",
+            "R",
+        ],
+    )
+    .await?;
+    assert_changeset_ids_to_locations(
+        &ctx,
+        &graph,
+        vec!["O", "R"],
+        vec![
+            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q",
+            "R",
+        ],
+    )
+    .await?;
+    assert_changeset_ids_to_locations(
+        &ctx,
+        &graph,
+        vec!["O", "R", "P"],
+        vec![
+            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q",
+            "R",
+        ],
+    )
+    .await?;
+
+    Ok(())
+}
+
+pub async fn test_process_topologically(
+    ctx: CoreContext,
+    storage: Arc<dyn CommitGraphStorageTest>,
+) -> Result<()> {
+    let graph = from_dag(
+        &ctx,
+        r"
+        A--B--C--D--E--F
+         \
+          G--H---I--J--K
+           \    /
+            L--M
+        ",
+        storage.clone(),
+    )
+    .await?;
+    storage.flush();
+
+    assert_process_topologically(
+        &ctx,
+        &graph,
+        vec![
+            "I", "J", "K", "F", "B", "C", "G", "H", "L", "D", "E", "M", "A",
+        ],
+    )
+    .await?;
+    assert_process_topologically(&ctx, &graph, vec!["F", "C", "A", "B", "E", "D"]).await?;
+    assert_process_topologically(&ctx, &graph, vec!["H", "C", "L"]).await?;
+    assert_process_topologically(&ctx, &graph, vec!["B", "C", "J", "I"]).await?;
+    assert_process_topologically(&ctx, &graph, vec![]).await?;
+
+    Ok(())
+}
+
+pub async fn test_minimize_frontier(
+    ctx: CoreContext,
+    storage: Arc<dyn CommitGraphStorageTest>,
+) -> Result<()> {
+    let graph = from_dag(
+        &ctx,
+        r"
+        A-B-C-D-E-L------N
+           \       \    /
+            F-G-H   M  /
+             \     /  /
+              I-J-K--/
+        ",
+        storage.clone(),
+    )
+    .await?;
+    storage.flush();
+
+    assert_minimize_frontier(&ctx, &graph, vec!["L", "M", "N"], vec!["M", "N"]).await?;
+    assert_minimize_frontier(&ctx, &graph, vec!["A", "B", "C", "D"], vec!["D"]).await?;
+    assert_minimize_frontier(&ctx, &graph, vec!["D", "L", "I", "K"], vec!["L", "K"]).await?;
+    assert_minimize_frontier(&ctx, &graph, vec![], vec![]).await?;
+    assert_minimize_frontier(&ctx, &graph, vec!["B", "C", "H"], vec!["C", "H"]).await?;
+    assert_minimize_frontier(
+        &ctx,
+        &graph,
+        vec![
+            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N",
+        ],
+        vec!["H", "M", "N"],
     )
     .await?;
 

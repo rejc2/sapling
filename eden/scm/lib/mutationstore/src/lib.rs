@@ -62,6 +62,7 @@ pub struct MutationStore {
 }
 
 bitflags! {
+    #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
     pub struct DagFlags: u8 {
         /// Include successors.
         const SUCCESSORS = 0b1;
@@ -293,6 +294,7 @@ impl MutationStore {
         Ok(obsoleted.flatten().await?)
     }
 
+    /// Query successors by a predecessor.
     pub fn get_successors_sets(&self, node: Node) -> Result<Vec<Vec<Node>>> {
         let mut successors_sets = Vec::new();
         for entry in self.log.lookup(INDEX_PRED, node)? {
@@ -305,6 +307,7 @@ impl MutationStore {
         Ok(successors_sets)
     }
 
+    /// Query predecessors by a successor. Consider split.
     pub fn get_predecessors(&self, node: Node) -> Result<Vec<Node>> {
         let mut lookup = self
             .log
@@ -327,12 +330,36 @@ impl MutationStore {
         Ok(mutation_entry)
     }
 
+    /// Query predecessor entry by a successor.
     pub fn get(&self, succ: Node) -> Result<Option<MutationEntry>> {
         let mutation_entry = match self.log.lookup(INDEX_SUCC, succ)?.next() {
             Some(entry) => Some(MutationEntry::deserialize(&mut Cursor::new(entry?))?),
             None => None,
         };
         Ok(mutation_entry)
+    }
+
+    /// Get all mutation entries that have one predecessor match or successor match.
+    /// Might return duplicated entries.
+    pub fn get_entries(
+        &self,
+        predecessors: &[Node],
+        successors: &[Node],
+    ) -> Result<Vec<MutationEntry>> {
+        let mut result = Vec::new();
+        for node in predecessors {
+            for entry in self.log.lookup(INDEX_PRED, node)? {
+                let entry = MutationEntry::deserialize(&mut Cursor::new(entry?))?;
+                result.push(entry);
+            }
+        }
+        for node in successors {
+            for entry in self.log.lookup(INDEX_SUCC, node)? {
+                let entry = MutationEntry::deserialize(&mut Cursor::new(entry?))?;
+                result.push(entry);
+            }
+        }
+        Ok(result)
     }
 
     /// Return a connected component that includes `nodes` and represents

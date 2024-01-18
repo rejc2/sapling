@@ -21,11 +21,11 @@
 #include "eden/fs/store/ObjectStore.h"
 #include "eden/fs/store/TreeCache.h"
 #include "eden/fs/store/hg/HgBackingStore.h"
-#include "eden/fs/store/hg/HgImporter.h"
 #include "eden/fs/store/hg/HgQueuedBackingStore.h"
 #include "eden/fs/telemetry/EdenStats.h"
 #include "eden/fs/telemetry/NullStructuredLogger.h"
 #include "eden/fs/testharness/HgRepo.h"
+#include "eden/fs/utils/FaultInjector.h"
 #include "eden/fs/utils/ImmediateFuture.h"
 
 using namespace facebook::eden;
@@ -77,22 +77,22 @@ struct HgBackingStoreTest : TestRepo, ::testing::Test {
   EdenStatsPtr stats{makeRefPtr<EdenStats>()};
   std::shared_ptr<MemoryLocalStore> localStore{
       std::make_shared<MemoryLocalStore>(stats.copy())};
-  HgImporter importer{repo.path(), stats.copy()};
   std::shared_ptr<EdenConfig> rawEdenConfig{EdenConfig::createTestEdenConfig()};
   std::shared_ptr<ReloadableConfig> edenConfig{
       std::make_shared<ReloadableConfig>(
           rawEdenConfig,
           ConfigReloadBehavior::NoReload)};
+  FaultInjector faultInjector{/*enabled=*/false};
   std::shared_ptr<HgQueuedBackingStore> backingStore{
       std::make_shared<HgQueuedBackingStore>(
           localStore,
           stats.copy(),
           std::make_unique<HgBackingStore>(
               repo.path(),
-              &importer,
               edenConfig,
               localStore,
-              stats.copy()),
+              stats.copy(),
+              &faultInjector),
           edenConfig,
           std::make_shared<NullStructuredLogger>(),
           nullptr)};

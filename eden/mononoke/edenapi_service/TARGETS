@@ -7,6 +7,7 @@ rust_library(
     srcs = glob(["src/**/*.rs"]),
     deps = [
         "fbsource//third-party/rust:anyhow",
+        "fbsource//third-party/rust:async-stream",
         "fbsource//third-party/rust:async-trait",
         "fbsource//third-party/rust:base64",
         "fbsource//third-party/rust:bytes",
@@ -53,7 +54,6 @@ rust_library(
         "//eden/mononoke/repo_attributes/repo_identity:repo_identity",
         "//eden/mononoke/server/context:context",
         "//eden/mononoke/server/metadata:metadata",
-        "//eden/mononoke/tunables:tunables",
         "//eden/scm/lib/clientinfo:clientinfo",
         "//eden/scm/lib/edenapi/types:edenapi_types",
         "//eden/scm/lib/types:types",

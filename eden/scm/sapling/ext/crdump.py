@@ -125,8 +125,13 @@ def crdump(ui, repo, *revs, **opts):
                 oldquiet = repo.ui.quiet
                 # Silence any output from commitcloud
                 repo.ui.quiet = True
-                _backedup, notbackedup = commitcloud.backup.backup(repo, revs)
+                if ui.configbool("commitcloud", "usehttpupload"):
+                    _backedup, notbackedup = commitcloud.upload.upload(repo, revs)
+                else:
+                    _backedup, notbackedup = commitcloud.backup.backup(repo, revs)
             except Exception:
+                if ui.configbool("crdump", "commitcloudrequired"):
+                    raise
                 # Don't let commit cloud exceptions block crdump
                 pass
             finally:

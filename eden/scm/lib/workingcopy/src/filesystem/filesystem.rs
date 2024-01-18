@@ -8,16 +8,15 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::SystemTime;
 
 use anyhow::Result;
 use configmodel::Config;
 use configmodel::ConfigExt;
-use io::IO;
 use manifest_tree::TreeManifest;
-use parking_lot::RwLock;
 use pathmatcher::DynMatcher;
 use serde::Serialize;
+use termlogger::TermLogger;
+use types::HgId;
 use types::RepoPathBuf;
 
 #[derive(Debug, Serialize)]
@@ -52,9 +51,8 @@ pub trait FileSystem {
         ignore_dirs: Vec<PathBuf>,
         // include ignored files
         include_ignored: bool,
-        last_write: SystemTime,
         config: &dyn Config,
-        io: &IO,
+        io: &TermLogger,
     ) -> Result<Box<dyn Iterator<Item = Result<PendingChange>>>>;
 
     /// Block until potential "status" or "diff" change.
@@ -73,7 +71,16 @@ pub trait FileSystem {
 
     fn sparse_matcher(
         &self,
-        manifests: &[Arc<RwLock<TreeManifest>>],
+        manifests: &[Arc<TreeManifest>],
         dot_dir: &'static str,
     ) -> Result<Option<DynMatcher>>;
+
+    fn set_parents(
+        &self,
+        _p1: HgId,
+        _p2: Option<HgId>,
+        _parent_tree_hash: Option<HgId>,
+    ) -> Result<()> {
+        Ok(())
+    }
 }

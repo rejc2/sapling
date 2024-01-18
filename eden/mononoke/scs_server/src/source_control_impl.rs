@@ -57,7 +57,6 @@ use source_control::services::source_control_service as service;
 use srserver::RequestContext;
 use stats::prelude::*;
 use time_ext::DurationExt;
-use tunables::tunables;
 
 use crate::commit_id::CommitIdExt;
 use crate::errors;
@@ -183,13 +182,13 @@ impl SourceControlServiceImpl {
         }
 
         let sampling_rate = core::num::NonZeroU64::new(if POPULAR_METHODS.contains(name) {
-            tunables()
-                .scs_popular_methods_sampling_rate()
-                .unwrap_or_default() as u64
+            const FALLBACK_SAMPLING_RATE: u64 = 1000;
+            justknobs::get_as::<u64>("scm/mononoke:scs_popular_methods_sampling_rate", None)
+                .unwrap_or(FALLBACK_SAMPLING_RATE)
         } else {
-            tunables()
-                .scs_other_methods_sampling_rate()
-                .unwrap_or_default() as u64
+            const FALLBACK_SAMPLING_RATE: u64 = 1;
+            justknobs::get_as::<u64>("scm/mononoke:scs_other_methods_sampling_rate", None)
+                .unwrap_or(FALLBACK_SAMPLING_RATE)
         });
         if let Some(sampling_rate) = sampling_rate {
             scuba.sampled(sampling_rate);
@@ -604,7 +603,9 @@ fn log_result<T: AddScubaResponse>(
     scuba.add_future_stats(stats);
     scuba.add("status", status);
     if let Some(error) = error {
-        if !tunables().scs_error_log_sampling().unwrap_or_default() {
+        let scs_error_log_sampling =
+            justknobs::eval("scm/mononoke:scs_error_log_sampling", None, None).unwrap_or(true);
+        if !scs_error_log_sampling {
             scuba.unsampled();
         }
         scuba.add("error", error.as_str());
@@ -939,10 +940,10 @@ impl SourceControlService for SourceControlServiceThriftImpl {
             token: thrift::MegarepoRemergeSourceToken,
         ) -> Result<thrift::MegarepoRemergeSourcePollResponse, service::MegarepoRemergeSourcePollExn>;
 
-        async fn upload_git_object(
+        async fn repo_upload_non_blob_git_object(
             repo: thrift::RepoSpecifier,
-            params: thrift::UploadGitObjectParams,
-        ) -> Result<thrift::UploadGitObjectResponse, service::UploadGitObjectExn>;
+            params: thrift::RepoUploadNonBlobGitObjectParams,
+        ) -> Result<thrift::RepoUploadNonBlobGitObjectResponse, service::RepoUploadNonBlobGitObjectExn>;
 
         async fn create_git_tree(
             repo: thrift::RepoSpecifier,
@@ -958,5 +959,10 @@ impl SourceControlService for SourceControlServiceThriftImpl {
             repo: thrift::RepoSpecifier,
             params: thrift::RepoStackGitBundleStoreParams,
         ) -> Result<thrift::RepoStackGitBundleStoreResponse, service::RepoStackGitBundleStoreExn>;
+
+        async fn repo_upload_packfile_base_item(
+            repo: thrift::RepoSpecifier,
+            params: thrift::RepoUploadPackfileBaseItemParams,
+        ) -> Result<thrift::RepoUploadPackfileBaseItemResponse, service::RepoUploadPackfileBaseItemExn>;
     }
 }

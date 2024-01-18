@@ -8,7 +8,6 @@
 mod print;
 
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use anyhow::Result;
 use clidispatch::fallback;
@@ -124,7 +123,7 @@ pub fn run(ctx: ReqCtx<StatusOpts>, repo: &mut Repo, wc: &mut WorkingCopy) -> Re
     }
 
     let cwd = std::env::current_dir()?;
-    let mut lgr = ctx.logger();
+    let lgr = ctx.logger();
 
     let matcher = match pathmatcher::cli_matcher(
         &ctx.opts.args,
@@ -134,6 +133,7 @@ pub fn run(ctx: ReqCtx<StatusOpts>, repo: &mut Repo, wc: &mut WorkingCopy) -> Re
         wc.vfs().case_sensitive(),
         wc.vfs().root(),
         &cwd,
+        &mut ctx.io().input(),
     ) {
         Ok(matcher) => {
             for warning in matcher.warnings() {
@@ -199,13 +199,7 @@ pub fn run(ctx: ReqCtx<StatusOpts>, repo: &mut Repo, wc: &mut WorkingCopy) -> Re
 
     tracing::debug!(target: "status_info", status_mode="rust");
 
-    let status = wc.status(
-        matcher.clone(),
-        SystemTime::UNIX_EPOCH,
-        ignored,
-        repo.config(),
-        ctx.io(),
-    )?;
+    let status = wc.status(matcher.clone(), ignored, repo.config(), &ctx.logger())?;
 
     // This should be passed the "full" matcher including
     // ignores, sparse, etc., but in practice probably doesn't
@@ -221,7 +215,7 @@ pub fn run(ctx: ReqCtx<StatusOpts>, repo: &mut Repo, wc: &mut WorkingCopy) -> Re
         Box::new(ctx.io().output()),
     )?;
 
-    let mut lgr = ctx.logger();
+    let lgr = ctx.logger();
     for invalid in status.invalid_path() {
         lgr.warn(format!(
             "skipping invalid filename: '{}'",

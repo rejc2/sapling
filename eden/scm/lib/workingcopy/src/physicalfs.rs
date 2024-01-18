@@ -8,21 +8,18 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use anyhow::Result;
 use configmodel::Config;
 use configmodel::ConfigExt;
-use io::IO;
 use manifest_tree::ReadTreeManifest;
 use manifest_tree::TreeManifest;
 use parking_lot::Mutex;
-use parking_lot::RwLock;
 use pathmatcher::DynMatcher;
 use pathmatcher::Matcher;
-use pathmatcher::UnionMatcher;
 use repolock::RepoLocker;
 use storemodel::FileStore;
+use termlogger::TermLogger;
 use treestate::filestate::StateFlags;
 use treestate::tree::VisitorResult;
 use treestate::treestate::TreeState;
@@ -53,6 +50,7 @@ pub struct PhysicalFileSystem {
     pub(crate) store: ArcFileStore,
     pub(crate) treestate: Arc<Mutex<TreeState>>,
     pub(crate) locker: Arc<RepoLocker>,
+    pub(crate) dot_dir: String,
 }
 
 impl PhysicalFileSystem {
@@ -63,12 +61,14 @@ impl PhysicalFileSystem {
         treestate: Arc<Mutex<TreeState>>,
         locker: Arc<RepoLocker>,
     ) -> Result<Self> {
+        let ident = identity::must_sniff_dir(vfs.root())?;
         Ok(PhysicalFileSystem {
             vfs,
             tree_resolver,
             store,
             treestate,
             locker,
+            dot_dir: ident.dot_dir().to_string(),
         })
     }
 }
@@ -80,15 +80,12 @@ impl FileSystem for PhysicalFileSystem {
         ignore_matcher: DynMatcher,
         ignore_dirs: Vec<PathBuf>,
         include_ignored: bool,
-        last_write: SystemTime,
         config: &dyn Config,
-        _io: &IO,
+        _lgr: &TermLogger,
     ) -> Result<Box<dyn Iterator<Item = Result<PendingChange>>>> {
-        let root = self.vfs.root().to_path_buf();
-        let ident = identity::must_sniff_dir(&root)?;
         let walker = Walker::new(
-            root,
-            ident.dot_dir().to_string(),
+            self.vfs.root().to_path_buf(),
+            self.dot_dir.clone(),
             ignore_dirs,
             matcher.clone(),
             false,
@@ -97,7 +94,6 @@ impl FileSystem for PhysicalFileSystem {
             WorkingCopy::current_manifests(&self.treestate.lock(), &self.tree_resolver)?;
         let file_change_detector = FileChangeDetector::new(
             self.vfs.clone(),
-            last_write.try_into()?,
             manifests[0].clone(),
             self.store.clone(),
             config.get_opt("workingcopy", "worker-count")?,
@@ -123,29 +119,15 @@ impl FileSystem for PhysicalFileSystem {
 
     fn sparse_matcher(
         &self,
-        manifests: &[Arc<RwLock<TreeManifest>>],
+        manifests: &[Arc<TreeManifest>],
         dot_dir: &'static str,
     ) -> Result<Option<DynMatcher>> {
-        assert!(!manifests.is_empty());
-
-        let mut sparse_matchers: Vec<DynMatcher> = Vec::new();
-        for manifest in manifests.iter() {
-            if let Some((matcher, _hash)) = crate::sparse::repo_matcher(
-                &self.vfs,
-                &self.vfs.root().join(dot_dir),
-                manifest.read().clone(),
-                self.store.clone(),
-            )? {
-                sparse_matchers.push(matcher);
-            }
-        }
-
-        if sparse_matchers.is_empty() {
-            // Indicates we have no .hg/sparse (i.e. sparse is disabled).
-            Ok(None)
-        } else {
-            Ok(Some(Arc::new(UnionMatcher::new(sparse_matchers))))
-        }
+        crate::sparse::sparse_matcher(
+            &self.vfs,
+            manifests,
+            self.store.clone(),
+            &self.vfs.root().join(dot_dir),
+        )
     }
 }
 
@@ -207,17 +189,27 @@ impl<M: Matcher + Clone + Send + Sync + 'static> PendingChanges<M> {
                     if normalized != path.as_byte_slice() {
                         let normalized = RepoPathBuf::from_utf8(normalized.into_owned())?;
 
-                        if ts_state
-                            .as_ref()
-                            .map_or(false, |s| s.state.intersects(StateFlags::EXIST_NEXT))
-                        {
-                            tracing::trace!(%path, %normalized, "normalizing path based in dirstate");
-                            path = normalized;
-                        } else {
-                            tracing::trace!(%path, %normalized, "not normalizing because !EXIST_NEXT");
-                            // We aren staying separate from normalized, so we mustn't use
-                            // it's tree state entry.
-                            ts_state = ts.get(&path)?.cloned();
+                        match &ts_state {
+                            None => {
+                                // File is not currently tracked. The normalized path can
+                                // diff if the file's path has a directory prefix that
+                                // matches case insensitively with something else in the
+                                // treestate. In that case, we should use the case from
+                                // the treestate to avoid unnecessary directory case
+                                // divergence in the treestate.
+                                tracing::trace!(%path, %normalized, "normalizing untracked file");
+                                path = normalized;
+                            }
+                            Some(s) if s.state.intersects(StateFlags::EXIST_NEXT) => {
+                                tracing::trace!(%path, %normalized, "normalizing path based on dirstate");
+                                path = normalized;
+                            }
+                            Some(_) => {
+                                tracing::trace!(%path, %normalized, "not normalizing because !EXIST_NEXT");
+                                // We are staying separate from the normalized entry, so we mustn't use
+                                // the normalized path's entry.
+                                ts_state = ts.get(&path)?.cloned();
+                            }
                         }
                     }
                     self.seen.insert(path.clone());

@@ -23,6 +23,10 @@ Config::
     graphqlonly = True
     # Automatically pull Dxxx.
     autopull = True
+
+    [fbcodereview]
+    # Whether to automatically hide landed draft commits after "pull".
+    hide-landed-commits = true
 """
 
 import re
@@ -81,6 +85,8 @@ configitem("pullcreatemarkers", "check-local-versions", default=False)
 configitem("phrevset", "autopull", default=True)
 configitem("phrevset", "callsign", default=None)
 configitem("phrevset", "graphqlonly", default=True)
+
+configitem("fbcodereview", "hide-landed-commits", default=True)
 
 DIFFERENTIAL_REGEX: Pattern[str] = re.compile(
     "Differential Revision: http.+?/"  # Line start, URL
@@ -227,7 +233,7 @@ def _fail(repo, diffids: Sized, *msgs) -> List[str]:
 
 @memoize
 def getdiffstatus(repo, *diffid):
-    """Perform a Conduit API call to get the diff status
+    """Perform a GraphQL request to get the diff status
 
     Returns status of the diff"""
 
@@ -392,6 +398,49 @@ def showsyncstatus(repo, ctx, templ, **args) -> Optional[str]:
         return "unsync"
 
 
+@templatekeyword("diffversion")
+def showdiffversion(repo, ctx, templ, **args) -> Optional[str]:
+    """String. Returns which phabricator diff version this commit
+    is in sync with (if any)
+    """
+    if not ctx.mutable():
+        return None
+
+    diffnum = getdiffnum(repo, ctx)
+    if diffnum is None:
+        return None
+
+    populateresponseforphab(repo, diffnum)
+    results = getdiffstatus(repo, diffnum)
+    try:
+        result = results[0]
+        remote = result["hash"]
+        alldiffversions = result["diff_versions"]
+    except (IndexError, KeyError, ValueError, TypeError):
+        # We got no result back, or it did not contain all required fields
+        return "Error"
+
+    if not alldiffversions:
+        return None
+
+    local = ctx.hex()
+    version = alldiffversions.get(local)
+    if version is not None:
+        if local == remote:
+            version += " (latest)"
+        return version
+    for pred in mutation.allpredecessors(repo, [ctx.node()]):
+        predhex = hex(pred)
+        if predhex in alldiffversions:
+            version = alldiffversions[predhex]
+            if predhex == remote:
+                version += " (latest + local changes)"
+            else:
+                version += " (+ local changes)"
+            return version
+    return None
+
+
 def getdiffnum(repo, ctx):
     return diffprops.parserevfromcommitmsg(ctx.description())
 
@@ -539,8 +588,8 @@ def _process_abandonded(
     if checklocalversions:
         draftnodes = draftnodes & difftolocal.get(diffid, set())
     draftnodestr = ", ".join(short(d) for d in sorted(draftnodes))
-    if ui.verbose and draftnodestr:
-        ui.write(_("marking D%s (%s) as abandoned\n") % (diffid, draftnodestr))
+    if draftnodestr:
+        ui.note(_("marking D%s (%s) as abandoned\n") % (diffid, draftnodestr))
     tohide |= set(draftnodes)
     return len(draftnodes)
 
@@ -571,11 +620,10 @@ def _process_landed(
     draftnodestr = ", ".join(
         short(d) for d in sorted(draftnodes)
     )  # making output deterministic
-    if ui.verbose:
-        ui.write(
-            _("marking D%s (%s) as landed as %s\n")
-            % (diffid, draftnodestr, short(publicnode))
-        )
+    ui.note(
+        _("marking D%s (%s) as landed as %s\n")
+        % (diffid, draftnodestr, short(publicnode))
+    )
     for draftnode in draftnodes:
         tohide.add(draftnode)
         mutationentries.append(
@@ -586,21 +634,26 @@ def _process_landed(
 
 
 def _hide_commits(repo, tohide, mutationentries, dryrun):
-    if not tohide:
+    if not tohide or not repo.ui.configbool("fbcodereview", "hide-landed-commits"):
         return
-    if not dryrun:
-        with repo.lock(), repo.transaction("pullcreatemarkers"):
-            # Any commit hash's added to the idmap in the earlier code will have
-            # been dropped by the repo.invalidate() that happens at lock time.
-            # Let's refetch those hashes now. If we don't then the
-            # mutation/obsolete computation will fail to consider this mutation
-            # marker, since it ignores markers for which we don't have the hash
-            # for the mutation target.
-            repo.changelog.filternodes(list(e.succ() for e in mutationentries))
-            if mutation.enabled(repo):
-                mutation.recordentries(repo, mutationentries, skipexisting=False)
-            if visibility.tracking(repo):
-                visibility.remove(repo, tohide)
+
+    repo.ui.note(_("hiding %d commits\n") % (len(tohide)))
+
+    if dryrun:
+        return
+
+    with repo.lock(), repo.transaction("pullcreatemarkers"):
+        # Any commit hash's added to the idmap in the earlier code will have
+        # been dropped by the repo.invalidate() that happens at lock time.
+        # Let's refetch those hashes now. If we don't then the
+        # mutation/obsolete computation will fail to consider this mutation
+        # marker, since it ignores markers for which we don't have the hash
+        # for the mutation target.
+        repo.changelog.filternodes(list(e.succ() for e in mutationentries))
+        if mutation.enabled(repo):
+            mutation.recordentries(repo, mutationentries, skipexisting=False)
+        if visibility.tracking(repo):
+            visibility.remove(repo, tohide)
 
 
 @command("debugmarklanded", commands.dryrunopts)

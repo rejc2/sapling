@@ -7,9 +7,7 @@ cpp_library(
     srcs = ["HgBackingStore.cpp"],
     headers = ["HgBackingStore.h"],
     deps = [
-        ":hg_import_py_error",
         ":hg_import_request",
-        ":hg_importer",
         ":hg_proxy_hash",
         "//eden/fs/config:config",
         "//eden/fs/model:model",
@@ -45,18 +43,6 @@ cpp_library(
 )
 
 cpp_library(
-    name = "hg_import_py_error",
-    srcs = ["HgImportPyError.cpp"],
-    headers = ["HgImportPyError.h"],
-    deps = [
-        "//folly:conv",
-    ],
-    exported_deps = [
-        "//folly:range",
-    ],
-)
-
-cpp_library(
     name = "hg_import_request",
     srcs = ["HgImportRequest.cpp"],
     headers = ["HgImportRequest.h"],
@@ -88,42 +74,6 @@ cpp_library(
         "//folly:try",
         "//folly/container:f14_hash",
         "//folly/futures:core",
-    ],
-)
-
-cpp_library(
-    name = "hg_importer",
-    srcs = ["HgImporter.cpp"],
-    headers = ["HgImporter.h"],
-    deps = [
-        ":hg_import_py_error",
-        ":hg_proxy_hash",
-        "//eden/fs/model:model",
-        "//eden/fs/telemetry:structured_logger",
-        "//folly:conv",
-        "//folly:dynamic",
-        "//folly:file_util",
-        "//folly:utility",
-        "//folly/container:array",
-        "//folly/experimental:env_util",
-        "//folly/futures:core",
-        "//folly/io:iobuf",
-        "//folly/lang:bits",
-        "//folly/logging:logging",
-        "//folly/portability:unistd",
-    ],
-    exported_deps = [
-        "//eden/fs:config",
-        "//eden/fs/model:model-fwd",
-        "//eden/fs/telemetry:telemetry",
-        "//eden/fs/utils:path",
-        "//eden/fs/utils:process",
-        "//folly:range",
-        "//folly/portability:gflags",
-        "//folly/portability:iovec",
-    ],
-    external_deps = [
-        ("boost", None, "boost_filesystem"),
     ],
 )
 
@@ -189,7 +139,6 @@ cpp_library(
         "//eden/fs/telemetry:structured_logger",
         "//eden/fs/utils:ref_ptr",
         "//eden/fs/utils:utils",
-        "//folly:optional",
         "//folly/io:iobuf",
         "//folly/logging:logging",
     ],
@@ -197,7 +146,9 @@ cpp_library(
         "//eden/fs/model:model-fwd",
         "//eden/fs/telemetry:telemetry",
         "//eden/fs/utils:path",
-        "//eden/scm/lib/backingstore/c_api:c_api",
+        "//eden/scm/lib/backingstore:backingstore",  # @manual
+        "//eden/scm/lib/backingstore:backingstore_bridge@header",  # @manual
+        "//eden/scm/lib/backingstore:sapling_native_backingstore-include",
         "//folly:range",
         "//folly/futures:core",
     ],
@@ -212,7 +163,6 @@ cpp_library(
         "//eden/fs/telemetry:telemetry",
         "//eden/fs/utils:throw",
         "//eden/fs/utils:utils",
-        "//folly/futures:core",
         "//folly/logging:logging",
     ],
     exported_deps = [

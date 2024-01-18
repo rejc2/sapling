@@ -12,7 +12,7 @@ use edenapi_types::TreeChildEntry;
 use edenapi_types::TreeEntry;
 use manifest_tree::TreeEntry as ManifestTreeEntry;
 use minibytes::Bytes;
-use storemodel::TreeFormat;
+use storemodel::SerializationFormat;
 use types::HgId;
 use types::Key;
 
@@ -46,10 +46,10 @@ impl LazyTree {
     }
 
     /// The tree content, as would be encoded in the Mercurial blob
-    pub(crate) fn hg_content(&mut self) -> Result<Bytes> {
+    pub(crate) fn hg_content(&self) -> Result<Bytes> {
         use LazyTree::*;
         Ok(match self {
-            IndexedLog(ref mut entry) => entry.content()?,
+            IndexedLog(ref entry) => entry.content()?,
             ContentStore(ref blob, _) => blob.clone(),
             EdenApi(ref entry) => entry.data()?.into(),
         })
@@ -69,11 +69,8 @@ impl LazyTree {
     pub fn manifest_tree_entry(&mut self) -> Result<ManifestTreeEntry> {
         // TODO(meyer): Make manifest-tree crate use minibytes::Bytes
         // Currently revisionstore is only for hg format.
-        let format = TreeFormat::Hg;
-        Ok(ManifestTreeEntry(
-            self.hg_content()?.into_vec().into(),
-            format,
-        ))
+        let format = SerializationFormat::Hg;
+        Ok(ManifestTreeEntry(self.hg_content()?, format))
     }
 
     pub fn aux_data(&self) -> HashMap<HgId, FileAuxData> {

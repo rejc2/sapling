@@ -9,13 +9,12 @@ mod fetch;
 mod metrics;
 mod types;
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use ::types::HgId;
 use ::types::Key;
-use ::types::RepoPathBuf;
 use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::ensure;
@@ -120,7 +119,26 @@ impl Drop for FileStore {
     }
 }
 
+macro_rules! try_local_content {
+    ($id:ident, $e:expr) => {
+        if let Some(store) = $e.as_ref() {
+            if let Some(data) = store.get_local_content_direct($id)? {
+                return Ok(Some(data));
+            }
+        }
+    };
+}
+
 impl FileStore {
+    /// Get the "local content" without going through the heavyweight "fetch" API.
+    pub(crate) fn get_local_content_direct(&self, id: &HgId) -> Result<Option<Bytes>> {
+        try_local_content!(id, self.indexedlog_cache);
+        try_local_content!(id, self.indexedlog_local);
+        try_local_content!(id, self.lfs_cache);
+        try_local_content!(id, self.lfs_local);
+        Ok(None)
+    }
+
     pub fn fetch(
         &self,
         keys: impl Iterator<Item = Key>,
@@ -134,6 +152,7 @@ impl FileStore {
             self,
             found_tx,
             self.lfs_threshold_bytes.is_some(),
+            fetch_mode,
         );
 
         let keys_len = state.pending_len();
@@ -489,18 +508,6 @@ impl LegacyStore for FileStore {
             // Conservatively flushing on drop here, didn't see perf problems and might be needed by Python
             flush_on_drop: true,
         })
-    }
-
-    fn get_logged_fetches(&self) -> HashSet<RepoPathBuf> {
-        let mut seen = self
-            .fetch_logger
-            .as_ref()
-            .map(|fl| fl.take_seen())
-            .unwrap_or_default();
-        if let Some(contentstore) = self.contentstore.as_ref() {
-            seen.extend(contentstore.get_logged_fetches());
-        }
-        seen
     }
 
     fn get_file_content(&self, key: &Key) -> Result<Option<Bytes>> {

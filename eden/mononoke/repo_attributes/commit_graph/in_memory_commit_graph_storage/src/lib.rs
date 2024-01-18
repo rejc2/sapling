@@ -8,12 +8,14 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt::Write;
 
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
 use commit_graph_types::edges::ChangesetEdges;
 use commit_graph_types::storage::CommitGraphStorage;
+use commit_graph_types::storage::FetchedChangesetEdges;
 use commit_graph_types::storage::Prefetch;
 use context::CoreContext;
 use mononoke_types::ChangesetId;
@@ -128,7 +130,7 @@ impl CommitGraphStorage for InMemoryCommitGraphStorage {
         ctx: &CoreContext,
         cs_ids: &[ChangesetId],
         prefetch: Prefetch,
-    ) -> Result<HashMap<ChangesetId, ChangesetEdges>> {
+    ) -> Result<HashMap<ChangesetId, FetchedChangesetEdges>> {
         let edges = self.maybe_fetch_many_edges(ctx, cs_ids, prefetch).await?;
         let missing_changesets: Vec<_> = cs_ids
             .iter()
@@ -140,8 +142,10 @@ impl CommitGraphStorage for InMemoryCommitGraphStorage {
                 "Missing changesets from in-memory commit graph storage: {}",
                 missing_changesets
                     .into_iter()
-                    .map(|cs_id| format!("{}, ", cs_id))
-                    .collect::<String>()
+                    .fold(String::new(), |mut acc, cs_id| {
+                        let _ = write!(acc, "{}, ", cs_id);
+                        acc
+                    })
             ))
         } else {
             Ok(edges)
@@ -153,12 +157,12 @@ impl CommitGraphStorage for InMemoryCommitGraphStorage {
         _ctx: &CoreContext,
         cs_ids: &[ChangesetId],
         _prefetch: Prefetch,
-    ) -> Result<HashMap<ChangesetId, ChangesetEdges>> {
+    ) -> Result<HashMap<ChangesetId, FetchedChangesetEdges>> {
         let mut result = HashMap::with_capacity(cs_ids.len());
         let changesets = self.changesets.read();
         for cs_id in cs_ids {
             if let Some(edges) = changesets.get(cs_id) {
-                result.insert(*cs_id, edges.clone());
+                result.insert(*cs_id, edges.clone().into());
             }
         }
         Ok(result)
@@ -196,31 +200,4 @@ impl CommitGraphStorage for InMemoryCommitGraphStorage {
             .into_iter()
             .collect())
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::future::Future;
-    use std::sync::Arc;
-
-    use commit_graph_testlib::*;
-    use commit_graph_types::storage::CommitGraphStorage;
-    use context::CoreContext;
-    use fbinit::FacebookInit;
-
-    use super::*;
-
-    async fn run_test<Fut>(
-        fb: FacebookInit,
-        test_function: impl FnOnce(CoreContext, Arc<dyn CommitGraphStorage>) -> Fut,
-    ) -> Result<()>
-    where
-        Fut: Future<Output = Result<()>>,
-    {
-        let ctx = CoreContext::test_mock(fb);
-        let storage = Arc::new(InMemoryCommitGraphStorage::new(RepositoryId::new(1)));
-        test_function(ctx, storage).await
-    }
-
-    impl_commit_graph_tests!(run_test);
 }

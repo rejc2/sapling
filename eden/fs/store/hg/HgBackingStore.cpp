@@ -32,9 +32,7 @@
 #include "eden/fs/store/SerializedBlobMetadata.h"
 #include "eden/fs/store/StoreResult.h"
 #include "eden/fs/store/hg/HgDatapackStore.h"
-#include "eden/fs/store/hg/HgImportPyError.h"
 #include "eden/fs/store/hg/HgImportRequest.h"
-#include "eden/fs/store/hg/HgImporter.h"
 #include "eden/fs/store/hg/HgProxyHash.h"
 #include "eden/fs/telemetry/EdenStats.h"
 #include "eden/fs/telemetry/LogEvent.h"
@@ -72,19 +70,6 @@ DEFINE_bool(
 namespace facebook::eden {
 
 namespace {
-// Thread local HgImporter. This is only initialized on HgImporter threads.
-static folly::ThreadLocalPtr<Importer> threadLocalImporter;
-
-/**
- * Checks that the thread local HgImporter is present and returns it.
- */
-Importer& getThreadLocalImporter() {
-  if (!threadLocalImporter) {
-    EDEN_BUG() << "Attempting to get HgImporter from non-HgImporter thread";
-  }
-  return *threadLocalImporter;
-}
-
 ObjectId hashFromRootId(const RootId& root) {
   return ObjectId::fromHex(root.value());
 }
@@ -103,39 +88,8 @@ class HgImporterThreadFactory : public folly::InitThreadFactory {
             std::make_shared<folly::NamedThreadFactory>("HgImporter"),
             [repository = AbsolutePath{repository},
              stats = std::move(stats),
-             logger] {
-              threadLocalImporter.reset(
-                  new HgImporterManager(repository, stats.copy(), logger));
-            },
-            [] {
-              if (folly::kIsWindows) {
-                // TODO(T125334969): On Windows, the ThreadLocalPtr doesn't
-                // appear to release its resources when the thread dies, so
-                // let's do it manually here.
-                threadLocalImporter.reset();
-              }
-            }) {}
-};
-
-/**
- * An inline executor that, while it exists, keeps a thread-local HgImporter
- * instance.
- */
-class HgImporterTestExecutor : public folly::InlineExecutor {
- public:
-  explicit HgImporterTestExecutor(Importer* importer) : importer_{importer} {}
-
-  void add(folly::Func f) override {
-    // This is an InlineExecutor, so we may run on an arbitrary thread.
-    threadLocalImporter.reset(importer_);
-    SCOPE_EXIT {
-      threadLocalImporter.release();
-    };
-    folly::InlineExecutor::add(std::move(f));
-  }
-
- private:
-  Importer* importer_;
+             logger] {},
+            [] {}) {}
 };
 
 HgDatapackStore::Options computeOptions() {
@@ -158,7 +112,8 @@ HgBackingStore::HgBackingStore(
     UnboundedQueueExecutor* serverThreadPool,
     std::shared_ptr<ReloadableConfig> config,
     EdenStatsPtr stats,
-    std::shared_ptr<StructuredLogger> logger)
+    std::shared_ptr<StructuredLogger> logger,
+    FaultInjector* FOLLY_NONNULL faultInjector)
     : localStore_(std::move(localStore)),
       stats_(stats.copy()),
       importThreadPool_(make_unique<folly::CPUThreadPoolExecutor>(
@@ -184,13 +139,12 @@ HgBackingStore::HgBackingStore(
       config_(std::move(config)),
       serverThreadPool_(serverThreadPool),
       logger_(std::move(logger)),
-      repoName_(HgImporter(repository, stats.copy()).getOptions().repoName),
       datapackStore_(
           repository,
           computeOptions(),
           config_,
           logger_,
-          repoName_) {}
+          faultInjector) {}
 
 /**
  * Create an HgBackingStore suitable for use in unit tests. It uses an inline
@@ -199,18 +153,22 @@ HgBackingStore::HgBackingStore(
  */
 HgBackingStore::HgBackingStore(
     AbsolutePathPiece repository,
-    HgImporter* importer,
     std::shared_ptr<ReloadableConfig> config,
     std::shared_ptr<LocalStore> localStore,
-    EdenStatsPtr stats)
+    EdenStatsPtr stats,
+    FaultInjector* FOLLY_NONNULL faultInjector)
     : localStore_{std::move(localStore)},
       stats_{std::move(stats)},
-      importThreadPool_{std::make_unique<HgImporterTestExecutor>(importer)},
+      importThreadPool_{std::make_unique<folly::InlineExecutor>()},
       config_(std::move(config)),
       serverThreadPool_{importThreadPool_.get()},
       logger_(nullptr),
-      repoName_(importer->getOptions().repoName),
-      datapackStore_(repository, testOptions(), config_, logger_, repoName_) {}
+      datapackStore_(
+          repository,
+          testOptions(),
+          config_,
+          logger_,
+          faultInjector) {}
 
 HgBackingStore::~HgBackingStore() = default;
 
@@ -308,7 +266,6 @@ folly::Future<TreePtr> HgBackingStore::fetchTreeFromImporter(
               edenTreeID,
               writeBatch,
               &liveImportTreeWatches = liveImportTreeWatches_] {
-               Importer& importer = getThreadLocalImporter();
                folly::stop_watch<std::chrono::milliseconds> watch;
                RequestMetricsScope queueTracker{&liveImportTreeWatches};
 
@@ -319,36 +276,34 @@ folly::Future<TreePtr> HgBackingStore::fetchTreeFromImporter(
                // longer-running retry requests to avoid starving
                // serverThreadPool_.
 
-               // NOTE: Retrying first, via SaplingNativeBackingStore, will
-               // affect the HgBackingStoreStats::importTreeDuration timer. A
-               // successful retry will also affect the
-               // HgBackingStoreStats::importTreeSuccess and
-               // HgBackingStoreStats::importTreeFailure counters as we will no
-               // longer increment either.
+               // Flush (and refresh) SaplingNativeBackingStore to ensure all
+               // data is written and to rescan pack files or local indexes
+               datapackStore_.flush();
 
-               // Retry using datapackStore (backingstore).
+               // Retry using datapackStore (SaplingNativeBackingStore)
+               auto result = folly::makeFuture<TreePtr>(TreePtr{nullptr});
                auto tree = datapackStore_.getTree(
                    path, manifestNode, edenTreeID, /*context*/ nullptr);
-
-               if (!tree) {
-                 auto serializedTree = importer.fetchTree(path, manifestNode);
-                 stats_->addDuration(
-                     &HgBackingStoreStats::importTreeDuration, watch.elapsed());
-                 if (serializedTree) {
-                   stats_->increment(&HgBackingStoreStats::importTreeSuccess);
-                 } else {
-                   stats_->increment(&HgBackingStoreStats::importTreeFailure);
-                 }
-                 tree = processTree(
-                     std::move(serializedTree),
-                     manifestNode,
-                     edenTreeID,
-                     path,
-                     writeBatch.get());
-               } else {
+               if (tree.hasValue()) {
                  stats_->increment(&HgBackingStoreStats::fetchTreeRetrySuccess);
+                 result = tree.value();
+               } else {
+                 // Record miss and return error
+                 if (logger_) {
+                   logger_->logEvent(FetchMiss{
+                       datapackStore_.getRepoName(),
+                       FetchMiss::Tree,
+                       tree.exception().what().toStdString(),
+                       true});
+                 }
+
+                 stats_->increment(&HgBackingStoreStats::fetchTreeRetryFailure);
+                 auto ew = folly::exception_wrapper{tree.exception()};
+                 result = folly::makeFuture<TreePtr>(std::move(ew));
                }
-               return tree;
+               stats_->addDuration(
+                   &HgBackingStoreStats::importTreeDuration, watch.elapsed());
+               return result;
              })
       .thenError([this](folly::exception_wrapper&& ew) {
         stats_->increment(&HgBackingStoreStats::importTreeError);
@@ -465,37 +420,6 @@ class Manifest {
 
 } // namespace
 
-TreePtr HgBackingStore::processTree(
-    std::unique_ptr<IOBuf> content,
-    const Hash20& manifestNode,
-    const ObjectId& edenTreeID,
-    RelativePathPiece path,
-    LocalStore::WriteBatch* writeBatch) {
-  auto manifest = Manifest(std::move(content));
-  Tree::container entries{kPathMapDefaultCaseSensitive};
-  auto hgObjectIdFormat = config_->getEdenConfig()->hgObjectIdFormat.getValue();
-  const auto filteredPaths =
-      config_->getEdenConfig()->hgFilteredPaths.getValue();
-
-  for (auto& entry : manifest) {
-    XLOG(DBG9) << "tree: " << manifestNode << " " << entry.name
-               << " node: " << entry.node << " flag: " << entry.type;
-
-    auto relPath = path + entry.name;
-    if (filteredPaths->count(relPath) == 0) {
-      auto proxyHash =
-          HgProxyHash::store(relPath, entry.node, hgObjectIdFormat);
-
-      entries.emplace(entry.name, proxyHash, entry.type);
-    }
-  }
-
-  writeBatch->flush();
-
-  return std::make_shared<TreePtr::element_type>(
-      std::move(entries), edenTreeID);
-}
-
 ImmediateFuture<folly::Unit> HgBackingStore::importTreeManifestForRoot(
     const RootId& rootId,
     const Hash20& manifestId,
@@ -568,14 +492,15 @@ folly::Future<TreePtr> HgBackingStore::importTreeManifestImpl(
       break;
   }
 
-  // try edenapi + hgcache first
+  // try SaplingNativeBackingStore first
   folly::stop_watch<std::chrono::milliseconds> watch;
-  if (auto tree = datapackStore_.getTree(
-          path.copy(), manifestNode, objectId, context)) {
+  auto tree =
+      datapackStore_.getTree(path.copy(), manifestNode, objectId, context);
+  if (tree.hasValue()) {
     XLOG(DBG4) << "imported tree node=" << manifestNode << " path=" << path
-               << " from Rust hgcache";
+               << " from SaplingNativeBackingStore";
     stats_->addDuration(&HgBackingStoreStats::fetchTree, watch.elapsed());
-    return folly::makeFuture(std::move(tree));
+    return folly::makeFuture(std::move(tree.value()));
   }
 
   return importTreeImpl(manifestNode, objectId, path);
@@ -598,43 +523,33 @@ SemiFuture<BlobPtr> HgBackingStore::fetchBlobFromHgImporter(
                // longer-running retry requests to avoid starving
                // serverThreadPool_.
 
-               // NOTE: Retyring first, via SaplingNativeBackingStore, will
-               // affect the HgBackingStoreStats::importBlobDuration timer. A
-               // successful retry will also affect the
-               // HgBackingStoreStats::importBlobSuccess and
-               // HgBackingStoreStats::importBlobFailure counters as we will no
-               // longer increment either.
+               // Flush (and refresh) SaplingNativeBackingStore to ensure all
+               // data is written and to rescan pack files or local indexes
+               datapackStore_.flush();
 
-               // Retry using datapackStore (backingstore).
+               // Retry using datapackStore (SaplingNativeBackingStore).
+               auto result = folly::makeFuture<BlobPtr>(BlobPtr{nullptr});
                auto blob = datapackStore_.getBlob(hgInfo, /*localOnly=*/false);
-
-               // NOTE: We will remove HgImporter soon. By continuing to use it
-               // as a secondary fallback for retries we can track the number of
-               // times we fail to fetch a blob after a retrying via
-               // SaplingNativeBackingStore. This data will aid in determining
-               // when we can safely remove HgImporter - when there are few if
-               // any successful imports via HgImporter and all failures are not
-               // retriable.
-
-               if (!blob) {
-                 // Retry using HgImporter.
-                 Importer& importer = getThreadLocalImporter();
-                 blob = importer.importFileContents(
-                     hgInfo.path(), hgInfo.revHash());
-
-                 if (blob) {
-                   stats_->increment(&HgBackingStoreStats::importBlobSuccess);
-                 } else {
-                   stats_->increment(&HgBackingStoreStats::importBlobFailure);
-                 }
-               } else {
+               if (blob.hasValue()) {
                  stats_->increment(&HgBackingStoreStats::fetchBlobRetrySuccess);
-               }
+                 result = blob.value();
+               } else {
+                 // Record miss and return error
+                 if (logger_) {
+                   logger_->logEvent(FetchMiss{
+                       datapackStore_.getRepoName(),
+                       FetchMiss::Blob,
+                       blob.exception().what().toStdString(),
+                       true});
+                 }
 
+                 stats_->increment(&HgBackingStoreStats::fetchBlobRetryFailure);
+                 auto ew = folly::exception_wrapper{blob.exception()};
+                 result = folly::makeFuture<BlobPtr>(std::move(ew));
+               }
                stats_->addDuration(
                    &HgBackingStoreStats::importBlobDuration, watch.elapsed());
-
-               return blob;
+               return result;
              })
       .thenError([this](folly::exception_wrapper&& ew) {
         stats_->increment(&HgBackingStoreStats::importBlobError);

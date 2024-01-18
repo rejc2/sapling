@@ -6,6 +6,7 @@
  */
 
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::num::NonZeroUsize;
 use std::sync::OnceLock;
 
@@ -39,14 +40,21 @@ use crate::TrieMap;
 
 // More detailed documentation about ShardedMapV2 can be found in mononoke_types_thrift.thrift
 
-pub trait ShardedMapV2Value: ThriftConvert + Debug + Clone + Send + Sync + 'static {
+pub trait ShardedMapV2Value: ThriftConvert + Debug + Hash + Clone + Send + Sync + 'static {
     type NodeId: MononokeId<Thrift = thrift::ShardedMapV2NodeId, Value = ShardedMapV2Node<Self>>;
     type Context: IdContext<Id = Self::NodeId>;
     type RollupData: Rollup<Self>;
+
+    /// The weight of a ShardedMapV2 value. In most cases this should always 1 so this is
+    /// the default implementation. Only cases that have high variance between the sizes
+    /// of values should override this.
+    fn weight(&self) -> usize {
+        1
+    }
 }
 
 pub trait Rollup<Value: ShardedMapV2Value>:
-    ThriftConvert + Debug + Clone + PartialEq + Eq + Send + Sync + 'static
+    ThriftConvert + Debug + Hash + Clone + PartialEq + Eq + Send + Sync + 'static
 {
     fn rollup(value: Option<&Value>, child_rollup_data: Vec<Self>) -> Self;
 }
@@ -54,25 +62,28 @@ pub trait Rollup<Value: ShardedMapV2Value>:
 type SmallBinary = SmallVec<[u8; 24]>;
 
 #[derive(Derivative)]
-#[derivative(PartialEq, Debug, Default(bound = ""))]
+#[derivative(PartialEq, Debug, Hash, Default(bound = ""))]
 #[derive(Clone, Eq)]
 pub struct ShardedMapV2Node<Value: ShardedMapV2Value> {
     prefix: SmallBinary,
-    value: Option<Value>,
+    value: Option<Box<Value>>,
     children: SortedVectorMap<u8, LoadableShardedMapV2Node<Value>>,
-    #[derivative(PartialEq = "ignore", Debug = "ignore")]
+    #[derivative(PartialEq = "ignore", Debug = "ignore", Hash = "ignore")]
     weight: OnceLock<usize>,
-    #[derivative(PartialEq = "ignore", Debug = "ignore")]
+    #[derivative(PartialEq = "ignore", Debug = "ignore", Hash = "ignore")]
     size: OnceLock<usize>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Derivative)]
+#[derivative(Default(bound = ""))]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum LoadableShardedMapV2Node<Value: ShardedMapV2Value> {
+    #[derivative(Default)]
     Inlined(ShardedMapV2Node<Value>),
     Stored(ShardedMapV2StoredNode<Value>),
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct ShardedMapV2StoredNode<Value: ShardedMapV2Value> {
     id: Value::NodeId,
     weight: usize,
@@ -147,6 +158,35 @@ impl<Value: ShardedMapV2Value> LoadableShardedMapV2Node<Value> {
         }
     }
 
+    pub async fn expand(
+        self,
+        ctx: &CoreContext,
+        blobstore: &impl Blobstore,
+    ) -> Result<(Option<Value>, Vec<(u8, Self)>)> {
+        let ShardedMapV2Node {
+            prefix,
+            value,
+            children,
+            ..
+        } = self.load(ctx, blobstore).await?;
+
+        match prefix.split_first() {
+            Some((first_byte, rest)) => Ok((
+                None,
+                vec![(
+                    *first_byte,
+                    LoadableShardedMapV2Node::Inlined(ShardedMapV2Node {
+                        prefix: SmallBinary::from(rest),
+                        value,
+                        children,
+                        ..Default::default()
+                    }),
+                )],
+            )),
+            None => Ok((value.map(|v| *v), children.into_iter().collect())),
+        }
+    }
+
     /// Returns the weight of the underlying node.
     fn weight(&self) -> usize {
         match self {
@@ -202,9 +242,9 @@ impl<Value: ShardedMapV2Value> ShardedMapV2Node<Value> {
         }
     }
 
-    fn weight(&self) -> usize {
+    pub fn weight(&self) -> usize {
         *self.weight.get_or_init(|| {
-            self.value.iter().len()
+            self.value.as_ref().map_or(0, |v| v.weight())
                 + self
                     .children
                     .iter()
@@ -228,7 +268,7 @@ impl<Value: ShardedMapV2Value> ShardedMapV2Node<Value> {
 
     pub fn rollup_data(&self) -> Value::RollupData {
         Value::RollupData::rollup(
-            self.value.as_ref(),
+            self.value.as_ref().map(|v| v.as_ref()),
             self.children
                 .iter()
                 .map(|(_byte, child)| child.rollup_data())
@@ -307,7 +347,7 @@ impl<Value: ShardedMapV2Value> ShardedMapV2Node<Value> {
 
         // Assume that all children are not going to be inlined, then the weight of the
         // node will be the number of children plus one if the current node has a value.
-        let weight = &mut (current_value.iter().len() + children.len());
+        let weight = &mut (current_value.as_ref().map_or(0, |v| v.weight()) + children.len());
 
         let children_pre_inlining_futures = children
             .into_iter()
@@ -347,7 +387,7 @@ impl<Value: ShardedMapV2Value> ShardedMapV2Node<Value> {
 
         Ok(LoadableShardedMapV2Node::Inlined(Self {
             prefix: lcp,
-            value: current_value,
+            value: current_value.map(|v| Box::new(v)),
             children,
             weight: OnceLock::from(*weight),
             size: OnceLock::new(),
@@ -377,7 +417,7 @@ impl<Value: ShardedMapV2Value> ShardedMapV2Node<Value> {
         // of the key to find out which child node to recurse onto.
         let (first, rest) = match key.split_first() {
             None => {
-                return Ok(self.value.clone());
+                return Ok(self.value.clone().map(|v| *v));
             }
             Some((first, rest)) => (first, rest),
         };
@@ -463,7 +503,7 @@ impl<Value: ShardedMapV2Value> ShardedMapV2Node<Value> {
                         Ok(value
                             .into_iter()
                             .map(|value| {
-                                OrderedTraversal::Output((accumulated_prefix.clone(), value))
+                                OrderedTraversal::Output((accumulated_prefix.clone(), *value))
                             })
                             .chain(children.into_iter().map(|(byte, child)| {
                                 let mut accumulated_prefix = accumulated_prefix.clone();
@@ -523,7 +563,7 @@ impl<Value: ShardedMapV2Value> ThriftConvert for ShardedMapV2Node<Value> {
             value: t
                 .value
                 .as_ref()
-                .map(ThriftConvert::from_bytes)
+                .map(|v| anyhow::Ok(Box::new(ThriftConvert::from_bytes(v)?)))
                 .transpose()?,
             children: t
                 .children
@@ -538,7 +578,7 @@ impl<Value: ShardedMapV2Value> ThriftConvert for ShardedMapV2Node<Value> {
     fn into_thrift(self) -> thrift::ShardedMapV2Node {
         thrift::ShardedMapV2Node {
             prefix: thrift::small_binary(self.prefix),
-            value: self.value.map(ThriftConvert::into_bytes),
+            value: self.value.map(|v| ThriftConvert::into_bytes(*v)),
             children: self
                 .children
                 .into_iter()
@@ -590,11 +630,11 @@ mod test {
     use crate::private::Blake2;
     use crate::BlobstoreKey;
 
-    #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-    pub struct TestValue(i32);
+    #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+    pub struct TestValue(u32);
 
-    #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-    pub struct MaxTestValue(i32);
+    #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+    pub struct MaxTestValue(u32);
 
     #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Debug, Hash)]
     pub struct ShardedMapV2NodeTestId(Blake2);
@@ -637,10 +677,10 @@ mod test {
         const NAME: &'static str = "TestValue";
         type Thrift = i32;
         fn into_thrift(self) -> Self::Thrift {
-            self.0
+            self.0 as i32
         }
         fn from_thrift(t: Self::Thrift) -> Result<Self> {
-            Ok(TestValue(t))
+            Ok(TestValue(t as u32))
         }
     }
 
@@ -648,14 +688,14 @@ mod test {
         const NAME: &'static str = "MaxTestValue";
         type Thrift = i32;
         fn into_thrift(self) -> Self::Thrift {
-            self.0
+            self.0 as i32
         }
         fn from_thrift(t: Self::Thrift) -> Result<Self> {
-            Ok(MaxTestValue(t))
+            Ok(MaxTestValue(t as u32))
         }
     }
 
-    const EXAMPLE_ENTRIES: &[(&str, i32)] = &[
+    const EXAMPLE_ENTRIES: &[(&str, u32)] = &[
         ("aba", 12),
         ("abacab", 7),
         ("abacaba", 8),
@@ -670,7 +710,7 @@ mod test {
         ("omungal", 4),
     ];
 
-    fn to_test_vec(entries: &[(&str, i32)]) -> Vec<(SmallBinary, TestValue)> {
+    fn to_test_vec(entries: &[(&str, u32)]) -> Vec<(SmallBinary, TestValue)> {
         entries
             .iter()
             .map(|(key, value)| (SmallBinary::from_slice(key.as_bytes()), TestValue(*value)))
@@ -700,7 +740,7 @@ mod test {
     impl MapHelper {
         async fn from_entries_removed_prefix(
             &self,
-            entries: &[(&str, i32)],
+            entries: &[(&str, u32)],
             prefix_len: usize,
         ) -> Result<ShardedMapV2Node<TestValue>> {
             ShardedMapV2Node::from_entries(
@@ -716,14 +756,14 @@ mod test {
 
         async fn from_entries(
             &self,
-            entries: &[(&str, i32)],
+            entries: &[(&str, u32)],
         ) -> Result<ShardedMapV2Node<TestValue>> {
             self.from_entries_removed_prefix(entries, 0).await
         }
 
         async fn from_entries_and_partial_maps(
             &self,
-            entries: &[(&str, Either<i32, ShardedMapV2Node<TestValue>>)],
+            entries: &[(&str, Either<u32, ShardedMapV2Node<TestValue>>)],
         ) -> Result<ShardedMapV2Node<TestValue>> {
             ShardedMapV2Node::from_entries_and_partial_maps(
                 &self.0,
@@ -827,7 +867,8 @@ mod test {
 
             // The minimum weight that this node could have is the number of its children
             // plus one if it has a value.
-            let min_possible_weight = map.value.iter().len() + map.children.len();
+            let min_possible_weight =
+                map.value.as_ref().map_or(0, |v| v.weight()) + map.children.len();
 
             let weight_limit = ShardedMapV2Node::<TestValue>::weight_limit()?;
 
@@ -838,10 +879,11 @@ mod test {
                 bail!("weight of sharded map node exceeds the limit");
             }
 
-            let mut calculated_weight = map.value.iter().len();
+            let mut calculated_weight = map.value.as_ref().map_or(0, |v| v.weight());
             let mut calculated_size = map.value.iter().len();
             let mut calculated_rollup_data = map
                 .value
+                .clone()
                 .map_or(MaxTestValue(0), |value| MaxTestValue(value.0));
 
             for (_next_byte, child) in map.children.iter() {
@@ -909,7 +951,7 @@ mod test {
             node: ShardedMapV2Node<TestValue>,
             weight: usize,
             size: usize,
-            rollup_data: i32,
+            rollup_data: u32,
             blobstore_key: &str,
         ) -> Result<LoadableShardedMapV2Node<TestValue>> {
             let id = node.into_blob().store(&self.0, &self.1).await?;
@@ -926,12 +968,12 @@ mod test {
 
     fn test_node(
         prefix: &str,
-        value: Option<i32>,
+        value: Option<u32>,
         children: Vec<(u8, LoadableShardedMapV2Node<TestValue>)>,
     ) -> ShardedMapV2Node<TestValue> {
         ShardedMapV2Node {
             prefix: SmallBinary::from(prefix.as_bytes()),
-            value: value.map(TestValue),
+            value: value.map(|v| Box::new(TestValue(v))),
             children: children.into_iter().collect(),
             weight: Default::default(),
             size: Default::default(),
@@ -940,7 +982,7 @@ mod test {
 
     fn inlined_node(
         prefix: &str,
-        value: Option<i32>,
+        value: Option<u32>,
         children: Vec<(u8, LoadableShardedMapV2Node<TestValue>)>,
     ) -> LoadableShardedMapV2Node<TestValue> {
         LoadableShardedMapV2Node::Inlined(test_node(prefix, value, children))
@@ -1243,7 +1285,7 @@ mod test {
         impl Testable for TestHelper {
             fn result(&self, gen: &mut Gen) -> TestResult {
                 let res = self.0.block_on(async {
-                    let values: BTreeMap<String, i32> = Arbitrary::arbitrary(gen);
+                    let values: BTreeMap<String, u32> = Arbitrary::arbitrary(gen);
                     let helper = MapHelper(self.1.clone(), self.2.clone());
 
                     let map = helper

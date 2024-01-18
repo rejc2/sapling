@@ -410,7 +410,6 @@ async fn create_bonsai_for_new_repo<'a>(
         None,
         implicit_deletes,
         Default::default(),
-        source_repo_ctx.repo(),
     )?
     // This shouldn't happen because every changeset provided is modifying
     // at least one of the exported files.
@@ -478,7 +477,6 @@ async fn get_export_paths_for_changeset<'a>(
 /// in `f` should NOT be exported.
 ///
 /// In this case, `export_path_infos` would be `[("new", "f", ("old", "D")]`.
-///
 fn build_multi_mover_for_changeset<'a>(
     logger: &'a Logger,
     export_paths: &'a [NonRootMPath],

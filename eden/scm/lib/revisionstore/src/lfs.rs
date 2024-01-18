@@ -48,7 +48,7 @@ use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 use hg_http::http_client;
 use hg_http::http_config;
-use hgstore::strip_metadata;
+use hgstore::strip_hg_file_metadata;
 use http::status::StatusCode;
 use http_client::Encoding;
 use http_client::HttpClient;
@@ -126,7 +126,6 @@ struct LfsPointersStore(Store);
 pub(crate) struct LfsIndexedLogBlobsStore {
     inner: RwLock<Store>,
     chunk_size: usize,
-    skip_hash_on_read: bool,
 }
 
 /// The `LfsBlobsStore` holds the actual blobs. Lookup is done via the content hash (sha256) of the
@@ -303,6 +302,16 @@ impl LfsPointersStore {
         self.entry(key)
     }
 
+    /// Find the pointer corresponding to the passed in `HgId`.
+    fn get_by_hgid(&self, hgid: &HgId) -> Result<Option<LfsPointersEntry>> {
+        let mut iter = self.0.lookup(Self::INDEX_NODE, &hgid)?;
+        let buf = match iter.next() {
+            None => return Ok(None),
+            Some(buf) => buf?,
+        };
+        Self::get_from_slice(buf).map(Some)
+    }
+
     fn add(&mut self, entry: LfsPointersEntry) -> Result<()> {
         self.0.append(serialize(&entry)?)
     }
@@ -357,7 +366,6 @@ impl LfsIndexedLogBlobsStore {
         Ok(Self {
             inner: RwLock::new(LfsIndexedLogBlobsStore::open_options(config)?.shared(path)?),
             chunk_size: LfsIndexedLogBlobsStore::chunk_size(config)?,
-            skip_hash_on_read: config.get_or("lfs", "skiphashonread", || false)?,
         })
     }
 
@@ -418,22 +426,12 @@ impl LfsIndexedLogBlobsStore {
         }
 
         let data: Bytes = res.into();
-        if self.skip_hash_on_read {
-            if data.len() as u64 == total_size || is_redacted(&data) {
-                Ok(Some(data))
-            } else {
-                Ok(None)
-            }
+        // Skip SHA256 hash check on reading. Data integrity is checked by indexedlog xxhash and
+        // length. The SHA256 check can be slow (~90% of data reading time!).
+        if data.len() as u64 == total_size || is_redacted(&data) {
+            Ok(Some(data))
         } else {
-            let apparent_hash = ContentHash::sha256(&data).unwrap_sha256();
-            if &apparent_hash == hash || is_redacted(&data) {
-                Ok(Some(data))
-            } else {
-                if data.len() as u64 == total_size {
-                    tracing::debug!(target: "lfs_read_hash_mismatch", lfs_read_hash_mismatch=&hash.to_hex()[..]);
-                }
-                Ok(None)
-            }
+            Ok(None)
         }
     }
 
@@ -725,6 +723,19 @@ impl LfsStore {
         }
     }
 
+    /// Directly get the local content. Do not ask remote servers.
+    pub(crate) fn get_local_content_direct(&self, id: &HgId) -> Result<Option<Bytes>> {
+        let pointer = match self.pointers.read().get_by_hgid(id)? {
+            None => return Ok(None),
+            Some(v) => v,
+        };
+        let hash = match pointer.content_hashes.get(&ContentHashType::Sha256) {
+            None => return Ok(None),
+            Some(v) => v,
+        };
+        self.blobs.get(hash.sha256_ref(), pointer.size)
+    }
+
     pub fn add_blob(&self, hash: &Sha256, blob: Bytes) -> Result<()> {
         self.blobs.add(hash, blob)
     }
@@ -802,7 +813,7 @@ pub(crate) fn lfs_from_hg_file_blob(
     hgid: HgId,
     raw_content: &Bytes,
 ) -> Result<(LfsPointersEntry, Bytes)> {
-    let (data, copy_from) = strip_metadata(raw_content)?;
+    let (data, copy_from) = strip_hg_file_metadata(raw_content)?;
     let pointer = LfsPointersEntry::from_file_content(hgid, &data, copy_from)?;
     Ok((pointer, data))
 }
@@ -2426,7 +2437,7 @@ mod tests {
             };
 
             let with_metadata = rebuild_metadata(data.clone(), &pointer);
-            let (without, copy) = strip_metadata(&with_metadata)?;
+            let (without, copy) = strip_hg_file_metadata(&with_metadata)?;
 
             Ok(data == without && copy == copy_from)
         }

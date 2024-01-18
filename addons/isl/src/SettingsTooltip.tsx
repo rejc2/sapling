@@ -11,6 +11,10 @@ import type {ReactNode} from 'react';
 
 import {confirmShouldSubmitEnabledAtom} from './ConfirmSubmitStack';
 import {DropdownField, DropdownFields} from './DropdownFields';
+import {useShowKeyboardShortcutsHelp} from './ISLShortcuts';
+import {Kbd} from './Kbd';
+import {RestackBehaviorSetting} from './RestackBehavior';
+import {Subtle} from './Subtle';
 import {Tooltip} from './Tooltip';
 import {codeReviewProvider} from './codeReview/CodeReviewInfo';
 import {showDiffNumberConfig} from './codeReview/DiffBadge';
@@ -19,9 +23,9 @@ import {debugToolsEnabledState} from './debug/DebugToolsState';
 import {t, T} from './i18n';
 import {SetConfigOperation} from './operations/SetConfigOperation';
 import platform from './platform';
-import {renderCompactAtom} from './responsive';
+import {renderCompactAtom, useZoomShortcut, zoomUISettingAtom} from './responsive';
 import {repositoryInfo, useRunOperation} from './serverAPIState';
-import {themeState} from './theme';
+import {useThemeShortcut, themeState} from './theme';
 import {
   VSCodeButton,
   VSCodeCheckbox,
@@ -31,13 +35,23 @@ import {
 } from '@vscode/webview-ui-toolkit/react';
 import {useRecoilState, useRecoilValue} from 'recoil';
 import {Icon} from 'shared/Icon';
+import {KeyCode, Modifier} from 'shared/KeyboardShortcuts';
 import {unwrap} from 'shared/utils';
 
+import './VSCodeDropdown.css';
 import './SettingsTooltip.css';
 
 export function SettingsGearButton() {
+  useThemeShortcut();
+  useZoomShortcut();
+  const showShortcutsHelp = useShowKeyboardShortcutsHelp();
   return (
-    <Tooltip trigger="click" component={() => <SettingsDropdown />} placement="bottom">
+    <Tooltip
+      trigger="click"
+      component={dismiss => (
+        <SettingsDropdown dismiss={dismiss} showShortcutsHelp={showShortcutsHelp} />
+      )}
+      placement="bottom">
       <VSCodeButton appearance="icon" data-testid="settings-gear-button">
         <Icon icon="gear" />
       </VSCodeButton>
@@ -45,13 +59,32 @@ export function SettingsGearButton() {
   );
 }
 
-function SettingsDropdown() {
+function SettingsDropdown({
+  dismiss,
+  showShortcutsHelp,
+}: {
+  dismiss: () => unknown;
+  showShortcutsHelp: () => unknown;
+}) {
   const [theme, setTheme] = useRecoilState(themeState);
   const [repoInfo, setRepoInfo] = useRecoilState(repositoryInfo);
   const runOperation = useRunOperation();
   const [showDiffNumber, setShowDiffNumber] = useRecoilState(showDiffNumberConfig);
   return (
     <DropdownFields title={<T>Settings</T>} icon="gear" data-testid="settings-dropdown">
+      <VSCodeButton
+        appearance="icon"
+        onClick={() => {
+          dismiss();
+          showShortcutsHelp();
+        }}>
+        <T
+          replace={{
+            $shortcut: <Kbd keycode={KeyCode.QuestionMark} modifiers={[Modifier.SHIFT]} />,
+          }}>
+          View Keyboard Shortcuts - $shortcut
+        </T>
+      </VSCodeButton>
       {platform.theme != null ? null : (
         <Setting title={<T>Theme</T>}>
           <VSCodeDropdown
@@ -68,10 +101,23 @@ function SettingsDropdown() {
               <T>Light</T>
             </VSCodeOption>
           </VSCodeDropdown>
+          <div style={{marginTop: 'var(--pad)'}}>
+            <Subtle>
+              <T>Toggle: </T>
+              <Kbd keycode={KeyCode.T} modifiers={[Modifier.ALT]} />
+            </Subtle>
+          </div>
         </Setting>
       )}
+
+      <Setting title={<T>UI Scale</T>}>
+        <ZoomUISetting />
+      </Setting>
       <Setting title={<T>Commits</T>}>
         <RenderCompactSetting />
+      </Setting>
+      <Setting title={<T>Conflicts</T>}>
+        <RestackBehaviorSetting />
       </Setting>
       {/* TODO: enable this setting when there is actually a chocie to be made here. */}
       {/* <Setting
@@ -167,7 +213,7 @@ function RenderCompactSetting() {
     <Tooltip
       title={t(
         'Render commits in the tree more compactly, by reducing spacing and not wrapping Diff info to multiple lines. ' +
-          'May require more horiztonal scrolling.',
+          'May require more horizontal scrolling.',
       )}>
       <VSCodeCheckbox
         checked={value}
@@ -177,6 +223,66 @@ function RenderCompactSetting() {
         <T>Compact Mode</T>
       </VSCodeCheckbox>
     </Tooltip>
+  );
+}
+
+function ZoomUISetting() {
+  const [zoom, setZoom] = useRecoilState(zoomUISettingAtom);
+  function roundToPercent(n: number): number {
+    return Math.round(n * 100) / 100;
+  }
+  return (
+    <div className="zoom-setting">
+      <Tooltip title={t('Decrease UI Zoom')}>
+        <VSCodeButton
+          className="zoom-out"
+          appearance="icon"
+          onClick={() => {
+            setZoom(zoom => roundToPercent(zoom - 0.1));
+          }}>
+          <Icon icon="zoom-out" />
+        </VSCodeButton>
+      </Tooltip>
+      <span>{`${Math.round(100 * zoom)}%`}</span>
+      <Tooltip title={t('Increase UI Zoom')}>
+        <VSCodeButton
+          className="zoom-in"
+          appearance="icon"
+          onClick={() => {
+            setZoom(zoom => roundToPercent(zoom + 0.1));
+          }}>
+          <Icon icon="zoom-in" />
+        </VSCodeButton>
+      </Tooltip>
+      <div style={{width: '20px'}} />
+      <label>
+        <T>Presets:</T>
+      </label>
+      <VSCodeButton
+        className="zoom-80"
+        appearance="icon"
+        onClick={() => {
+          setZoom(0.8);
+        }}>
+        <T>Small</T>
+      </VSCodeButton>
+      <VSCodeButton
+        className="zoom-100"
+        appearance="icon"
+        onClick={() => {
+          setZoom(1.0);
+        }}>
+        <T>Normal</T>
+      </VSCodeButton>
+      <VSCodeButton
+        className="zoom-120"
+        appearance="icon"
+        onClick={() => {
+          setZoom(1.2);
+        }}>
+        <T>Large</T>
+      </VSCodeButton>
+    </div>
   );
 }
 

@@ -42,10 +42,10 @@ from sapling.node import bin
 
 testedwith = "ships-with-fb-ext"
 
-# `unfinishedstates` would be ideal for this except it does not include merge,
-# and doesn't expose the command to run to resume by itself (it instead exposes
-# a help string)
 # Note: order matters (consider rebase v. merge).
+#
+# TODO: Consolidate with state logic in repostate::command_state.
+#       Logic for merge/state2 will need to be tweaked to work here.
 CONFLICTSTATES = [
     [
         "graftstate",
@@ -176,7 +176,7 @@ def _summarizefileconflicts(self, path, workingctx) -> Optional[Dict[str, Any]]:
     if self[path] in ("d", "r", "pr", "pu"):
         return None
 
-    stateentry = self._state[path]
+    stateentry = self._rust_ms.get(path)
     localnode = bin(stateentry[1])
     ancestorfile = stateentry[3]
     ancestornode = bin(stateentry[4])
@@ -201,7 +201,7 @@ def _summarizepathconflicts(self, path) -> Optional[Dict[str, Any]]:
     if self[path] != "pu":
         return None
 
-    stateentry = self._state[path]
+    stateentry = self._rust_ms.get(path)
     frename = stateentry[1]
     forigin = stateentry[2]
     return {

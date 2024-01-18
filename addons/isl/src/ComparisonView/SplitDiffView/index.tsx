@@ -16,12 +16,11 @@ import {Tooltip} from '../../Tooltip';
 import {T} from '../../i18n';
 import platform from '../../platform';
 import {GeneratedStatus} from '../../types';
-import {FileHeader} from './SplitDiffFileHeader';
+import {FileHeader, diffTypeToIconType} from './SplitDiffFileHeader';
 import {SplitDiffTable} from './SplitDiffHunk';
 import {VSCodeButton} from '@vscode/webview-ui-toolkit/react';
 import {useState} from 'react';
 import {Icon} from 'shared/Icon';
-import {DiffType} from 'shared/patch/parse';
 
 export function SplitDiffView({
   ctx,
@@ -48,34 +47,6 @@ export function SplitDiffView({
   const [isContentCollapsed, setIsContentCollapsed] = useState(isGenerated);
 
   const preamble = [];
-  if (patch.type === DiffType.Added) {
-    preamble.push(
-      <FileStatusBanner key="added" color="added">
-        {t('This file was added')}
-      </FileStatusBanner>,
-    );
-  }
-  if (patch.type === DiffType.Removed) {
-    preamble.push(
-      <FileStatusBanner key="deleted" color="removed">
-        {t('This file was removed')}
-      </FileStatusBanner>,
-    );
-  }
-  if (patch.type === DiffType.Renamed) {
-    preamble.push(
-      <FileStatusBanner key="renamed" color="modified">
-        {t('This file was renamed from')} {patch.oldFileName ?? ''}
-      </FileStatusBanner>,
-    );
-  }
-  if (patch.type === DiffType.Copied) {
-    preamble.push(
-      <FileStatusBanner key="copied" color="added">
-        {t('This file was copied from')} {patch.oldFileName ?? ''}
-      </FileStatusBanner>,
-    );
-  }
   if (generatedStatus != null && generatedStatus !== GeneratedStatus.Manual) {
     preamble.push(
       <FileStatusBanner key="generated" color={'modified'}>
@@ -89,6 +60,7 @@ export function SplitDiffView({
     );
   }
 
+  const iconType = diffTypeToIconType(patch.type);
   const fileActions = (
     <>
       {platform.openDiff == null ? null : (
@@ -116,11 +88,13 @@ export function SplitDiffView({
     </>
   );
 
+  const copyFrom = patch.oldFileName === fileName ? undefined : patch.oldFileName;
   return (
     <div className="split-diff-view">
       <FileHeader
         path={fileName}
-        diffType={patch.type}
+        copyFrom={copyFrom}
+        iconType={iconType}
         open={!collapsed}
         onChangeOpen={open => ctx.setCollapsed(!open)}
         fileActions={fileActions}

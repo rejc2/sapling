@@ -8,7 +8,9 @@
 import {globalRecoil} from './AccessGlobalRecoil';
 import {CommitCloudInfo} from './CommitCloud';
 import {DropdownFields} from './DropdownFields';
+import {useCommandEvent} from './ISLShortcuts';
 import {Internal} from './Internal';
+import {Kbd} from './Kbd';
 import {Tooltip} from './Tooltip';
 import {VSCodeCheckbox} from './VSCodeCheckbox';
 import {findCurrentPublicBase} from './getCommitTree';
@@ -19,24 +21,33 @@ import {PullRevOperation} from './operations/PullRevOperation';
 import {RebaseKeepOperation} from './operations/RebaseKeepOperation';
 import {RebaseOperation} from './operations/RebaseOperation';
 import {persistAtomToConfigEffect} from './persistAtomToConfigEffect';
-import {treeWithPreviews} from './previews';
+import {dagWithPreviews} from './previews';
 import {forceFetchCommit, useRunOperation} from './serverAPIState';
 import {succeedableRevset, exactRevset} from './types';
 import {VSCodeButton, VSCodeDivider, VSCodeTextField} from '@vscode/webview-ui-toolkit/react';
 import {useEffect, useRef, useState} from 'react';
 import {atom, useRecoilState} from 'recoil';
 import {Icon} from 'shared/Icon';
+import {KeyCode, Modifier} from 'shared/KeyboardShortcuts';
 import {unwrap} from 'shared/utils';
 
 import './DownloadCommitsMenu.css';
 
 export function DownloadCommitsTooltipButton() {
+  const additionalToggles = useCommandEvent('ToggleDownloadCommitsDropdown');
   return (
     <Tooltip
       trigger="click"
       component={dismiss => <DownloadCommitsTooltip dismiss={dismiss} />}
       placement="bottom"
-      title={t('Download commits')}>
+      additionalToggles={additionalToggles}
+      title={
+        <div>
+          <T replace={{$shortcut: <Kbd modifiers={[Modifier.ALT]} keycode={KeyCode.D} />}}>
+            Download commits ($shortcut)
+          </T>
+        </div>
+      }>
       <VSCodeButton appearance="icon" data-testid="download-commits-tooltip-button">
         <Icon icon="cloud-download" />
       </VSCodeButton>
@@ -113,8 +124,7 @@ function DownloadCommitsTooltip({dismiss}: {dismiss: () => unknown}) {
         rebaseType === 'rebase_ontop'
           ? '.'
           : unwrap(
-              findCurrentPublicBase(globalRecoil().getLoadable(treeWithPreviews).valueMaybe())
-                ?.hash,
+              findCurrentPublicBase(globalRecoil().getLoadable(dagWithPreviews).valueMaybe())?.hash,
             );
       // Use exact revsets for sources, so that you can type a specific hash to download and not be surprised by succession.
       // Only use succession for destination, which may be in flux at the moment you start the download.

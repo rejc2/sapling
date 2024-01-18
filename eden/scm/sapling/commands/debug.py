@@ -1502,39 +1502,9 @@ def debugignore(ui, repo, *files, **opts) -> None:
         # Show all the patterns
         ui.write("%s\n" % repr(ignore))
     else:
-        explain = getattr(ignore, "explain", None)
-
-        # The below code can be removed after hgignore is removed.
-        visitdir = ignore.visitdir
         m = scmutil.match(repo[None], pats=files)
         for f in m.files():
-            # The matcher supports "explain", use it.
-            if explain:
-                explanation = explain(f)
-                if explanation:
-                    ui.write(_x("%s\n") % explain(f))
-                    continue
-
-            nf = util.normpath(f)
-            ignored = None
-            if nf != ".":
-                if ignore(nf):
-                    ignored = nf
-                else:
-                    for p in util.finddirs(nf):
-                        if visitdir(p) == "all":
-                            ignored = p
-                            break
-            if ignored:
-                if ignored == nf:
-                    ui.write(_("%s is ignored\n") % m.uipath(f))
-                else:
-                    ui.write(
-                        _("%s is ignored because of containing folder %s\n")
-                        % (m.uipath(f), ignored)
-                    )
-            else:
-                ui.write(_("%s is not ignored\n") % m.uipath(f))
+            ui.write(_x("%s\n") % ignore.explain(f))
 
 
 @command(
@@ -1549,12 +1519,6 @@ def debugindex(ui, repo, file_=None, **opts) -> None:
     format = opts.get("format", 0)
     if format not in (0, 1):
         raise error.Abort(_("unknown format %d") % format)
-
-    generaldelta = r.version & revlog.FLAG_GENERALDELTA
-    if generaldelta:
-        basehdr = " delta"
-    else:
-        basehdr = "  base"
 
     if ui.debugflag:
         shortfn = hex
@@ -1580,10 +1544,6 @@ def debugindex(ui, repo, file_=None, **opts) -> None:
 
     for i in r:
         node = r.node(i)
-        if generaldelta:
-            base = r.deltaparent(i)
-        else:
-            base = r.chainbase(i)
         if format == 0:
             try:
                 pp = r.parents(node)
@@ -2147,91 +2107,6 @@ def debugmakepublic(ui, repo, *revs, **opts) -> None:
         if delete:
             raise error.Abort(_("--delete only supports narrow-heads"))
         phase(ui, repo, rev=revspec, public=True, force=True, draft=False, secret=False)
-
-
-@command("debugmergestate", [], "")
-def debugmergestate(ui, repo, *args) -> None:
-    """print merge state"""
-
-    def _hashornull(h):
-        if h == nullhex:
-            return "null"
-        else:
-            return h
-
-    def printrecords():
-        for rtype, record in records:
-            # pretty print some record types
-            if rtype == "L":
-                ui.write(_x("local: %s\n") % record)
-            elif rtype == "O":
-                ui.write(_x("other: %s\n") % record)
-            elif rtype == "m":
-                driver, mdstate = record.split("\0", 1)
-                ui.write(_x('merge driver: %s (state "%s")\n') % (driver, mdstate))
-            elif rtype in "FDC":
-                r = record.split("\0")
-                f, state, hash, lfile, afile, anode, ofile = r[0:7]
-                onode, flags = r[7:9]
-                ui.write(
-                    _x('file: %s (record type "%s", state "%s", hash %s)\n')
-                    % (f, rtype, state, _hashornull(hash))
-                )
-                ui.write(_x('  local path: %s (flags "%s")\n') % (lfile, flags))
-                ui.write(
-                    _x("  ancestor path: %s (node %s)\n") % (afile, _hashornull(anode))
-                )
-                ui.write(
-                    _x("  other path: %s (node %s)\n") % (ofile, _hashornull(onode))
-                )
-            elif rtype == "f":
-                filename, rawextras = record.split("\0", 1)
-                extras = rawextras.split("\0")
-                i = 0
-                extrastrings = []
-                while i < len(extras):
-                    extrastrings.append(_x("%s = %s") % (extras[i], extras[i + 1]))
-                    i += 2
-
-                ui.write(
-                    _x("file extras: %s (%s)\n") % (filename, ", ".join(extrastrings))
-                )
-            elif rtype == "l":
-                labels = record.split("\0", 2)
-                labels = [l for l in labels if len(l) > 0]
-                ui.write(_x("labels:\n"))
-                ui.write(_x("  local: %s\n" % labels[0]))
-                ui.write(_x("  other: %s\n" % labels[1]))
-                if len(labels) > 2:
-                    ui.write(_x("  base:  %s\n" % labels[2]))
-            else:
-                ui.write(
-                    _x("unrecognized entry: %s\t%s\n")
-                    % (rtype, record.replace("\0", "\t"))
-                )
-
-    # Avoid mergestate.read() since it may raise an exception for unsupported
-    # merge state records. We shouldn't be doing this, but this is OK since this
-    # command is pretty low-level.
-    ms = mergemod.mergestate(repo)
-
-    # sort so that reasonable information is on top
-    records = ms._readrecords()
-    order = "LOml"
-
-    def key(r):
-        idx = order.find(r[0])
-        if idx == -1:
-            return (1, r[1])
-        else:
-            return (0, idx)
-
-    records.sort(key=key)
-
-    if not records:
-        ui.write(_x("no merge state found\n"))
-    else:
-        printrecords()
 
 
 @command(
@@ -3817,38 +3692,6 @@ def debugthrowrustbail(ui, _repo) -> None:
 def debugthrowexception(ui, _repo):
     """cause an intentional exception to be raised in the command"""
     raise error.IntentionalError("intentional failure in debugthrowexception")
-
-
-@command(
-    "debugscmstore",
-    [
-        ("", "mode", "", _("entity type to fetch, 'file' or 'tree'")),
-        (
-            "",
-            "path",
-            "",
-            _("input file containing keys to fetch (hgid,path separated by newlines)"),
-        ),
-        ("", "python", False, _("signal rust command dispatch to fall back to python")),
-        (
-            "",
-            "local",
-            False,
-            _("only check for the entity locally, don't make a remote request"),
-        ),
-    ],
-)
-def debugscmstore(
-    ui, repo, mode=None, path=None, python: bool = False, local: bool = False
-) -> None:
-    if mode not in ["file", "tree"]:
-        raise error.Abort("mode must be one of 'file' and 'tree'")
-    if path is None:
-        raise error.Abort("path is required")
-    if mode == "tree":
-        repo.manifestlog.treescmstore.test_fetch(path, local)
-    if mode == "file":
-        repo.fileslog.filestore.test_fetch(path, local)
 
 
 @command("debugrevlogclone", [], _("source"))

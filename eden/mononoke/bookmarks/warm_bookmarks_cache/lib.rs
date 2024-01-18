@@ -18,6 +18,7 @@ use anyhow::Context as _;
 use anyhow::Error;
 use async_trait::async_trait;
 use basename_suffix_skeleton_manifest::RootBasenameSuffixSkeletonManifest;
+use basename_suffix_skeleton_manifest_v3::RootBssmV3DirectoryId;
 use blame::RootBlameV2;
 use bookmarks::ArcBookmarkUpdateLog;
 use bookmarks::ArcBookmarks;
@@ -74,7 +75,6 @@ use slog::warn;
 use stats::prelude::*;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
-use tunables::tunables;
 use unodes::RootUnodeManifestId;
 
 mod warmers;
@@ -256,6 +256,13 @@ impl WarmBookmarksCacheBuilder {
             self.warmers.push(create_derived_data_warmer::<
                 RootBasenameSuffixSkeletonManifest,
             >(&self.ctx, repo_derived_data.clone()));
+        }
+        if types.contains(RootBssmV3DirectoryId::NAME) {
+            self.warmers
+                .push(create_derived_data_warmer::<RootBssmV3DirectoryId>(
+                    &self.ctx,
+                    repo_derived_data.clone(),
+                ));
         }
         if types.contains(TreeHandle::NAME) {
             self.warmers.push(create_derived_data_warmer::<TreeHandle>(
@@ -914,19 +921,19 @@ impl BookmarksCoordinator {
                         notify_sync_complete.notify_waiters();
                     }
 
-                    let delay_ms = match tunables()
-                        .warm_bookmark_cache_poll_interval_ms()
-                        .unwrap_or_default()
-                        .try_into()
-                    {
-                        Ok(duration) if duration > 0 => duration,
-                        _ => 1000,
-                    };
+                    const FALLBACK_WBC_POLL_INTERVAL_MS: u64 = 5000;
+                    let delay = Duration::from_millis(
+                        justknobs::get_as::<u64>(
+                            "scm/mononoke:warm_bookmark_cache_poll_interval_ms",
+                            None,
+                        )
+                        .unwrap_or(FALLBACK_WBC_POLL_INTERVAL_MS),
+                    );
 
                     // Receiving a sync notification interrupts sleep and forces
                     // waiting for all updaters to finish in the next iteration
                     let notified = notify_sync_start.notified();
-                    let sleep = tokio::time::sleep(Duration::from_millis(delay_ms));
+                    let sleep = tokio::time::sleep(delay);
 
                     futures::pin_mut!(notified, sleep);
 

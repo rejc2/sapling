@@ -98,8 +98,8 @@
 //!
 //! Main interface to read data out of a store. For copied file data, the returned
 //! data will contain a copy-from header which may need to be stripped with
-//! `strip_metadata` to obtain the plain blob. Must implement the `LocalStore`
-//! trait. Metadata can be also separated with separate_metadata that returns raw metadata blob.
+//! `strip_hg_file_metadata` to obtain the plain blob. Must implement the `LocalStore`
+//! trait. Metadata can be also separated with split_hg_file_metadata that returns raw metadata blob.
 //!
 //! ## `ContentDataStore`
 //!
@@ -120,7 +120,6 @@
 //! implemented by both the ssh and the edenapi remote store.
 //!
 //! The produced stores must implement the `HgIdDataStore` trait.
-//!
 
 mod contentstore;
 mod dataindex;

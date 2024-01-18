@@ -12,6 +12,10 @@ import type {
   Disposable,
   Result,
   OperationCommandProgressReporter,
+  LandInfo,
+  LandConfirmationInfo,
+  CodeReviewProviderSpecificClientToServerMessages,
+  ClientToServerMessage,
 } from 'isl/src/types';
 
 type DiffSummaries = Map<DiffId, DiffSummary>;
@@ -47,4 +51,13 @@ export interface CodeReviewProvider {
 
   /** Convert usernames/emails to avatar URIs */
   fetchAvatars?(authors: Array<string>): Promise<Map<string, string>>;
+
+  renderMarkup?: (markup: string) => Promise<string>;
+
+  fetchLandInfo?(topOfStack: DiffId): Promise<LandInfo>;
+  confirmLand?(landConfirmationInfo: NonNullable<LandConfirmationInfo>): Promise<Result<undefined>>;
+
+  handleClientToServerMessage?(
+    message: ClientToServerMessage,
+  ): message is CodeReviewProviderSpecificClientToServerMessages;
 }

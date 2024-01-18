@@ -18,6 +18,7 @@ use async_runtime::block_on;
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
 use cpython::*;
+use cpython_ext::convert::Serde;
 use cpython_ext::PyNone;
 use cpython_ext::PyPath;
 use cpython_ext::ResultPyErrExt;
@@ -216,6 +217,8 @@ py_class!(class mutationstore |py| {
         Ok(entry.is_some())
     }
 
+    /// get(succ) -> Optional[mutationentry].
+    /// Query predecessor entry by a successor.
     def get(&self, succ: &PyBytes) -> PyResult<Option<mutationentry>> {
         let succ = Node::from_slice(succ.data(py)).map_pyerr(py)?;
         let ms = self.mut_store(py).borrow();
@@ -238,6 +241,7 @@ py_class!(class mutationstore |py| {
         Ok(succ)
     }
 
+    /// Query successors by a predecessor.
     def getsuccessorssets(&self, node: &PyBytes) -> PyResult<Vec<Vec<PyBytes>>> {
         let node = Node::from_slice(node.data(py)).map_pyerr(py)?;
         let ms = self.mut_store(py).borrow();
@@ -251,6 +255,17 @@ py_class!(class mutationstore |py| {
             pyssets.push(pysset);
         }
         Ok(pyssets)
+    }
+
+    /// get_entries(predecessors, successors) -> List[mutationentry].
+    ///
+    /// Get all mutation entries that have one predecessor match or successor match.
+    /// Might return duplicated entries.
+    def get_entries(&self, predecessors: Serde<Vec<Node>>, successors: Serde<Vec<Node>>) -> PyResult<Vec<mutationentry>> {
+        let ms = self.mut_store(py).borrow();
+        let entries = ms.get_entries(&predecessors.0, &successors.0).map_pyerr(py)?;
+        let entries = entries.into_iter().map(|e| mutationentry::create_instance(py, e)).collect::<PyResult<Vec<mutationentry>>>()?;
+        Ok(entries)
     }
 
     /// Figure out connected components related to specified nodes.

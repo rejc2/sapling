@@ -191,6 +191,7 @@ class ui:
             self.fout = src.fout
             self.ferr = src.ferr
             self.fin = src.fin
+            self.io = src.io
             self.pageractive = src.pageractive
             self._disablepager = src._disablepager
             self._tweaked = src._tweaked
@@ -219,10 +220,11 @@ class ui:
         else:
             self._uiconfig = uiconfig.uiconfig(rcfg=rcfg)
 
-            main_io = util.get_main_io()
-            self.fout = util.refcell(main_io.output())
-            self.ferr = util.refcell(main_io.error())
-            self.fin = util.refcell(main_io.input())
+            io = util.get_main_io()
+            self.fout = util.refcell(io.output())
+            self.ferr = util.refcell(io.error())
+            self.fin = util.refcell(io.input())
+            self.io = io
             self.pageractive = False
             self._disablepager = False
             self._tweaked = False
@@ -1681,6 +1683,10 @@ class ui:
           env_vars = PATH,SHELL
         """
 
+        if event == "metrics":
+            # This is sampled in Rust.
+            return
+
         category = bindings.hgmetrics.samplingcategory(event)
         if category is None:
             return
@@ -1695,9 +1701,7 @@ class ui:
             }
 
         opts["metrics_type"] = event
-        if msg and event != "metrics":
-            # do not keep message for "metrics", which only wants
-            # to log key/value dict.
+        if msg:
             if len(msg) == 1:
                 # don't try to format if there is only one item.
                 opts["msg"] = msg[0]
