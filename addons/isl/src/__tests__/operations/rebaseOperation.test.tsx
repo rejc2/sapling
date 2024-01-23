@@ -8,7 +8,7 @@
 import type {Hash} from '../../types';
 
 import App from '../../App';
-import {Dag} from '../../dag/dag';
+import {Dag, DagCommitInfo} from '../../dag/dag';
 import {RebaseOperation} from '../../operations/RebaseOperation';
 import {CommitPreview} from '../../previews';
 import {ignoreRTL} from '../../testQueries';
@@ -21,6 +21,7 @@ import {
   TEST_COMMIT_HISTORY,
   dragAndDropCommits,
   simulateUncommittedChangedFiles,
+  COMMIT,
 } from '../../testUtils';
 import {CommandRunner, succeedableRevset} from '../../types';
 import {fireEvent, render, screen, waitFor, within} from '@testing-library/react';
@@ -31,6 +32,12 @@ import {act} from 'react-dom/test-utils';
 jest.mock('../../MessageBus');
 
 describe('rebase operation', () => {
+  // Extend with an obsoleted commit.
+  const testHistory = TEST_COMMIT_HISTORY.concat([
+    COMMIT('ff1', 'Commit FF1 (obsoleted)', 'z', {successorInfo: {hash: 'ff2', type: 'amend'}}),
+    COMMIT('ff2', 'Commit FF2', 'z'),
+  ]);
+
   beforeEach(() => {
     jest.useFakeTimers();
     resetTestMessages();
@@ -43,7 +50,7 @@ describe('rebase operation', () => {
         subscriptionID: expect.anything(),
       });
       simulateCommits({
-        value: TEST_COMMIT_HISTORY,
+        value: testHistory,
       });
     });
   });
@@ -166,6 +173,13 @@ describe('rebase operation', () => {
     expect(screen.getByText('Cannot drag to rebase with uncommitted changes.')).toBeInTheDocument();
   });
 
+  it('cannot drag obsoleted commits', () => {
+    dragAndDropCommits('ff1', 'e');
+
+    expect(screen.queryByText('Run Rebase')).not.toBeInTheDocument();
+    expect(screen.getByText('Cannot rebase obsoleted commits.')).toBeInTheDocument();
+  });
+
   it('can drag if uncommitted changes are optimistically removed', async () => {
     act(() => simulateUncommittedChangedFiles({value: [{path: 'file1.txt', status: 'M'}]}));
     act(() => {
@@ -189,7 +203,7 @@ describe('rebase operation', () => {
   });
 
   it('handles partial rebase in optimistic dag', () => {
-    const dag = new Dag().add(TEST_COMMIT_HISTORY);
+    const dag = new Dag().add(TEST_COMMIT_HISTORY.map(c => DagCommitInfo.fromCommitInfo(c)));
 
     const type = 'succeedable-revset';
     // Rebase a-b-c-d-e to z

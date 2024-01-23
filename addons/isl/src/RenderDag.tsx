@@ -6,12 +6,13 @@
  */
 
 import type {Dag, DagCommitInfo} from './dag/dag';
+import type {ExtendedGraphRow} from './dag/render';
 import type {HashSet} from './dag/set';
 
 import {AnimatedReorderGroup} from './AnimatedReorderGroup';
 import {AvatarPattern} from './Avatar';
 import {InlineBadge} from './InlineBadge';
-import {LinkLine, NodeLine, PadLine, Renderer} from './dag/render';
+import {LinkLine, NodeLine, PadLine} from './dag/render';
 import deepEqual from 'fast-deep-equal';
 import React from 'react';
 
@@ -26,27 +27,49 @@ export type RenderDagProps = {
   /** If set, render a subset. Otherwise, all commits are rendered. */
   subset?: HashSet;
 
-  /** How to render a commit. */
+  /** Should "anonymous" parents (rendered as "~" in CLI) be ignored? */
+  ignoreAnonymousParents?: boolean;
+} & React.HTMLAttributes<HTMLDivElement> &
+  RenderFunctionProps;
+
+type RenderFunctionProps = {
+  /**
+   * How to render a commit.
+   *
+   * To avoid re-rendering, pass a "static" (ex. not a closure) function,
+   * then use hooks (ex. recoil selector) to trigger re-rendering inside
+   * the static function.
+   */
   renderCommit?: (info: DagCommitInfo) => JSX.Element;
+
+  /**
+   * How to render extra stuff below a commit. Default: nothing.
+   *
+   * To avoid re-rendering, pass a "static" (ex. not a closure) function,
+   * then use hooks (ex. recoil selector) to trigger re-rendering inside
+   * the static function.
+   */
+  renderCommitExtras?: (info: DagCommitInfo, row: ExtendedGraphRow) => null | JSX.Element;
 
   /**
    * How to render a "glyph" (ex. "o", "x", "@").
    * This should return an SVG element.
    * The SVG viewbox is (-10,-10) to (10,10) (20px * 20px).
    * Default: defaultRenderGlyphSvg, draw a circle.
+   *
+   * To avoid re-rendering, pass a "static" (ex. not a closure) function,
+   * then use hooks (ex. recoil selector) to trigger re-rendering inside
+   * the static function.
    */
   renderGlyph?: (info: DagCommitInfo) => RenderGlyphResult;
-
-  /** Should "anonymous" parents (rendered as "~" in CLI) be ignored? */
-  ignoreAnonymousParents?: boolean;
-} & React.HTMLAttributes<HTMLDivElement>;
+};
 
 /**
  * - 'inside-tile': Inside a <Tile />. Must be a svg element. Size decided by <Tile />.
  * - 'replace-tile': Replace the <Tile /> with the rendered result. Size decided by the
  *   rendered result. Can be other elements not just svg. Useful for "You are here".
  */
-type RenderGlyphResult = ['inside-tile', JSX.Element] | ['replace-tile', JSX.Element];
+export type RenderGlyphResult = ['inside-tile', JSX.Element] | ['replace-tile', JSX.Element];
 
 /**
  * Renders a dag. Calculate and render the edges, aka. the left side:
@@ -78,188 +101,289 @@ type RenderGlyphResult = ['inside-tile', JSX.Element] | ['replace-tile', JSX.Ele
  * a blue badge instead.
  *
  * See `DagListProps` for customization options.
+ *
+ * This component is intended to be used in multiple places,
+ * ex. the main dag, "mutation dag", context-menu sub-dag, etc.
+ * So it should avoid depending on Recoil states.
  */
 export function RenderDag(props: RenderDagProps) {
   const {
     dag,
     subset,
     renderCommit,
+    renderCommitExtras,
     renderGlyph = defaultRenderGlyph,
     className,
     ...restProps
   } = props;
 
-  const renderer = new Renderer();
-  const renderedRows: Array<JSX.Element> = [];
-  for (const [type, item] of dag.dagWalkerForRendering(subset)) {
-    if (type === 'reserve') {
-      renderer.reserve(item);
-    } else {
-      const [info, typedParents] = item;
-      const forceLastColumn = info.isYouAreHere;
-      const row = renderer.nextRow(info.hash, typedParents, {forceLastColumn});
-      // Layout per row:
-      //
-      //   +-node--+ +-commit--------------+
-      //   | o     | | F                   |
-      //   +-pad1--+ | very long message 1 |
-      //   | │     | |                     |
-      //   | │     | | very long message 2 |
-      //   +-link--+ | very long message 3 |
-      //   | ├─┬─╮ | |                     |
-      //   +-term--+ | very long message 4 |
-      //   | │ │ │ | |                     |
-      //   | │ │ ~ | |                     |
-      //   +-pad2--+ |                     |
-      //   | │ │   | |                     |
-      //   +-------+ +---------------------+
-      //
-      // - layout done in flexbox.
-      // - left side: node, pad1, link, term, pad share a same width.
-      // - pad1 has flex-grow (to match tall right-side) and min-height.
-      //   pad1 is derived from node line and does not have dashed lines.
-      //   (original renderer does not render pad1)
-      // - link is optional (decided by renderer).
-      // - term is optional (decided by renderer).
-      // - pad2 is only drawn if there are dashed lines.
-      //
-      // Example of "You Are here" special case:
-      //
-      //              +---+ +-glyph---------------+
-      //  node line   | │ | + (You are here )     | (glyph has dynamic size)
-      //              +---+ +---------------------+
-      //              +---+ +---+  +- commit body -------------------+
-      //  pad line    | │ | | │ |  | no longer aligns with node line |
-      //              +---+ +---+  +---------------------------------+
-      //  other lines ...
+  const rows = dag.renderToRows(subset);
+  const authors = new Set<string>(
+    rows.flatMap(([info]) => (info.phase === 'draft' && info.author.length > 0 ? info.author : [])),
+  );
 
-      // Also check fbcode/eden/website/src/components/RenderDag.js
-      const {linkLine, termLine, nodeLine, topPadLines, padLines, isHead, isRoot} = row;
-
-      // By default, the glyph "o" is rendered in a fixed size "Tile".
-      // With 'replace-tile' the glyph can define its own rendered element
-      // (of dynamic size).
-      //
-      // 'replace-tile' also moves the "commit" element to the right of
-      // pad line, not node line.
-      const [glyphPosition, glyph] = renderGlyph(info);
-      const isIrregular = glyphPosition === 'replace-tile';
-      // isYouAreHere practically matches isIrregular but we treat them as
-      // separate concepts. isYouAreHere affects colors, and isIrregular
-      // affects layout.
-      const color = info.isYouAreHere ? YOU_ARE_HERE_COLOR : undefined;
-      const nodeLinePart = (
-        <div className="render-dag-row-left-side-line node-line">
-          {nodeLine.map((l, i) => {
-            if (isIrregular && l === NodeLine.Node) {
-              return <React.Fragment key={i}>{glyph}</React.Fragment>;
-            }
-            // Need stretchY if "glyph" is not "Tile" and has a dynamic height.
-            return (
-              <NodeTile
-                key={i}
-                line={l}
-                isHead={isHead}
-                isRoot={isRoot}
-                aboveNodeColor={info.isHead ? YOU_ARE_HERE_COLOR : undefined}
-                stretchY={isIrregular && l != NodeLine.Node}
-                scaleY={isIrregular ? 0.5 : 1}
-                glyph={glyph}
-              />
-            );
-          })}
-        </div>
-      );
-
-      const padLine1Part = (
-        <div className="render-dag-row-left-side-line pad-line1">
-          {topPadLines.map((l, i) => {
-            // scaleY decides the min-height. It might be a config option.
-            const c = i === row.nodeColumn ? color : undefined;
-            return <PadTile key={i} line={l} scaleY={0.5} stretchY={true} color={c} />;
-          })}
-        </div>
-      );
-
-      const linkLinePart = linkLine && (
-        <div className="render-dag-row-left-side-line link-line">
-          {linkLine.map((l, i) => (
-            <LinkTile key={i} line={l} color={color} colorLine={row.linkLineFromNode?.[i]} />
-          ))}
-        </div>
-      );
-
-      const termLinePart = termLine && (
-        <>
-          <div className="render-dag-row-left-side-line term-line-pad">
-            {termLine.map((isTerm, i) => {
-              const line = isTerm ? PadLine.Ancestor : padLines.at(i) ?? PadLine.Blank;
-              return <PadTile key={i} line={line} />;
-            })}
-          </div>
-          <div className="render-dag-row-left-side-line term-line-term">
-            {termLine.map((isTerm, i) => {
-              const line = padLines.at(i) ?? PadLine.Blank;
-              return isTerm ? <TermTile key={i} /> : <PadTile key={i} line={line} />;
-            })}
-          </div>
-        </>
-      );
-
-      const hasAncestorPad = padLines.some(l => l === PadLine.Ancestor);
-      const padLine2Part = hasAncestorPad && (
-        <div className="render-dag-row-left-side-line pad-line2">
-          {padLines.map((l, i) => (
-            <PadTile key={i} line={l} color={row.parentColumns.includes(i) ? color : undefined} />
-          ))}
-        </div>
-      );
-
-      const leftSide = (
-        <div className="render-dag-row-left-side">
-          {!isIrregular && nodeLinePart}
-          {padLine1Part}
-          {linkLinePart}
-          {termLinePart}
-          {padLine2Part}
-        </div>
-      );
-
-      // isIrregular=true      isIrregular=false
-      //
-      //   2 rows                1 row
-      //   +-left---------+      +-left-+-right---+
-      //   | node (glyph) |      | node | ...     |
-      //   +--------------+      | pad  |         |
-      //   +-left-+-right---+    | ...  |         |
-      //   | pad  | ...     |    +------+---------+
-      //   | ...  |         |
-      //   +------+---------+
-      if (isIrregular) {
-        renderedRows.push(
-          <div className="render-dag-row" data-reorder-id={'.'} key={'top:' + info.hash}>
-            <div className="render-dag-row-left-side">{nodeLinePart}</div>
-          </div>,
-        );
-      }
-
-      const rightSide = <div className="render-dag-row-right-side">{renderCommit?.(info)}</div>;
-      renderedRows.push(
-        <div className="render-dag-row" data-reorder-id={info.hash} key={info.hash}>
-          {leftSide}
-          {rightSide}
-        </div>,
-      );
-    }
-  }
+  const renderedRows: Array<JSX.Element> = rows.map(([info, row]) => {
+    return (
+      <DagRow
+        key={info.hash}
+        row={row}
+        info={info}
+        renderCommit={renderCommit}
+        renderCommitExtras={renderCommitExtras}
+        renderGlyph={renderGlyph}
+      />
+    );
+  });
 
   const fullClassName = ((className ?? '') + ' render-dag').trimStart();
   return (
     <div className={fullClassName} {...restProps}>
+      <SvgPattenList authors={authors} />
       <AnimatedReorderGroup animationDuration={100}>{renderedRows}</AnimatedReorderGroup>
     </div>
   );
 }
+
+function DivRow(
+  props: {
+    left?: JSX.Element | null;
+    right?: JSX.Element | null;
+  } & React.HTMLAttributes<HTMLDivElement> & {['data-commit-hash']?: string},
+) {
+  const {className, left, right, ...restProps} = props ?? {};
+  const fullClassName = `render-dag-row ${className ?? ''}`;
+  return (
+    <div {...restProps} className={fullClassName}>
+      <div className="render-dag-row-left-side">{left}</div>
+      <div className="render-dag-row-right-side">{right}</div>
+    </div>
+  );
+}
+
+function DagRowInner(props: {row: ExtendedGraphRow; info: DagCommitInfo} & RenderFunctionProps) {
+  const {row, info, renderGlyph = defaultRenderGlyph, renderCommit, renderCommitExtras} = props;
+  // Layout per commit:
+  //
+  // Each (regular) commit is rendered in 2 rows:
+  //
+  //    ┌──Row1──────────────────────────────┐
+  //    │┌─Left──────────┐┌Right────────────┐│
+  //    ││┌PreNode*─────┐││                 ││
+  //    │││ | |         │││ (commit body)   ││
+  //    ││├Node─────────┤││                 ││
+  //    │││ o |         │││                 ││
+  //    ││├PostNode*────┤││                 ││
+  //    │││ | |         │││                 ││
+  //    ││└─────────────┘││                 ││
+  //    │└───────────────┘└─────────────────┘│
+  //    └────────────────────────────────────┘
+  //
+  //    ┌──Row2──────────────────────────────┐
+  //    │┌─Left──────────┐┌Right────────────┐│
+  //    ││┌PostNode*────┐││                 ││
+  //    │││ | |         │││                 ││
+  //    ││├Term─────────┤││                 ││
+  //    │││ | |         │││ (extras)        ││
+  //    │││ | ~         │││                 ││
+  //    ││├Link─────────┤││                 ││
+  //    │││ |\          │││                 ││
+  //    │││ | |         │││                 ││
+  //    ││├Ancestry─────┤││                 ││
+  //    │││ : |         │││                 ││
+  //    │└───────────────┘└─────────────────┘│
+  //    └────────────────────────────────────┘
+  //
+  // Note:
+  // - Row1 is used to highlight selection. The "node" line should be
+  //   at the center once selected.
+  // - The "*" lines (PreNode, PostNode, PostAncestry) have a stretch
+  //   height based on the right-side content.
+  // - Row2 can be hidden if there is no link line, no ":" ancestry,
+  //   and no "extras".
+  //
+  // Example of "You Are here" special case. "Row1" is split to two
+  // rows: "Row0" and "Row1":
+  //
+  //    ┌──Row0──────────────────────────────┐
+  //    │┌─Left─────────────┐                │
+  //    ││┌Node────────────┐│                │
+  //    │││ | (YouAreHere) ││                │
+  //    ││└────────────────┘│                │
+  //    │└──────────────────┘                │
+  //    └────────────────────────────────────┘
+  //    ┌──Row1──────────────────────────────┐
+  //    │┌─Left──────────┐┌Right────────────┐│
+  //    ││┌PostNode*────┐││                 ││
+  //    │││ | |         │││ (commit body)   ││
+  //    ││└─────────────┘││                 ││
+  //    │└───────────────┘└─────────────────┘│
+  //    └────────────────────────────────────┘
+  //
+  // Note:
+  // - Row0's "left" side can have a larger width, to fit the
+  //   "irregular" "(YouAreHere)" element.
+  // - Row2 is the same in this special case.
+  //
+  // Also check fbcode/eden/website/src/components/RenderDag.js
+  const {linkLine, termLine, nodeLine, ancestryLine, isHead, isRoot, hasIndirectAncestor} = row;
+
+  // By default, the glyph "o" is rendered in a fixed size "Tile".
+  // With 'replace-tile' the glyph can define its own rendered element
+  // (of dynamic size).
+  //
+  // 'replace-tile' also moves the "commit" element to the right of
+  // pad line, not node line.
+  const [glyphPosition, glyph] = renderGlyph(info);
+  const isIrregular = glyphPosition === 'replace-tile';
+  // isYouAreHere practically matches isIrregular but we treat them as
+  // separate concepts. isYouAreHere affects colors, and isIrregular
+  // affects layout.
+  const color = info.isYouAreHere ? YOU_ARE_HERE_COLOR : undefined;
+  const nodeLinePart = (
+    <div className="render-dag-row-left-side-line node-line">
+      {nodeLine.map((l, i) => {
+        if (isIrregular && l === NodeLine.Node) {
+          return <React.Fragment key={i}>{glyph}</React.Fragment>;
+        }
+        // Need stretchY if "glyph" is not "Tile" and has a dynamic height.
+        return (
+          <NodeTile
+            key={i}
+            line={l}
+            isHead={isHead}
+            isRoot={isRoot}
+            aboveNodeColor={info.isHead ? YOU_ARE_HERE_COLOR : undefined}
+            stretchY={isIrregular && l != NodeLine.Node}
+            scaleY={isIrregular ? 0.5 : 1}
+            glyph={glyph}
+          />
+        );
+      })}
+    </div>
+  );
+
+  const preNodeLinePart = (
+    <div className="render-dag-row-left-side-line pre-node-line grow">
+      {row.preNodeLine.map((l, i) => {
+        const c = i === row.nodeColumn ? (info.isHead ? YOU_ARE_HERE_COLOR : color) : undefined;
+        return <PadTile key={i} line={l} scaleY={0.1} stretchY={true} color={c} />;
+      })}
+    </div>
+  );
+
+  const postNodeLinePart = (
+    <div className="render-dag-row-left-side-line post-node-line grow">
+      {row.postNodeLine.map((l, i) => {
+        const c = i === row.nodeColumn ? color : undefined;
+        return <PadTile key={i} line={l} scaleY={0.1} stretchY={true} color={c} />;
+      })}
+    </div>
+  );
+
+  const linkLinePart = linkLine && (
+    <div className="render-dag-row-left-side-line link-line">
+      {linkLine.map((l, i) => (
+        <LinkTile key={i} line={l} color={color} colorLine={row.linkLineFromNode?.[i]} />
+      ))}
+    </div>
+  );
+
+  const termLinePart = termLine && (
+    <>
+      <div className="render-dag-row-left-side-line term-line-pad">
+        {termLine.map((isTerm, i) => {
+          const line = isTerm ? PadLine.Ancestor : ancestryLine.at(i) ?? PadLine.Blank;
+          return <PadTile key={i} scaleY={0.25} line={line} />;
+        })}
+      </div>
+      <div className="render-dag-row-left-side-line term-line-term">
+        {termLine.map((isTerm, i) => {
+          const line = ancestryLine.at(i) ?? PadLine.Blank;
+          return isTerm ? <TermTile key={i} /> : <PadTile key={i} line={line} />;
+        })}
+      </div>
+    </>
+  );
+
+  const commitPart = renderCommit?.(info);
+  const commitExtrasPart = renderCommitExtras?.(info, row);
+
+  const ancestryLinePart = hasIndirectAncestor ? (
+    <div className="render-dag-row-left-side-line ancestry-line">
+      {ancestryLine.map((l, i) => (
+        <PadTile
+          key={i}
+          scaleY={0.6}
+          strokeDashArray="0,2,3,0"
+          line={l}
+          color={row.parentColumns.includes(i) ? color : undefined}
+        />
+      ))}
+    </div>
+  ) : null;
+
+  // Put parts together.
+
+  let row0: JSX.Element | null = null;
+  let row1: JSX.Element | null = null;
+  let row2: JSX.Element | null = null;
+  if (isIrregular) {
+    row0 = <DivRow left={nodeLinePart} />;
+    row1 = <DivRow left={postNodeLinePart} right={commitPart} />;
+  } else {
+    const left = (
+      <>
+        {preNodeLinePart}
+        {nodeLinePart}
+        {postNodeLinePart}
+      </>
+    );
+    row1 = (
+      <DivRow
+        left={left}
+        right={commitPart}
+        className="render-dag-row-commit"
+        data-commit-hash={info.hash}
+      />
+    );
+  }
+
+  if (
+    linkLinePart != null ||
+    termLinePart != null ||
+    ancestryLinePart != null ||
+    postNodeLinePart != null ||
+    commitExtrasPart != null
+  ) {
+    const left = (
+      <>
+        {commitExtrasPart && postNodeLinePart}
+        {linkLinePart}
+        {termLinePart}
+        {ancestryLinePart}
+      </>
+    );
+    row2 = <DivRow left={left} right={commitExtrasPart} />;
+  }
+
+  return (
+    <div className="render-dag-row-group" data-reorder-id={info.hash}>
+      {row0}
+      {row1}
+      {row2}
+    </div>
+  );
+}
+
+const DagRow = React.memo(DagRowInner, (prevProps, nextProps) => {
+  return (
+    nextProps.info.equals(prevProps.info) &&
+    prevProps.row.valueOf() === nextProps.row.valueOf() &&
+    prevProps.renderCommit === nextProps.renderCommit &&
+    prevProps.renderCommitExtras === nextProps.renderCommitExtras &&
+    prevProps.renderGlyph === nextProps.renderGlyph
+  );
+});
 
 export type TileProps = {
   /** Width. Default: defaultTileWidth. */
@@ -279,6 +403,8 @@ export type TileProps = {
   children?: React.ReactNode;
   /** Line width. Default: strokeWidth. */
   strokeWidth?: number;
+  /** Dash array. Default: '3,2'. */
+  strokeDashArray?: string;
 };
 
 /**
@@ -315,6 +441,7 @@ function TileInner(props: TileProps) {
     width = defaultTileWidth,
     edges = [],
     strokeWidth = defaultStrokeWidth,
+    strokeDashArray = '3,2',
     stretchY = false,
   } = props;
   const preserveAspectRatio = stretchY || scaleY < 1 ? 'none' : undefined;
@@ -322,7 +449,7 @@ function TileInner(props: TileProps) {
   const style = stretchY ? {height: '100%', minHeight: height} : {};
   const paths = edges.map(({x1 = 0, y1 = 0, x2 = 0, y2 = 0, flag = 0, color}, i): JSX.Element => {
     const sY = stretchY ? scaleY * 1.05 : scaleY;
-    const strokeDasharray = flag & EdgeFlag.Dash ? '3,2' : undefined;
+    const dashArray = flag & EdgeFlag.Dash ? strokeDashArray : undefined;
     let d;
     if (flag & EdgeFlag.IntersectGap) {
       // This vertical line intercects with a horizonal line visually but it does not mean
@@ -335,7 +462,7 @@ function TileInner(props: TileProps) {
       // Curved line (towards center).
       d = `M ${x1} ${y1 * sY} Q 0 0 ${x2} ${y2 * sY}`;
     }
-    return <path d={d} key={i} strokeDasharray={strokeDasharray} stroke={color} />;
+    return <path d={d} key={i} strokeDasharray={dashArray} stroke={color} />;
   });
   return (
     <svg
@@ -442,40 +569,100 @@ function linkLineToEdges(linkLine: LinkLine, color?: string, colorLine?: LinkLin
   considerEdge(LinkLine.HORIZ_PARENT, LinkLine.HORIZ_ANCESTOR, {x1: -10, x2: 10});
   considerEdge(LinkLine.LEFT_MERGE_PARENT, LinkLine.LEFT_MERGE_ANCESTOR, {x1: -10, y2: -10});
   considerEdge(LinkLine.RIGHT_MERGE_PARENT, LinkLine.RIGHT_MERGE_ANCESTOR, {x1: 10, y2: -10});
-  considerEdge(LinkLine.LEFT_FORK_PARENT, LinkLine.LEFT_FORK_ANCESTOR, {x1: -10, y2: 10});
-  considerEdge(LinkLine.RIGHT_FORK_PARENT, LinkLine.RIGHT_FORK_ANCESTOR, {x1: 10, y2: 10});
+  considerEdge(LinkLine.LEFT_FORK_PARENT | LinkLine.LEFT_FORK_ANCESTOR, 0, {x1: -10, y2: 10});
+  considerEdge(LinkLine.RIGHT_FORK_PARENT | LinkLine.RIGHT_FORK_ANCESTOR, 0, {x1: 10, y2: 10});
   return edges;
 }
 
+// Svg patterns for avatar backgrounds. Those patterns are referred later by `RegularGlyph`.
+function SvgPattenList(props: {authors: Iterable<string>}) {
+  return (
+    <svg className="render-dag-svg-patterns" viewBox={`-10 -10 20 20`}>
+      <defs>
+        {[...props.authors].map(author => (
+          <SvgPattern author={author} key={author} />
+        ))}
+      </defs>
+    </svg>
+  );
+}
+
+function authorToSvgPatternId(author: string) {
+  return 'avatar-pattern-' + author.replace(/[^A-Z0-9a-z]/g, '_');
+}
+
+function SvgPatternInner(props: {author: string}) {
+  const {author} = props;
+  const id = authorToSvgPatternId(author);
+  return (
+    <AvatarPattern
+      size={DEFAULT_GLYPH_RADIUS * 2}
+      username={author}
+      id={id}
+      fallbackFill="var(--foreground)"
+    />
+  );
+}
+
+const SvgPattern = React.memo(SvgPatternInner);
+
 const YOU_ARE_HERE_COLOR = 'var(--button-primary-hover-background)';
+const DEFAULT_GLYPH_RADIUS = (defaultTileWidth * 7) / 20;
+
+function RegularGlyphInner({info}: {info: DagCommitInfo}) {
+  const stroke = info.isHead ? YOU_ARE_HERE_COLOR : 'var(--foreground)';
+  const r = DEFAULT_GLYPH_RADIUS;
+  const strokeWidth = defaultStrokeWidth * 0.9;
+  const isObsoleted = info.successorInfo != null;
+  let fill = 'var(--foreground)';
+  let extraSvgElement = null;
+  if (info.phase === 'draft') {
+    if (isObsoleted) {
+      // "/" inside the circle (similar to "x" in CLI) to indicate "obsoleted".
+      fill = 'var(--background)';
+      const pos = r / Math.sqrt(2) - strokeWidth;
+      extraSvgElement = (
+        <path
+          d={`M ${-pos} ${pos} L ${pos} ${-pos}`}
+          stroke={stroke}
+          strokeWidth={strokeWidth}
+          strokeLinecap="round"
+        />
+      );
+    } else if (info.author.length > 0) {
+      // Avatar for draft, non-obsoleted commits.
+      const id = authorToSvgPatternId(info.author);
+      fill = `url(#${id})`;
+    }
+  }
+
+  return (
+    <>
+      <circle cx={0} cy={0} r={r} fill={fill} stroke={stroke} strokeWidth={strokeWidth} />
+      {extraSvgElement}
+    </>
+  );
+}
+
+export const RegularGlyph = React.memo(RegularGlyphInner, (prevProps, nextProps) => {
+  const prevInfo = prevProps.info;
+  const nextInfo = nextProps.info;
+  return nextInfo.equals(prevInfo);
+});
+
+export function YouAreHereGlyph({info}: {info: DagCommitInfo}) {
+  // Render info.description in a rounded blue box.
+  return (
+    <div className="you-are-here-container" style={{marginLeft: -defaultStrokeWidth * 1.5}}>
+      <InlineBadge kind="primary">{info.description}</InlineBadge>
+    </div>
+  );
+}
 
 export function defaultRenderGlyph(info: DagCommitInfo): RenderGlyphResult {
   if (info.isYouAreHere) {
-    // Render info.description in a rounded blue box.
-    const outer = (
-      <div className="you-are-here-container" style={{marginLeft: -defaultStrokeWidth * 1.5}}>
-        <InlineBadge kind="primary">{info.description}</InlineBadge>
-      </div>
-    );
-    return ['replace-tile', outer];
+    return ['replace-tile', <YouAreHereGlyph info={info} />];
   } else {
-    const stroke = info.isHead ? YOU_ARE_HERE_COLOR : 'var(--foreground)';
-    const r = (defaultTileWidth * 7) / 20;
-    const strokeWidth = defaultStrokeWidth * 0.9;
-    let fill = info.successorInfo == null ? 'var(--foreground)' : 'var(--background)';
-    let pattern: null | JSX.Element = null;
-    // Avatar for draft commits.
-    if (info.phase === 'draft' && info.author.length > 0) {
-      const id = 'avatar-pattern-' + info.hash.replace(/[^A-Z0-9a-z]/g, '_');
-      pattern = <AvatarPattern size={r * 2} username={info.author} id={id} fallbackFill={fill} />;
-      fill = `url(#${id})`;
-    }
-    const rendered = (
-      <>
-        {pattern}
-        <circle cx={0} cy={0} r={r} fill={fill} stroke={stroke} strokeWidth={strokeWidth} />
-      </>
-    );
-    return ['inside-tile', rendered];
+    return ['inside-tile', <RegularGlyph info={info} />];
   }
 }

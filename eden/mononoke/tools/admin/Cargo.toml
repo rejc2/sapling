@@ -21,6 +21,7 @@ bonsai_svnrev_mapping = { version = "0.1.0", path = "../../bonsai_svnrev_mapping
 bonsai_tag_mapping = { version = "0.1.0", path = "../../bonsai_tag_mapping" }
 bookmarks = { version = "0.1.0", path = "../../bookmarks" }
 bookmarks_movement = { version = "0.1.0", path = "../../bookmarks/bookmarks_movement" }
+borrowed = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 bounded_traversal = { version = "0.1.0", path = "../../common/bounded_traversal" }
 buffered_commit_graph_storage = { version = "0.1.0", path = "../../repo_attributes/commit_graph/buffered_commit_graph_storage" }
 bulkops = { version = "0.1.0", path = "../../bulkops" }
@@ -63,6 +64,7 @@ futures_stats = { version = "0.1.0", git = "https://github.com/facebookexperimen
 git_symbolic_refs = { version = "0.1.0", path = "../../git_symbolic_refs" }
 git_types = { version = "0.1.0", path = "../../git/git_types" }
 gix-hash = "0.11"
+gix-object = "0.33"
 itertools = "0.11.0"
 manifest = { version = "0.1.0", path = "../../manifest" }
 megarepo_api = { version = "0.1.0", path = "../../megarepo_api" }

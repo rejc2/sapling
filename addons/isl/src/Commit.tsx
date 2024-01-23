@@ -13,9 +13,11 @@ import type {ContextMenuItem} from 'shared/ContextMenu';
 import {globalRecoil} from './AccessGlobalRecoil';
 import {Avatar} from './Avatar';
 import {BranchIndicator} from './BranchIndicator';
-import {hasUnsavedEditedCommitMessage} from './CommitInfoView/CommitInfoState';
+import {commitMode, hasUnsavedEditedCommitMessage} from './CommitInfoView/CommitInfoState';
 import {currentComparisonMode} from './ComparisonView/atoms';
-import {highlightedCommits} from './HighlightedCommits';
+import {FlexRow} from './ComponentUtils';
+import {EducationInfoTip} from './Education';
+import {HighlightCommitsWhileHovering, isHighlightedCommit} from './HighlightedCommits';
 import {InlineBadge} from './InlineBadge';
 import {Subtle} from './Subtle';
 import {latestSuccessorUnlessExplicitlyObsolete} from './SuccessionTracker';
@@ -23,7 +25,7 @@ import {Tooltip} from './Tooltip';
 import {UncommitButton} from './UncommitButton';
 import {UncommittedChanges} from './UncommittedChanges';
 import {tracker} from './analytics';
-import {codeReviewProvider, latestCommitMessage} from './codeReview/CodeReviewInfo';
+import {codeReviewProvider, latestCommitMessageTitle} from './codeReview/CodeReviewInfo';
 import {DiffInfo} from './codeReview/DiffBadge';
 import {SyncStatus, syncStatusAtom} from './codeReview/syncStatus';
 import {islDrawerState} from './drawerState';
@@ -34,7 +36,6 @@ import {getAmendToOperation, isAmendToAllowedForCommit} from './operationUtils';
 import {GotoOperation} from './operations/GotoOperation';
 import {HideOperation} from './operations/HideOperation';
 import {RebaseOperation} from './operations/RebaseOperation';
-import platform from './platform';
 import {CommitPreview, uncommittedChangesWithPreviews} from './previews';
 import {RelativeDate} from './relativeDate';
 import {isNarrowCommitTree} from './responsive';
@@ -51,6 +52,7 @@ import {
 import {useConfirmUnsavedEditsBeforeSplit} from './stackEdit/ui/ConfirmUnsavedEditsBeforeSplit';
 import {SplitButton} from './stackEdit/ui/SplitButton';
 import {editingStackIntentionHashes} from './stackEdit/ui/stackEditState';
+import {useShowToast} from './toast';
 import {succeedableRevset} from './types';
 import {short} from './utils';
 import {VSCodeButton, VSCodeTag} from '@vscode/webview-ui-toolkit/react';
@@ -117,14 +119,14 @@ export const Commit = memo(
     hasChildren: boolean;
     bodyOnly?: boolean;
   }) => {
-    const setDrawerState = useSetRecoilState(islDrawerState);
     const isPublic = commit.phase === 'public';
+    const isObsoleted = commit.successorInfo != null;
 
     const handlePreviewedOperation = useRunPreviewedOperation();
     const runOperation = useRunOperation();
     const setEditStackIntentionHashes = useSetRecoilState(editingStackIntentionHashes);
 
-    const isHighlighted = useRecoilValue(highlightedCommits).has(commit.hash);
+    const isHighlighted = useRecoilValue(isHighlightedCommit(bodyOnly ? '' : commit.hash));
 
     const inlineProgress = useRecoilValue(inlineProgressByHash(commit.hash));
 
@@ -133,24 +135,36 @@ export const Commit = memo(
 
     const isNarrow = useRecoilValue(isNarrowCommitTree);
 
-    const [title] = useRecoilValue(latestCommitMessage(commit.hash));
+    const title = useRecoilValue(latestCommitMessageTitle(commit.hash));
+
+    const toast = useShowToast();
+    const clipboardCopy = (text: string) => toast.copyAndShowToast(text);
 
     const isNonActionable = previewType === CommitPreview.NON_ACTIONABLE_COMMIT;
 
-    function onDoubleClickToShowDrawer() {
-      // Select the commit if it was deselected.
-      if (!isSelected) {
-        overrideSelection([commit.hash]);
-      }
-      // Show the drawer.
-      setDrawerState(state => ({
-        ...state,
-        right: {
-          ...state.right,
-          collapsed: false,
+    const onDoubleClickToShowDrawer = useRecoilCallback(
+      ({set}) =>
+        () => {
+          // Select the commit if it was deselected.
+          if (!isSelected) {
+            overrideSelection([commit.hash]);
+          }
+          // Show the drawer.
+          set(islDrawerState, state => ({
+            ...state,
+            right: {
+              ...state.right,
+              collapsed: false,
+            },
+          }));
+          if (commit.isHead) {
+            // if we happened to be in commit mode, swap to amend mode so you see the details instead
+            set(commitMode, 'amend');
+          }
         },
-      }));
-    }
+      [overrideSelection, isSelected, commit.hash, commit.isHead],
+    );
+
     const setOperationBeingPreviewed = useSetRecoilState(operationBeingPreviewed);
 
     const viewChangesCallback = useRecoilCallback(({set}) => () => {
@@ -177,13 +191,13 @@ export const Commit = memo(
       const items: Array<ContextMenuItem> = [
         {
           label: <T replace={{$hash: short(commit?.hash)}}>Copy Commit Hash "$hash"</T>,
-          onClick: () => platform.clipboardCopy(commit.hash),
+          onClick: () => clipboardCopy(commit.hash),
         },
       ];
       if (!isPublic && commit.diffId != null) {
         items.push({
           label: <T replace={{$number: commit.diffId}}>Copy Diff Number "$number"</T>,
-          onClick: () => platform.clipboardCopy(commit.diffId ?? ''),
+          onClick: () => clipboardCopy(commit.diffId ?? ''),
         });
       }
       if (!isPublic) {
@@ -217,19 +231,21 @@ export const Commit = memo(
             onClick: () => runOperation(getAmendToOperation(commit, snapshot)),
           });
         }
-        items.push({
-          label: hasUncommittedChanges ? (
-            <span className="context-menu-disabled-option">
-              <T>Split... </T>
-              <Subtle>
-                <T>(disabled due to uncommitted changes)</T>
-              </Subtle>
-            </span>
-          ) : (
-            <T>Split...</T>
-          ),
-          onClick: hasUncommittedChanges ? () => null : handleSplit,
-        });
+        if (!isObsoleted) {
+          items.push({
+            label: hasUncommittedChanges ? (
+              <span className="context-menu-disabled-option">
+                <T>Split... </T>
+                <Subtle>
+                  <T>(disabled due to uncommitted changes)</T>
+                </Subtle>
+              </span>
+            ) : (
+              <T>Split...</T>
+            ),
+            onClick: hasUncommittedChanges ? () => null : handleSplit,
+          });
+        }
         items.push({
           label: hasChildren ? <T>Hide Commit and Descendants</T> : <T>Hide Commit</T>,
           onClick: () =>
@@ -315,7 +331,7 @@ export const Commit = memo(
     if (!isPublic && !actionsPrevented && commit.isHead) {
       commitActions.push(<UncommitButton key="uncommit" />);
     }
-    if (!isPublic && !actionsPrevented && commit.isHead) {
+    if (!isPublic && !actionsPrevented && commit.isHead && !isObsoleted) {
       commitActions.push(<SplitButton key="split" commit={commit} />);
     }
 
@@ -409,6 +425,18 @@ export const Commit = memo(
           {!isNarrow ? commitActions : null}
         </div>
       </div>
+    );
+  },
+  (prevProps, nextProps) => {
+    const prevCommit = prevProps.commit;
+    const nextCommit = nextProps.commit;
+    const commitEqual =
+      'equals' in nextCommit ? nextCommit.equals(prevCommit) : nextCommit === prevCommit;
+    return (
+      commitEqual &&
+      nextProps.previewType === prevProps.previewType &&
+      nextProps.bodyOnly === prevProps.bodyOnly &&
+      nextProps.hasChildren === prevProps.hasChildren
     );
   },
 );
@@ -675,6 +703,10 @@ function DraggableCommit({
           setDragDisabledMessage(t('Cannot drag to rebase with uncommitted changes.'));
           event.preventDefault();
         }
+        if (commit.successorInfo != null) {
+          setDragDisabledMessage(t('Cannot rebase obsoleted commits.'));
+          event.preventDefault();
+        }
 
         commitBeingDragged = commit;
         event.dataTransfer.dropEffect = 'none';
@@ -733,21 +765,60 @@ function hasUncommittedChanges(snapshot: Snapshot): boolean {
 }
 
 export function SuccessorInfoToDisplay({successorInfo}: {successorInfo: SuccessorInfo}) {
-  switch (successorInfo.type) {
-    case 'land':
-    case 'pushrebase':
-      return <T>Landed as a newer commit</T>;
-    case 'amend':
-      return <T>Amended as a newer commit</T>;
-    case 'rebase':
-      return <T>Rebased as a newer commit</T>;
-    case 'split':
-      return <T>Split as a newer commit</T>;
-    case 'fold':
-      return <T>Folded as a newer commit</T>;
-    case 'histedit':
-      return <T>Histedited as a newer commit</T>;
-    default:
-      return <T>Rewritten as a newer commit</T>;
-  }
+  const successorType = successorInfo.type;
+  const inner: JSX.Element = {
+    pushrebase: <T>Landed as a newer commit</T>,
+    land: <T>Landed as a newer commit</T>,
+    amend: <T>Amended as a newer commit</T>,
+    rebase: <T>Rebased as a newer commit</T>,
+    split: <T>Split as a newer commit</T>,
+    fold: <T>Folded as a newer commit</T>,
+    histedit: <T>Histedited as a newer commit</T>,
+  }[successorType] ?? <T>Rewritten as a newer commit</T>;
+  const isSuccessorPublic = successorType === 'land' || successorType === 'pushrebase';
+  return (
+    <FlexRow style={{gap: 'var(--halfpad)'}}>
+      <HighlightCommitsWhileHovering toHighlight={[successorInfo.hash]}>
+        {inner}
+      </HighlightCommitsWhileHovering>
+      <EducationInfoTip>
+        <ObsoleteTip isSuccessorPublic={isSuccessorPublic} />
+      </EducationInfoTip>
+    </FlexRow>
+  );
 }
+
+function ObsoleteTipInner(props: {isSuccessorPublic?: boolean}) {
+  const tips: string[] = props.isSuccessorPublic
+    ? [
+        t('Avoid editing (e.g., amend, rebase) this obsoleted commit. It cannot be landed again.'),
+        t(
+          'The new commit was landed in a public branch and became immutable. It cannot be edited or hidden.',
+        ),
+        t('If you want to make changes, create a new commit.'),
+      ]
+    : [
+        t(
+          'Avoid editing (e.g., amend, rebase) this obsoleted commit. You should use the new commit instead.',
+        ),
+        t(
+          'If you do edit, there will be multiple new versions. They look like duplications and there is no easy way to de-duplicate (e.g. merge all edits back into one commit).',
+        ),
+        t(
+          'To revert to this obsoleted commit, simply hide the new one. It will remove the "obsoleted" status.',
+        ),
+      ];
+
+  return (
+    <div style={{maxWidth: '60vw'}}>
+      <T>This commit is "obsoleted" because a newer version exists.</T>
+      <ul>
+        {tips.map((tip, i) => (
+          <li key={i}>{tip}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+const ObsoleteTip = React.memo(ObsoleteTipInner);

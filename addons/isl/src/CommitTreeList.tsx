@@ -5,6 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+import type {RenderGlyphResult} from './RenderDag';
+import type {Dag, DagCommitInfo} from './dag/dag';
+import type {ExtendedGraphRow} from './dag/render';
+import type {HashSet} from './dag/set';
 import type {CommitTree, CommitTreeWithPreviews} from './getCommitTree';
 import type {Hash} from './types';
 
@@ -13,7 +17,8 @@ import serverAPI from './ClientToServerAPI';
 import {Commit} from './Commit';
 import {Center, LargeSpinner} from './ComponentUtils';
 import {ErrorNotice} from './ErrorNotice';
-import {RenderDag} from './RenderDag';
+import {isHighlightedCommit} from './HighlightedCommits';
+import {RegularGlyph, RenderDag, YouAreHereGlyph} from './RenderDag';
 import {StackActions} from './StackActions';
 import {Tooltip, DOCUMENTATION_DELAY} from './Tooltip';
 import {pageVisibility} from './codeReview/CodeReviewInfo';
@@ -34,7 +39,7 @@ import {
 import {MaybeEditStackModal} from './stackEdit/ui/EditStackModal';
 import {VSCodeButton} from '@vscode/webview-ui-toolkit/react';
 import {ErrorShortMessages} from 'isl-server/src/constants';
-import {atom, useRecoilState, useRecoilValue} from 'recoil';
+import {atom, selector, selectorFamily, useRecoilState, useRecoilValue} from 'recoil';
 import {Icon} from 'shared/Icon';
 import {notEmpty} from 'shared/utils';
 
@@ -56,40 +61,130 @@ type DagCommitListProps = {
   isNarrow: boolean;
 };
 
+const dagWithYouAreHere = selector<Dag>({
+  key: 'dagWithYouAreHere',
+  get: ({get}) => {
+    let dag = get(dagWithPreviews);
+    // Insert a virtual "You are here" as a child of ".".
+    const dot = dag.resolve('.');
+    if (dot != null) {
+      dag = dag.add([YOU_ARE_HERE_VIRTUAL_COMMIT.set('parents', [dot.hash])]);
+    }
+    return dag;
+  },
+});
+
 function DagCommitList(props: DagCommitListProps) {
   const {isNarrow} = props;
 
-  let dag = useRecoilValue(dagWithPreviews);
-  // Insert a virtual "You are here" as a child of ".".
-  const dot = dag.resolve('.');
-  if (dot != null) {
-    dag = dag.add([
-      {
-        ...YOU_ARE_HERE_VIRTUAL_COMMIT,
-        parents: [dot.hash],
-      },
-    ]);
-  }
+  const dag = useRecoilValue(dagWithYouAreHere);
+  const subset = getRenderSubset(dag);
 
   return (
     <RenderDag
       dag={dag}
+      subset={subset}
       className={'commit-tree-root ' + (isNarrow ? ' commit-tree-narrow' : '')}
-      renderCommit={info => {
-        return (
-          <>
-            <Commit
-              commit={info}
-              key={info.hash}
-              previewType={info.previewType}
-              hasChildren={dag.children(info.hash).size > 0}
-              bodyOnly={true}
-            />
-          </>
-        );
-      }}
+      renderCommit={renderCommit}
+      renderCommitExtras={renderCommitExtras}
+      renderGlyph={renderGlyph}
     />
   );
+}
+
+function renderCommit(info: DagCommitInfo) {
+  return <DagCommitBody info={info} />;
+}
+
+function renderCommitExtras(info: DagCommitInfo, row: ExtendedGraphRow) {
+  if (row.termLine != null && (info.parents.length > 0 || (info.ancestors?.size ?? 0) > 0)) {
+    // Root (no parents) in the displayed DAG, but not root in the full DAG.
+    return <MaybeFetchingAdditionalCommitsRow hash={info.hash} />;
+  } else if (info.phase === 'draft') {
+    // Draft but parents are not drafts. Likely a stack root. Show stack buttons.
+    return <MaybeStackActions hash={info.hash} />;
+  }
+  return null;
+}
+
+function renderGlyph(info: DagCommitInfo): RenderGlyphResult {
+  if (info.isYouAreHere) {
+    return ['replace-tile', <YouAreHereGlyph info={info} />];
+  } else {
+    return ['inside-tile', <HighlightedGlyph info={info} />];
+  }
+}
+
+const dagHasChildren = selectorFamily({
+  key: 'dagHasChildren',
+  get:
+    (key: string) =>
+    ({get}) => {
+      const dag = get(dagWithPreviews);
+      return dag.children(key).size > 0;
+    },
+});
+
+function DagCommitBody({info}: {info: DagCommitInfo}) {
+  const hasChildren = useRecoilValue(dagHasChildren(info.hash));
+  return (
+    <Commit
+      commit={info}
+      key={info.hash}
+      previewType={info.previewType}
+      hasChildren={hasChildren}
+      bodyOnly={true}
+    />
+  );
+}
+
+const dagHasParents = selectorFamily({
+  key: 'dagHasParents',
+  get:
+    (key: string) =>
+    ({get}) => {
+      const dag = get(dagWithPreviews);
+      return dag.parents(key).size > 0;
+    },
+});
+
+const dagIsDraftStackRoot = selectorFamily({
+  key: 'dagIsDraftStackRoot',
+  get:
+    (key: string) =>
+    ({get}) => {
+      const dag = get(dagWithPreviews);
+      return dag.draft(dag.parents(key)).size === 0;
+    },
+});
+
+function MaybeFetchingAdditionalCommitsRow({hash}: {hash: Hash}) {
+  const hasParents = useRecoilValue(dagHasParents(hash));
+  return hasParents ? null : <FetchingAdditionalCommitsRow />;
+}
+
+function MaybeStackActions({hash}: {hash: Hash}) {
+  const isDraftStackRoot = useRecoilValue(dagIsDraftStackRoot(hash));
+  return isDraftStackRoot ? <StackActions hash={hash} /> : null;
+}
+
+function HighlightedGlyph({info}: {info: DagCommitInfo}) {
+  const highlighted = useRecoilValue(isHighlightedCommit(info.hash));
+
+  const hilightCircle = highlighted ? (
+    <circle cx={0} cy={0} r={8} fill="transparent" stroke="var(--focus-border)" strokeWidth={4} />
+  ) : null;
+
+  return (
+    <>
+      {hilightCircle}
+      <RegularGlyph info={info} />
+    </>
+  );
+}
+
+function getRenderSubset(dag: Dag): HashSet {
+  return dag.collapseObsolete();
 }
 
 export function CommitTreeList() {
@@ -184,7 +279,7 @@ function SubTree({tree, depth}: {tree: CommitTreeWithPreviews; depth: number}): 
   const isPublic = info.phase === 'public';
 
   const stackActions =
-    !isPublic && depth === 1 ? <StackActions key="stack-actions" tree={tree} /> : null;
+    !isPublic && depth === 1 ? <StackActions key="stack-actions" hash={info.hash} /> : null;
 
   const renderedChildren = (children ?? [])
     .map(tree => <SubTree key={`tree-${tree.info.hash}`} tree={tree} depth={depth + 1} />)
@@ -245,6 +340,15 @@ function MainLineEllipsis({children}: {children?: React.ReactNode}) {
     <div className="commit-ellipsis">
       <Icon icon="kebab-vertical" />
       <div className="commit-ellipsis-children">{children}</div>
+    </div>
+  );
+}
+
+function FetchingAdditionalCommitsRow() {
+  return (
+    <div className="fetch-additional-commits-row">
+      <FetchingAdditionalCommitsButton />
+      <FetchingAdditionalCommitsIndicator />
     </div>
   );
 }

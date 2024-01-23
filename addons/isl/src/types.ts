@@ -155,16 +155,16 @@ export type CommitInfo = {
    * could be 2 or more parents. The initial commit (and initial commits of
    * other merged-in repos) have no parents.
    */
-  parents: Hash[];
+  parents: ReadonlyArray<Hash>;
   phase: CommitPhaseType;
   isHead: boolean;
   author: string;
   date: Date;
   description: string;
-  bookmarks: Array<string>;
-  remoteBookmarks: Array<string>;
+  bookmarks: ReadonlyArray<string>;
+  remoteBookmarks: ReadonlyArray<string>;
   /** if this commit is obsolete, it is succeeded by another commit */
-  successorInfo?: SuccessorInfo;
+  successorInfo?: Readonly<SuccessorInfo>;
   /**
    * Closest predecessors (not all recursive predecessors, which can be a long
    * chain and hurt performance). Useful to deal with optimistic states where
@@ -174,13 +174,13 @@ export type CommitInfo = {
    * Most of the time a commit only has one predecessor. In case of a fold
    * there are multiple predecessors.
    */
-  closestPredecessors?: Hash[];
+  closestPredecessors?: ReadonlyArray<Hash>;
   /** only a subset of the total files for this commit */
-  filesSample: Array<ChangedFile>;
+  filesSample: ReadonlyArray<ChangedFile>;
   totalFileCount: number;
   /** @see {@link DiffId} */
   diffId?: DiffId;
-  stableCommitMetadata?: Array<StableCommitMetadata>;
+  stableCommitMetadata?: ReadonlyArray<StableCommitMetadata>;
 };
 export type SuccessorInfo = {
   hash: string;
@@ -460,22 +460,26 @@ export type ClientToServerMessageWithPayload = {
 
 export type SubscriptionKind = 'uncommittedChanges' | 'smartlogCommits' | 'mergeConflicts';
 
-/** sl configs written by ISL */
-export type ConfigName =
+export const allConfigNames = [
   // these config names are for compatibility.
-  | 'isl.submitAsDraft'
-  | 'isl.changedFilesDisplayType'
-  | 'isl.hasShownGettingStarted'
+  'isl.submitAsDraft',
+  'isl.changedFilesDisplayType',
+  'isl.hasShownGettingStarted',
   // sapling config prefers foo-bar naming.
-  | 'isl.pull-button-choice'
-  | 'isl.show-stack-submit-confirmation'
-  | 'isl.show-diff-number'
-  | 'isl.render-compact'
-  | 'isl.download-commit-should-goto'
-  | 'isl.download-commit-rebase-type'
-  | 'isl.experimental-features'
+  'isl.pull-button-choice',
+  'isl.show-stack-submit-confirmation',
+  'isl.show-diff-number',
+  'isl.render-compact',
+  'isl.download-commit-should-goto',
+  'isl.download-commit-rebase-type',
+  'isl.experimental-features',
+  'isl.hold-off-refresh-ms',
   // which graph renderer to use (0: tree; 1: dag; 2: show both).
-  | 'isl.experimental-graph-renderer';
+  'isl.experimental-graph-renderer',
+] as const;
+
+/** sl configs written by ISL */
+export type ConfigName = (typeof allConfigNames)[number];
 
 /** local storage keys written by ISL */
 export type LocalStorageName =

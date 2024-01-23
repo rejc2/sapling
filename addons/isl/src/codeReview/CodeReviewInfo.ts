@@ -25,6 +25,7 @@ import {commitByHash, repositoryInfo} from '../serverAPIState';
 import {firstLine} from '../utils';
 import {GithubUICodeReviewProvider} from './github/github';
 import {atom, DefaultValue, selector, selectorFamily} from 'recoil';
+import {clearTrackedCache} from 'shared/LRU';
 import {debounce} from 'shared/debounce';
 import {unwrap} from 'shared/utils';
 
@@ -180,6 +181,16 @@ export const latestCommitMessage = selectorFamily<
     },
 });
 
+export const latestCommitMessageTitle = selectorFamily<string, Hash | 'head'>({
+  key: 'latestCommitMessageTitle',
+  get:
+    (hash: Hash | 'head') =>
+    ({get}) => {
+      const [title] = get(latestCommitMessage(hash));
+      return title;
+    },
+});
+
 export const latestCommitMessageFields = selectorFamily<CommitMessageFields, Hash | 'head'>({
   key: 'latestCommitMessageFields',
   get:
@@ -197,7 +208,13 @@ export const pageVisibility = atom<PageVisibility>({
   effects: [
     ({setSelf}) => {
       const handleVisibilityChange = () => {
-        setSelf(document.hasFocus() ? 'focused' : document.visibilityState);
+        const newValue = document.hasFocus() ? 'focused' : document.visibilityState;
+        setSelf(oldValue => {
+          if (oldValue !== newValue && newValue === 'hidden') {
+            clearTrackedCache();
+          }
+          return newValue;
+        });
       };
 
       window.addEventListener('focus', handleVisibilityChange);

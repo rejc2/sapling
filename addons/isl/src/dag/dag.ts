@@ -5,18 +5,20 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import type {WithPreviewType} from '../previews';
-import type {CommitInfo, Hash} from '../types';
+import type {Hash} from '../types';
+import type {ExtendedGraphRow} from './render';
 import type {SetLike} from './set';
-import type {RecordOf, List} from 'immutable';
+import type {RecordOf} from 'immutable';
 
 import {CommitPreview} from '../previews';
 import {BaseDag, type SortProps} from './base_dag';
+import {DagCommitInfo} from './dagCommitInfo';
 import {MutationDag} from './mutation_dag';
-import {Ancestor, AncestorType} from './render';
+import {Ancestor, AncestorType, Renderer} from './render';
 import {TextRenderer} from './renderText';
-import {HashSet} from './set';
-import {Record, Map as ImMap, Set as ImSet} from 'immutable';
+import {arrayFromHashes, HashSet} from './set';
+import {List, Record, Map as ImMap, Set as ImSet} from 'immutable';
+import {cached} from 'shared/LRU';
 import {SelfUpdate} from 'shared/immutableExt';
 import {group, notEmpty, splitOnce, unwrap} from 'shared/utils';
 
@@ -38,13 +40,13 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
     super(record ?? EMPTY_DAG_RECORD);
   }
 
-  static fromDag(commitDag?: BaseDag<Info>, mutationDag?: MutationDag): Dag {
+  static fromDag(commitDag?: BaseDag<DagCommitInfo>, mutationDag?: MutationDag): Dag {
     return new Dag(CommitDagRecord({commitDag, mutationDag}));
   }
 
   // Delegates
 
-  get commitDag(): BaseDag<Info> {
+  get commitDag(): BaseDag<DagCommitInfo> {
     return this.inner.commitDag;
   }
 
@@ -52,7 +54,7 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
     return this.inner.mutationDag;
   }
 
-  private withCommitDag(f: (dag: BaseDag<Info>) => BaseDag<Info>): Dag {
+  private withCommitDag(f: (dag: BaseDag<DagCommitInfo>) => BaseDag<DagCommitInfo>): Dag {
     const newCommitDag = f(this.commitDag);
     const newRecord = this.inner.set('commitDag', newCommitDag);
     return new Dag(newRecord);
@@ -60,12 +62,14 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
 
   // Basic edit
 
-  add(commits: Iterable<Info>): Dag {
+  add(commits: Iterable<DagCommitInfo>): Dag {
     // When adding commits, also update the mutationDag.
     // Assign `seqNumber` (insertion order) to help sorting commits later.
     // The seqNumber is the same for all `commits` so the order does not matter.
     const seqNumber = this.inner.nextSeqNumber;
-    const commitArray = [...commits].map(c => ({...c, seqNumber: c.seqNumber ?? seqNumber}));
+    const commitArray = [...commits].map(c =>
+      c.seqNumber === undefined ? c.set('seqNumber', seqNumber) : c,
+    );
     const oldNewPairs = new Array<[Hash, Hash]>();
     for (const info of commitArray) {
       info.closestPredecessors?.forEach(p => oldNewPairs.push([p, info.hash]));
@@ -112,21 +116,26 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
   }
 
   /** A callback form of remove() and add(). */
-  replaceWith(set: SetLike, replaceFunc: (h: Hash, c?: Info) => Info | undefined): Dag {
+  replaceWith(
+    set: SetLike,
+    replaceFunc: (h: Hash, c?: DagCommitInfo) => DagCommitInfo | undefined,
+  ): Dag {
     const hashSet = HashSet.fromHashes(set);
     const hashes = hashSet.toHashes();
     return this.remove(this.present(set)).add(
-      hashes.map(h => replaceFunc(h, this.get(h))).filter(c => c != undefined) as Iterable<Info>,
+      hashes
+        .map(h => replaceFunc(h, this.get(h)))
+        .filter(c => c != undefined) as Iterable<DagCommitInfo>,
     );
   }
 
   // Basic query
 
-  get(hash: Hash | undefined | null): Info | undefined {
+  get(hash: Hash | undefined | null): DagCommitInfo | undefined {
     return this.commitDag.get(hash);
   }
 
-  getBatch(hashes: Array<Hash>): Array<Info> {
+  getBatch(hashes: Array<Hash>): Array<DagCommitInfo> {
     return hashes.map(h => this.get(h)).filter(notEmpty);
   }
 
@@ -138,7 +147,7 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
     return this.commitDag[Symbol.iterator]();
   }
 
-  values(): Iterable<Readonly<Info>> {
+  values(): Iterable<Readonly<DagCommitInfo>> {
     return this.commitDag.values();
   }
 
@@ -177,10 +186,12 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
     return this.commitDag.range(roots, heads);
   }
 
+  @cached()
   roots(set: SetLike): HashSet {
     return this.commitDag.roots(set);
   }
 
+  @cached()
   heads(set: SetLike): HashSet {
     return this.commitDag.heads(set);
   }
@@ -193,17 +204,63 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
     return this.commitDag.isAncestor(ancestor, descendant);
   }
 
-  filter(predicate: (commit: Readonly<Info>) => boolean, set?: SetLike): HashSet {
+  filter(predicate: (commit: Readonly<DagCommitInfo>) => boolean, set?: SetLike): HashSet {
     return this.commitDag.filter(predicate, set);
+  }
+
+  @cached()
+  all(): HashSet {
+    return HashSet.fromHashes(this);
+  }
+
+  /**
+   * Return a set with obsoleted commit stacks "collpased"
+   * (i.e. only keep the roots and draft parents).
+   */
+  @cached()
+  collapseObsolete(set?: SetLike): HashSet {
+    const all = set === undefined ? this.all() : HashSet.fromHashes(set);
+    const obsolete = this.obsolete(all);
+    const toKeep = this.parents(this.draft(all).subtract(obsolete)).union(this.roots(obsolete));
+    const toHide = obsolete.subtract(toKeep);
+    return all.subtract(toHide);
   }
 
   // Sort
 
-  sortAsc(set: SetLike, props?: SortProps<Info>): Array<Hash> {
+  // sortAsc all commits, with the default compare function.
+  @cached()
+  defaultSortAscIndex(): ReadonlyMap<Hash, number> {
+    return new Map(
+      this.commitDag
+        .sortAsc(this.all(), {compare: sortAscCompare, gap: false})
+        .map((h, i) => [h, i]),
+    );
+  }
+
+  sortAsc(set: SetLike, props?: SortProps<DagCommitInfo>): Array<Hash> {
+    if (props?.compare == null) {
+      // If no custom compare function, use the sortAsc index to answer subset
+      // sortAsc, which can be slow to calculate otherwise.
+      const index = this.defaultSortAscIndex();
+      if (set === undefined) {
+        return [...index.keys()];
+      }
+      const hashes = arrayFromHashes(set === undefined ? this.all() : set);
+      return hashes.sort((a, b) => {
+        const aIdx = index.get(a);
+        const bIdx = index.get(b);
+        if (aIdx == null || bIdx == null) {
+          throw new Error(`Commit ${a} or ${b} is not in the dag.`);
+        }
+        return aIdx - bIdx;
+      });
+    }
+    // Otherwise, fallback to sortAsc.
     return this.commitDag.sortAsc(set, {compare: sortAscCompare, ...props});
   }
 
-  sortDesc(set: SetLike, props?: SortProps<Info>): Array<Hash> {
+  sortDesc(set: SetLike, props?: SortProps<DagCommitInfo>): Array<Hash> {
     return this.commitDag.sortDesc(set, props);
   }
 
@@ -230,9 +287,8 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
   /** Bump the timestamp of descendants(set) to "now". */
   touch(set: SetLike, includeDescendants = true): Dag {
     const affected = includeDescendants ? this.descendants(set) : set;
-    return this.replaceWith(affected, (_h, c) => {
-      return c && {...c, date: new Date()};
-    });
+    const now = new Date();
+    return this.replaceWith(affected, (_h, c) => c?.set('date', now));
   }
 
   /**
@@ -294,27 +350,33 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
       const isPred = !isSucc && duplicated.contains(h);
       const isRoot = srcRoots.contains(pureHash);
       const info = unwrap(isSucc ? this.get(pureHash) : c);
-      // Reset the seqNumber so the rebase preview tends to show as right-most branches.
-      const newInfo: Partial<Info> = {seqNumber: undefined};
-      if (isPred) {
-        // For "predecessors" (ex. a(obsoleted)), keep hash unchanged
-        // so orphaned commits (c) don't move. Update successorInfo.
-        const succHash = maybeSuccHash(pureHash);
-        newInfo.successorInfo = {hash: succHash, type: 'rebase'};
-      } else {
-        // Set date, parents, previewType.
-        newInfo.date = date;
-        newInfo.parents = newParents(pureHash);
-        newInfo.previewType = isRoot
-          ? CommitPreview.REBASE_OPTIMISTIC_ROOT
-          : CommitPreview.REBASE_OPTIMISTIC_DESCENDANT;
-        // Set predecessor info for successors.
-        if (isSucc) {
-          newInfo.closestPredecessors = [pureHash];
-          newInfo.hash = h;
+      return info.withMutations(mut => {
+        // Reset the seqNumber so the rebase preview tends to show as right-most branches.
+        let newInfo = mut.set('seqNumber', undefined);
+        if (isPred) {
+          // For "predecessors" (ex. a(obsoleted)), keep hash unchanged
+          // so orphaned commits (c) don't move. Update successorInfo.
+          const succHash = maybeSuccHash(pureHash);
+          newInfo = newInfo.set('successorInfo', {hash: succHash, type: 'rebase'});
+        } else {
+          // Set date, parents, previewType.
+          newInfo = newInfo.merge({
+            date,
+            parents: newParents(pureHash),
+            previewType: isRoot
+              ? CommitPreview.REBASE_OPTIMISTIC_ROOT
+              : CommitPreview.REBASE_OPTIMISTIC_DESCENDANT,
+          });
+          // Set predecessor info for successors.
+          if (isSucc) {
+            newInfo = newInfo.merge({
+              closestPredecessors: [pureHash],
+              hash: h,
+            });
+          }
         }
-      }
-      return {...info, ...newInfo};
+        return newInfo;
+      });
     }).cleanup(toCleanup);
   }
 
@@ -345,7 +407,9 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
       if (c == null || newParent == null) {
         return c;
       }
-      return {...c, parents: [...c.parents, newParent], ancestors: [newParent]};
+      return c.withMutations(m =>
+        m.set('parents', [...c.parents, newParent]).set('ancestors', List([newParent])),
+      );
     });
   }
 
@@ -391,7 +455,7 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
   }
 
   /** Attempt to resolve a name by `name`. The `name` can be a hash, a bookmark name, etc. */
-  resolve(name: string): Readonly<Info> | undefined {
+  resolve(name: string): Readonly<DagCommitInfo> | undefined {
     // See `hg help revision` and context.py (changectx.__init__),
     // namespaces.py for priorities. Basically (in this order):
     // - hex full hash (40 bytes); '.' (working parent)
@@ -438,8 +502,32 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
     return undefined;
   }
 
-  /** Yield [Info, Ancestor[]] in order, to be used by the rendering logic. */
-  *dagWalkerForRendering(set?: SetLike): Iterable<['reserve', Hash] | ['row', [Info, Ancestor[]]]> {
+  /** Render `set` into `ExtendedGraphRow`s. */
+  @cached()
+  renderToRows(set?: SetLike): ReadonlyArray<[DagCommitInfo, ExtendedGraphRow]> {
+    const renderer = new Renderer();
+    const rows: Array<[DagCommitInfo, ExtendedGraphRow]> = [];
+    for (const [type, item] of this.dagWalkerForRendering(set)) {
+      if (type === 'row') {
+        const [info, typedParents] = item;
+        const forceLastColumn = info.isYouAreHere;
+        const row = renderer.nextRow(info.hash, typedParents, {forceLastColumn});
+        rows.push([info, row]);
+      } else if (type === 'reserve') {
+        renderer.reserve(item);
+      }
+    }
+    return rows;
+  }
+
+  /**
+   * Yield [Info, Ancestor[]] in order, to be used by the rendering logic.
+   * This returns a generator. To walk through the entire DAG it can be slow.
+   * Use `dagWalkerForRendering` if you want a cached version.
+   */
+  *dagWalkerForRendering(
+    set?: SetLike,
+  ): Iterable<['reserve', Hash] | ['row', [DagCommitInfo, Ancestor[]]]> {
     // We want sortDesc, but want to reuse the comprehensive sortAsc compare logic.
     // So we use sortAsc here, then reverse it.
     const sorted =
@@ -458,7 +546,7 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
     // especially when the provided `set` is a subset of the dag.
     for (const hash of sorted) {
       const info = unwrap(this.get(hash));
-      const parents: Hash[] = info?.parents ?? [];
+      const parents: ReadonlyArray<Hash> = info?.parents ?? [];
       // directParents: solid edges
       // indirectParents: dashed edges
       // anonymousParents: ----"~"
@@ -530,7 +618,7 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
 type NameMapEntry = [string, HashPriRecord];
 
 /** Extract the (name, hash, pri) infomration for insertion and deletion. */
-function infoToNameMapEntries(info: Info): Array<NameMapEntry> {
+function infoToNameMapEntries(info: DagCommitInfo): Array<NameMapEntry> {
   // Priority, highest to lowest:
   // - full hash (handled by dag.resolve())
   // - ".", the working parent
@@ -560,8 +648,8 @@ function infoToNameMapEntries(info: Info): Array<NameMapEntry> {
 /** Return the new NameMap after inserting or deleting `infos`. */
 function calculateNewNameMap(
   map: NameMap,
-  deleteInfos: Iterable<Readonly<Info>>,
-  insertInfos: Iterable<Readonly<Info>>,
+  deleteInfos: Iterable<Readonly<DagCommitInfo>>,
+  insertInfos: Iterable<Readonly<DagCommitInfo>>,
 ): NameMap {
   return map.withMutations(mut => {
     let map = mut;
@@ -599,22 +687,10 @@ function shouldPrefixMatch(hash: Hash): boolean {
   return /^[0-9a-f]+$/.test(hash);
 }
 
-/** Distance ancestors that are treated as direct parents. */
-type DagExt = {
-  ancestors?: Hash[];
-};
-
-/** Extra properties for rendering. */
-type RenderExt = {
-  /** If true, this is a virtual "You are here" commit. */
-  isYouAreHere?: boolean;
-};
-
-type Info = CommitInfo & WithPreviewType & DagExt & RenderExt;
 type NameMap = ImMap<string, ImSet<HashPriRecord>>;
 
 type CommitDagProps = {
-  commitDag: BaseDag<Info>;
+  commitDag: BaseDag<DagCommitInfo>;
   mutationDag: MutationDag;
   // derived from Info, for fast "resolve" lookup. name -> hashpri
   nameMap: NameMap;
@@ -644,7 +720,7 @@ const EMPTY_DAG_RECORD = CommitDagRecord();
 export const REBASE_SUCC_PREFIX = 'OPTIMISTIC_REBASE_SUCC:';
 
 /** Default 'compare' function for sortAsc. */
-const sortAscCompare = (a: Info, b: Info) => {
+const sortAscCompare = (a: DagCommitInfo, b: DagCommitInfo) => {
   // Consider phase. Public last. For example, when sorting this dag
   // (used by tests):
   //
@@ -696,5 +772,4 @@ const sortAscCompare = (a: Info, b: Info) => {
   return a.hash < b.hash ? 1 : -1;
 };
 
-/** CommitInfo extended with some extra fields. */
-export type DagCommitInfo = Info;
+export {DagCommitInfo};

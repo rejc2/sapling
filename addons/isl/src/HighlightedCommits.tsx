@@ -8,11 +8,21 @@
 import type {CommitInfo, Hash} from './types';
 
 import {useEffect, useState} from 'react';
-import {atom, useSetRecoilState} from 'recoil';
+import {atom, selectorFamily, useSetRecoilState} from 'recoil';
 
 export const highlightedCommits = atom<Set<Hash>>({
   key: 'highlightedCommits',
   default: new Set(),
+});
+
+export const isHighlightedCommit = selectorFamily({
+  key: 'isHighlightedCommit',
+  get:
+    (key: string) =>
+    ({get}) => {
+      const highlighted = get(highlightedCommits);
+      return highlighted.has(key);
+    },
 });
 
 export function HighlightCommitsWhileHovering({
@@ -20,7 +30,7 @@ export function HighlightCommitsWhileHovering({
   children,
   ...rest
 }: {
-  toHighlight: Array<CommitInfo>;
+  toHighlight: Array<CommitInfo | Hash>;
   children: React.ReactNode;
 } & React.DetailedHTMLProps<React.HTMLAttributes<HTMLDivElement>, HTMLDivElement>) {
   const setHighlighted = useSetRecoilState(highlightedCommits);
@@ -39,7 +49,13 @@ export function HighlightCommitsWhileHovering({
     <div
       {...rest}
       onMouseOver={() => {
-        setHighlighted(new Set(toHighlight.map(commit => commit.hash)));
+        setHighlighted(
+          new Set(
+            toHighlight.map(commitOrHash =>
+              typeof commitOrHash === 'string' ? commitOrHash : commitOrHash.hash,
+            ),
+          ),
+        );
         setIsSourceOfHighlight(true);
       }}
       onMouseOut={() => {

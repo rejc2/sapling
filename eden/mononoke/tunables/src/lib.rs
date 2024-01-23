@@ -80,7 +80,6 @@ pub type TunableVecOfStringsByRepo = ArcSwap<HashMap<String, Vec<String>>>;
 pub struct MononokeTunables {
     filenodes_disabled: TunableBool,
     warm_bookmark_cache_poll_interval_ms: TunableI64,
-    disable_repo_client_warm_bookmarks_cache: TunableBool,
     xrepo_sync_disable_all_syncs: TunableBool,
     xrepo_disable_commit_sync_lease: TunableBool,
     allow_change_xrepo_mapping_extra: TunableBool,
@@ -91,8 +90,6 @@ pub struct MononokeTunables {
     warm_bookmark_cache_logging_sampling_pct: TunableI64,
     // Control whether the BYPASS_READONLY pushvar is restricted by an ACL
     enforce_bypass_readonly_acl: TunableBool,
-    // Boolean to batch requests sent to Land Service
-    batching_to_land_service: TunableBool,
     // Which region writes should be done to, in order to minimise latency.
     // This should align with underlying storage (SQL/Manifold) write regions.
     // Notice writes still work from any region, and this field is not necessarily
@@ -102,12 +99,6 @@ pub struct MononokeTunables {
     // with removing it, but this tunable can be used as a quick killswitch to
     // enable them again.
     sql_lag_monitoring_blocklist: TunableVecOfStrings,
-    // If set, the hook won't be created at all
-    disable_check_write_permissions_hook: TunableBool,
-    // If set, the check result will be discarded for user identities
-    log_only_for_users_in_cwp_hook: TunableBool,
-    // If set, the check result will be discarded for service identities
-    log_only_for_services_in_cwp_hook: TunableBool,
     // If set, the wireproto implementation will only log the repo write ACL
     // check result.
     log_only_wireproto_write_acl: TunableBool,

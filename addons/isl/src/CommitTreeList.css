@@ -32,7 +32,6 @@
   flex-direction: row;
   gap: var(--pad);
   align-items: center;
-  margin-top: var(--pad);
   margin-top: var(--halfpad);
 }
 
@@ -314,10 +313,6 @@
   margin-top: calc(2px + var(--halfpad));
 }
 
-.render-dag .commit {
-  top: calc(-2px - var(--halfpad));
-}
-
 .render-dag .selected-commit-background {
   width: calc(100% + var(--halfpad));
   left: calc(0px - var(--halfpad));
@@ -325,4 +320,18 @@
 
 .render-dag .head-commit-info {
   margin-left: var(--halfpad);
+}
+
+.render-dag,
+.commit-tree-stack-actions {
+  margin-bottom: var(--pad);
+  margin-left: var(--halfpad);
+}
+
+.fetch-additional-commits-row {
+  display: flex;
+  align-items: center;
+  margin: var(--halfpad);
+  position: relative;
+  min-height: var(--vscode-icon-button-height);
 }

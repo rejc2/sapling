@@ -70,6 +70,7 @@ import {
   uncommittedChangesFetchError,
   useRunOperation,
 } from './serverAPIState';
+import {useShowToast} from './toast';
 import {succeedableRevset, GeneratedStatus} from './types';
 import {usePromise} from './usePromise';
 import {
@@ -244,7 +245,7 @@ function SectionedFileList({filesByPrefix, ...rest}: SectionProps) {
  * In either case, a banner is shown to warn that not all files are shown.
  */
 export function ChangedFiles(props: {
-  filesSubset: Array<ChangedFile>;
+  filesSubset: ReadonlyArray<ChangedFile>;
   totalFiles: number;
   comparison: Comparison;
   selection?: UseUncommittedSelection;
@@ -459,6 +460,9 @@ export function File({
   place?: Place;
   generatedStatus?: GeneratedStatus;
 }) {
+  const toast = useShowToast();
+  const clipboardCopy = (text: string) => toast.copyAndShowToast(text);
+
   // Renamed files are files which have a copy field, where that path was also removed.
   // Visually show renamed files as if they were modified, even though sl treats them as added.
   const [statusName, icon] = nameAndIconForFileStatus[file.visualStatus];
@@ -467,8 +471,8 @@ export function File({
 
   const contextMenu = useContextMenu(() => {
     const options = [
-      {label: t('Copy File Path'), onClick: () => platform.clipboardCopy(file.path)},
-      {label: t('Copy Filename'), onClick: () => platform.clipboardCopy(basename(file.path))},
+      {label: t('Copy File Path'), onClick: () => clipboardCopy(file.path)},
+      {label: t('Copy Filename'), onClick: () => clipboardCopy(basename(file.path))},
       {label: t('Open File'), onClick: () => platform.openFile(file.path)},
     ];
     if (platform.openContainingFolder != null) {
@@ -717,6 +721,8 @@ export function UncommittedChanges({place}: {place: Place}) {
     runOperation(operation);
   };
 
+  const canAmend = headCommit && headCommit.phase !== 'public' && headCommit.successorInfo == null;
+
   return (
     <div className="uncommitted-changes">
       {conflicts != null ? (
@@ -894,7 +900,7 @@ export function UncommittedChanges({place}: {place: Place}) {
               </VSCodeButton>
             </Tooltip>
           </div>
-          {headCommit?.phase === 'public' ? null : (
+          {canAmend && (
             <div className="button-row">
               <VSCodeButton
                 appearance="icon"

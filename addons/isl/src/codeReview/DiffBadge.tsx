@@ -23,7 +23,7 @@ import {useRunOperation} from '../serverAPIState';
 import {exactRevset} from '../types';
 import {diffSummary, codeReviewProvider} from './CodeReviewInfo';
 import {openerUrlForDiffUrl} from './github/GitHubUrlOpener';
-import {SyncStatus, syncStatusAtom} from './syncStatus';
+import {SyncStatus, syncStatusByHash} from './syncStatus';
 import {VSCodeButton} from '@vscode/webview-ui-toolkit/react';
 import {useState, Component, Suspense} from 'react';
 import {atom, useRecoilValue} from 'recoil';
@@ -46,6 +46,12 @@ export function DiffInfo({commit, hideActions}: {commit: CommitInfo; hideActions
   const diffId = commit.diffId;
   if (repo == null || diffId == null) {
     return null;
+  }
+  // Do not show diff info (and "Ship It" button) if there are successors.
+  // Users should look at the diff info and buttons from the successor commit instead.
+  // But the diff number can still be useful so show it.
+  if (commit.successorInfo != null) {
+    return <DiffNumber>{repo.formatDiffNumber(diffId)}</DiffNumber>;
   }
   return (
     <DiffErrorBoundary provider={repo} diffId={diffId}>
@@ -101,7 +107,7 @@ function DiffInfoInner({
   hideActions: boolean;
 }) {
   const diffInfoResult = useRecoilValue(diffSummary(diffId));
-  const syncStatuses = useRecoilValue(syncStatusAtom);
+  const syncStatus = useRecoilValue(syncStatusByHash(commit.hash));
   if (diffInfoResult.error) {
     return <DiffLoadError number={provider.formatDiffNumber(diffId)} provider={provider} />;
   }
@@ -109,7 +115,6 @@ function DiffInfoInner({
     return <DiffSpinner diffId={diffId} provider={provider} />;
   }
   const info = diffInfoResult.value;
-  const syncStatus = syncStatuses?.get(commit.hash);
   return (
     <div
       className={`diff-info ${provider.name}-diff-info`}

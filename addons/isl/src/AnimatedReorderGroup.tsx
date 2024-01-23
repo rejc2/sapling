@@ -5,10 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+import {prefersReducedMotion} from './mediaQuery';
 import deepEqual from 'fast-deep-equal';
 import React, {useRef, useLayoutEffect} from 'react';
 
-type ReorderGroupProps = {
+type ReorderGroupProps = React.HTMLAttributes<HTMLDivElement> & {
   children: React.ReactElement[];
   animationDuration?: number;
   animationMinPixel?: number;
@@ -46,10 +47,13 @@ export const AnimatedReorderGroup: React.FC<ReorderGroupProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const previousStateRef = useRef<Readonly<PreviousState>>(emptyPreviousState);
+  const reducedMotion = prefersReducedMotion();
 
   useLayoutEffect(() => {
-    const preferReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const animate = !preferReducedMotion;
+    if (reducedMotion) {
+      return;
+    }
+    const animate = true;
     updatePreviousState(
       containerRef,
       previousStateRef,
@@ -57,13 +61,15 @@ export const AnimatedReorderGroup: React.FC<ReorderGroupProps> = ({
       animationDuration,
       animationMinPixel,
     );
-  }, [children, animationDuration, animationMinPixel]);
+  }, [children, animationDuration, animationMinPixel, reducedMotion]);
 
   // Try to get the rects of old children right before rendering new children
   // and calling the LayoutEffect callback. This captures position changes
   // since the last useLayoutEffect. The position changes might be caused by
   // scrolling or resizing the window.
-  updatePreviousState(containerRef, previousStateRef, false, animationDuration);
+  if (!reducedMotion) {
+    updatePreviousState(containerRef, previousStateRef, false, animationDuration);
+  }
 
   return (
     <div {...props} ref={containerRef}>
@@ -91,6 +97,7 @@ function updatePreviousState(
   const elements = scanElements(containerRef);
   const idList: Array<string> = [];
   const rectMap = new Map<string, DOMRect>();
+  const toAnimate: Array<[HTMLElement, number, number]> = [];
   elements.forEach(element => {
     const reorderId = element.getAttribute('data-reorder-id');
     if (reorderId == null || reorderId === '') {
@@ -105,15 +112,23 @@ function updatePreviousState(
         const dx = oldBox.left - newBox.left;
         const dy = oldBox.top - newBox.top;
         if (Math.abs(dx) + Math.abs(dy) > animationMinPixel) {
-          element.animate(
-            [{transform: `translate(${dx}px,${dy}px)`}, {transform: 'translate(0,0)'}],
-            {duration: animationDuration, easing: 'ease-out'},
-          );
+          toAnimate.push([element, dx, dy]);
         }
       }
     }
     rectMap.set(reorderId, newBox);
   });
+
+  if (toAnimate.length > 0) {
+    requestAnimationFrame(() => {
+      toAnimate.forEach(([element, dx, dy]) => {
+        element.animate(
+          [{transform: `translate(${dx}px,${dy}px)`}, {transform: 'translate(0,0)'}],
+          {duration: animationDuration, easing: 'ease-out'},
+        );
+      });
+    });
+  }
 
   if (!animate && !deepEqual(idList, previousStateRef.current.idList)) {
     // If animate is false, we want to get the rects of the old children.

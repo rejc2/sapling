@@ -11,6 +11,11 @@
   flex-direction: column;
 }
 
+.render-dag-row-group {
+  display: flex;
+  flex-direction: column;
+}
+
 .render-dag-row,
 .render-dag-row-left-side-line {
   display: flex;
@@ -18,10 +23,17 @@
   flex-grow: 0;
 }
 
-.render-dag-row-left-side-line.pad-line1 {
+.render-dag-row-left-side-line.grow {
   flex-grow: 1;
 }
 
 .render-dag-row-right-side {
   flex-grow: 1;
+}
+
+.render-dag-svg-patterns {
+  /* Cannot use 'display: none' - it ignores the svg pattern definitions */
+  opacity: 0;
+  height: 0;
+  width: 0;
 }
