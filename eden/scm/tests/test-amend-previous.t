@@ -1,5 +1,8 @@
 #debugruntest-compatible
 
+#require no-eden
+
+
   $ eagerepo
 
 Set up test environment.
@@ -121,7 +124,7 @@ Test bookmark navigation.
 Test bookmark activation.
   $ hg up top
   1 files updated, 0 files merged, 0 files removed, 0 files unresolved
-  (activating bookmark top)
+  (changing active bookmark from root to top)
   $ hg previous 3
   1 files updated, 0 files merged, 0 files removed, 0 files unresolved
   (leaving bookmark top)

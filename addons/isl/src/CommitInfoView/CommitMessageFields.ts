@@ -10,8 +10,11 @@ import type {CommitMessageFields, FieldConfig, FieldsBeingEdited} from './types'
 
 import {temporaryCommitTitle} from '../CommitTitle';
 import {Internal} from '../Internal';
+import {codeReviewProvider} from '../codeReview/CodeReviewInfo';
 import {atomResetOnCwdChange} from '../repositoryData';
 import {arraysEqual} from '../utils';
+import {OSSCommitMessageFieldSchema} from './OSSCommitMessageFieldsSchema';
+import {atom} from 'jotai';
 import {notEmpty} from 'shared/utils';
 
 export function emptyCommitMessageFields(schema: Array<FieldConfig>): CommitMessageFields {
@@ -224,7 +227,10 @@ function joinWithComma(tokens: Array<string>): string {
  * Look through the message fields for a diff number
  */
 export function findEditedDiffNumber(field: CommitMessageFields): string | undefined {
-  const found = field['Differential Revision'];
+  if (Internal.diffFieldTag == null) {
+    return undefined;
+  }
+  const found = field[Internal.diffFieldTag];
   if (Array.isArray(found)) {
     return found[0];
   }
@@ -296,22 +302,17 @@ export function parseCommitMessageFields(
   return result;
 }
 
-export const OSSDefaultFieldSchema: Array<FieldConfig> = [
-  {key: 'Title', type: 'title', icon: 'milestone'},
-  {key: 'Description', type: 'textarea', icon: 'note'},
-];
-
 /**
  * Schema defining what fields we expect to be in a CommitMessageFields object,
  * and some information about those fields.
- * This is determined by an sl config on the server, hence it lives as an atom.
  */
-export const commitMessageFieldsSchema = atomResetOnCwdChange<Array<FieldConfig>>(
-  getDefaultCommitMessageSchema(),
-);
+export const commitMessageFieldsSchema = atom(get => {
+  const provider = get(codeReviewProvider);
+  return provider?.commitMessageFieldsSchema ?? getDefaultCommitMessageSchema();
+});
 
 export function getDefaultCommitMessageSchema() {
-  return Internal.CommitMessageFieldSchema ?? OSSDefaultFieldSchema;
+  return Internal.CommitMessageFieldSchemaForGitHub ?? OSSCommitMessageFieldSchema;
 }
 
 export function editedMessageSubset(
@@ -321,7 +322,7 @@ export function editedMessageSubset(
   const fields = Object.fromEntries(
     Object.entries(message).filter(([k]) => fieldsBeingEdited[k] ?? false),
   );
-  return {fields};
+  return fields;
 }
 
 export function applyEditedFields(

@@ -11,15 +11,15 @@ license = "GPLv2+"
 anyhow = "1.0.75"
 async-trait = "0.1.71"
 blobstore = { version = "0.1.0", path = "../../blobstore" }
-bytes = { version = "1.1", features = ["serde"] }
+bytes = { version = "1.6.0", features = ["serde"] }
 cloned = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 context = { version = "0.1.0", path = "../../server/context" }
+derived_data_manager = { version = "0.1.0", path = "../../derived_data/manager" }
 encoding_rs = "0.8"
 filestore = { version = "0.1.0", path = "../../filestore" }
-futures = { version = "0.3.28", features = ["async-await", "compat"] }
+futures = { version = "0.3.30", features = ["async-await", "compat"] }
 git_symbolic_refs = { version = "0.1.0", path = "../../git_symbolic_refs" }
 gix-actor = "0.24"
-gix-date = "0.7"
 gix-hash = "0.11"
 gix-object = "0.33"
 http = "0.2"
@@ -32,5 +32,5 @@ rand = { version = "0.8", features = ["small_rng"] }
 slog = { version = "2.7", features = ["max_level_trace", "nested-values"] }
 smallvec = { version = "1.6.1", features = ["serde", "specialization", "union"] }
 sorted_vector_map = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
-tokio = { version = "1.29.1", features = ["full", "test-util", "tracing"] }
+tokio = { version = "1.36.0", features = ["full", "test-util", "tracing"] }
 tokio-stream = { version = "0.1.14", features = ["fs", "io-util", "net", "signal", "sync", "time"] }

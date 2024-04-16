@@ -5,6 +5,7 @@
  * GNU General Public License version 2.
  */
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::iter::zip;
 use std::sync::Arc;
@@ -321,11 +322,15 @@ impl RenameFinderInner {
     ) -> Result<Option<RepoPathBuf>> {
         tracing::trace!(keys_len = keys.len(), " read_renamed_metadata_forward");
         block_in_place(move || {
-            let renames = self.file_reader.get_rename_iter(keys)?;
-            for rename in renames {
-                let (key, rename_from_key) = rename?;
-                if rename_from_key.path.as_repo_path() == old_path {
-                    return Ok(Some(key.path));
+            // the ordering of the result of `get_rename_iter()` can be different than `keys`
+            let renames = self.file_reader.get_rename_iter(keys.clone())?;
+            let rename_map: HashMap<_, _> = renames.filter_map(|x| x.ok()).collect();
+            for key in keys {
+                let rename_from_key = rename_map.get(&key);
+                if let Some(rename_from_key) = rename_from_key {
+                    if rename_from_key.path.as_repo_path() == old_path {
+                        return Ok(Some(key.path));
+                    }
                 }
             }
             Ok(None)
@@ -334,12 +339,13 @@ impl RenameFinderInner {
 
     async fn read_renamed_metadata_backward(&self, key: Key) -> Result<Option<RepoPathBuf>> {
         block_in_place(move || {
-            let renames = self.file_reader.get_rename_iter(vec![key])?;
-            for rename in renames {
+            let mut renames = self.file_reader.get_rename_iter(vec![key])?;
+            if let Some(rename) = renames.next() {
                 let (_, rename_from_key) = rename?;
-                return Ok(Some(rename_from_key.path));
+                Ok(Some(rename_from_key.path))
+            } else {
+                Ok(None)
             }
-            Ok(None)
         })
     }
 

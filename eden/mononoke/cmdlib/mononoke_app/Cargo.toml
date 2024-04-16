@@ -17,7 +17,7 @@ blobstore_factory = { version = "0.1.0", path = "../../blobstore/factory" }
 bonsai_hg_mapping = { version = "0.1.0", path = "../../bonsai_hg_mapping" }
 bookmarks = { version = "0.1.0", path = "../../bookmarks" }
 cached_config = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
-clap = { version = "4.4.12", features = ["derive", "env", "string", "unicode", "wrap_help"] }
+clap = { version = "4.5.2", features = ["derive", "env", "string", "unicode", "wrap_help"] }
 cmdlib_caching = { version = "0.1.0", path = "../caching" }
 cmdlib_logging = { version = "0.1.0", path = "../log" }
 context = { version = "0.1.0", path = "../../server/context" }
@@ -25,8 +25,8 @@ derived_data_remote = { version = "0.1.0", path = "../../derived_data/remote" }
 environment = { version = "0.1.0", path = "../environment" }
 facet = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 fbinit = { version = "0.1.2", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
-futures = { version = "0.3.28", features = ["async-await", "compat"] }
-futures-util = "0.3.7"
+futures = { version = "0.3.30", features = ["async-await", "compat"] }
+futures-util = "0.3.30"
 itertools = "0.11.0"
 justknobs = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 megarepo_config = { version = "0.1.0", path = "../../megarepo_api/megarepo_config" }
@@ -54,4 +54,4 @@ slog_stats = { version = "0.1.0", git = "https://github.com/facebookexperimental
 sql_ext = { version = "0.1.0", path = "../../common/rust/sql_ext" }
 stats = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 tls = { version = "0.1.0", path = "tls" }
-tokio = { version = "1.29.1", features = ["full", "test-util", "tracing"] }
+tokio = { version = "1.36.0", features = ["full", "test-util", "tracing"] }

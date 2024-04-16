@@ -6,7 +6,7 @@
 
   $ . "${TEST_FIXTURES}/library.sh"
   $ REPOTYPE="blob_files"
-  $ ENABLED_DERIVED_DATA='["git_commits", "git_trees", "git_delta_manifests", "unodes", "filenodes", "hgchangesets"]' setup_common_config $REPOTYPE
+  $ ENABLED_DERIVED_DATA='["git_commits", "git_trees", "git_delta_manifests", "unodes"]' setup_common_config $REPOTYPE
   $ GIT_REPO_ORIGIN="${TESTTMP}/origin/repo-git"
   $ GIT_REPO_SUBMODULE="${TESTTMP}/origin/repo-submodule"
   $ GIT_REPO="${TESTTMP}/repo-git"
@@ -62,7 +62,7 @@
 
 # Import it into Mononoke
   $ cd "$TESTTMP"
-  $ gitimport --record-head-symref "$GIT_REPO" --generate-bookmarks full-repo
+  $ gitimport "$GIT_REPO" --generate-bookmarks full-repo
   * using repo "repo" repoid RepositoryId(0) (glob)
   * GitRepo:*repo-git commit 1 of 3 - Oid:* => Bid:* (glob)
   * GitRepo:*repo-git commit 2 of 3 - Oid:* => Bid:* (glob)
@@ -74,7 +74,7 @@
   * Ref: "refs/tags/first_tag": Some(ChangesetId(Blake2(032cd4dce0406f1c1dd1362b6c3c9f9bdfa82f2fc5615e237a890be4fe08b044))) (glob)
   * Initializing repo: repo (glob)
   * Initialized repo: repo (glob)
-  * All repos initialized. It took: 0 seconds (glob)
+  * All repos initialized. It took: * seconds (glob)
   * Bookmark: "heads/master": ChangesetId(Blake2(*)) (created) (glob)
   * Bookmark: "heads/master": ChangesetId(Blake2(*)) (already up-to-date) (glob)
   * Bookmark: "tags/empty_tag": ChangesetId(Blake2(da93dc81badd8d407db0f3219ec0ec78f1ef750ebfa95735bb483310371af80c)) (created) (glob)

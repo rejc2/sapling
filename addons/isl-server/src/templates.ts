@@ -10,8 +10,10 @@ import type {
   ChangedFile,
   CommitInfo,
   CommitPhaseType,
+  Hash,
   ShelvedChange,
   SmartlogCommits,
+  StableInfo,
   SuccessorInfo,
 } from 'isl/src/types';
 
@@ -22,7 +24,7 @@ import {fromEntries} from './utils';
 export const COMMIT_END_MARK = '<<COMMIT_END_MARK>>';
 export const NULL_CHAR = '\0';
 export const ESCAPED_NULL_CHAR = '\\0';
-export const HEAD_MARKER = '@';
+export const WDIR_PARENT_MARKER = '@';
 
 ///// Main commits fetch /////
 
@@ -37,14 +39,15 @@ export const FIELDS = {
   bookmarks: `{bookmarks % '{bookmark}${ESCAPED_NULL_CHAR}'}`,
   remoteBookmarks: `{remotenames % '{remotename}${ESCAPED_NULL_CHAR}'}`,
   parents: `{parents % "{node}${ESCAPED_NULL_CHAR}"}`,
-  isHead: `{ifcontains(rev, revset('.'), '${HEAD_MARKER}')}`,
+  isDot: `{ifcontains(rev, revset('.'), '${WDIR_PARENT_MARKER}')}`,
   filesAdded: '{file_adds|json}',
   filesModified: '{file_mods|json}',
   filesRemoved: '{file_dels|json}',
   successorInfo: '{mutations % "{operation}:{successors % "{node}"},"}',
-  cloesestPredecessors: '{predecessors % "{node},"}',
+  closestPredecessors: '{predecessors % "{node},"}',
   // This would be more elegant as a new built-in template
   diffId: '{if(phabdiff, phabdiff, github_pull_request_number)}',
+  isFollower: '{sapling_pr_follower|json}',
   stableCommitMetadata: Internal.stableCommitConfig?.template ?? '',
   // Description must be last
   description: '{desc}',
@@ -90,16 +93,17 @@ export function parseCommitInfoOutput(logger: Logger, output: string): SmartlogC
         phase: lines[FIELD_INDEX.phase] as CommitPhaseType,
         bookmarks: splitLine(lines[FIELD_INDEX.bookmarks]),
         remoteBookmarks: splitLine(lines[FIELD_INDEX.remoteBookmarks]),
-        isHead: lines[FIELD_INDEX.isHead] === HEAD_MARKER,
+        isDot: lines[FIELD_INDEX.isDot] === WDIR_PARENT_MARKER,
         filesSample: files.slice(0, MAX_FETCHED_FILES_PER_COMMIT),
         totalFileCount: files.length,
         successorInfo: parseSuccessorData(lines[FIELD_INDEX.successorInfo]),
-        closestPredecessors: splitLine(lines[FIELD_INDEX.cloesestPredecessors], ','),
+        closestPredecessors: splitLine(lines[FIELD_INDEX.closestPredecessors], ','),
         description: lines
           .slice(FIELD_INDEX.description + 1 /* first field of description is title; skip it */)
           .join('\n')
           .trim(),
         diffId: lines[FIELD_INDEX.diffId] != '' ? lines[FIELD_INDEX.diffId] : undefined,
+        isFollower: JSON.parse(lines[FIELD_INDEX.isFollower]) as boolean,
         stableCommitMetadata:
           lines[FIELD_INDEX.stableCommitMetadata] != ''
             ? Internal.stableCommitConfig?.parse(lines[FIELD_INDEX.stableCommitMetadata])
@@ -110,6 +114,30 @@ export function parseCommitInfoOutput(logger: Logger, output: string): SmartlogC
     }
   }
   return commitInfos;
+}
+
+/**
+ * Additional stable locations in the commit fetch will not automatically
+ * include "stableCommitMetadata". Insert this data onto the commits.
+ */
+export function attachStableLocations(commits: Array<CommitInfo>, locations: Array<StableInfo>) {
+  const map: Record<Hash, Array<StableInfo>> = {};
+  for (const location of locations) {
+    const existing = map[location.hash] ?? [];
+    map[location.hash] = [...existing, location];
+  }
+
+  for (const commit of commits) {
+    if (commit.hash in map) {
+      commit.stableCommitMetadata = [
+        ...(commit.stableCommitMetadata ?? []),
+        ...map[commit.hash].map(location => ({
+          value: location.name,
+          description: location.info ?? '',
+        })),
+      ];
+    }
+  }
 }
 
 ///// Shelve /////

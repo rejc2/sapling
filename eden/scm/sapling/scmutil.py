@@ -758,8 +758,20 @@ def origpath(ui, repo, filepath):
     if not origbackuppath:
         return filepath + ".orig"
 
+    origbackuppath = origbackuppath.replace("@DOTDIR@", ui.identity.dotdir())
+
     # Convert filepath from an absolute path into a path inside the repo.
     filepathfromroot = util.normpath(os.path.relpath(filepath, start=repo.root))
+
+    # Auto-correct identity path
+    if origbackuppath.startswith("."):
+        for ident in bindings.identity.all():
+            dotdir = ident.dotdir()
+            if origbackuppath.startswith(dotdir):
+                origbackuppath = (
+                    repo.ui.identity.dotdir() + origbackuppath[len(dotdir) :]
+                )
+                break
 
     origvfs = vfs.vfs(repo.wjoin(origbackuppath))
     origbackupdir = origvfs.dirname(filepathfromroot)
@@ -1029,7 +1041,7 @@ def _findrenames(repo, matcher, added, removed, similarity):
         for old, new, score in similar.findrenames(repo, added, removed, similarity):
             if repo.ui.verbose or not matcher.exact(old) or not matcher.exact(new):
                 repo.ui.status(
-                    _("recording removal of %s as rename to %s " "(%d%% similar)\n")
+                    _("recording removal of %s as rename to %s (%d%% similar)\n")
                     % (matcher.rel(old), matcher.rel(new), score * 100)
                 )
             renames[new] = old

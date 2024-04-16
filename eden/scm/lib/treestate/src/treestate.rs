@@ -25,9 +25,9 @@ use util::path::create_dir;
 use crate::filestate::FileStateV2;
 use crate::filestate::StateFlags;
 use crate::filestore::FileStore;
-use crate::legacy_eden_dirstate::read_eden_dirstate;
-use crate::legacy_eden_dirstate::write_eden_dirstate;
 use crate::metadata::Metadata;
+use crate::overlay_dirstate::read_overlay_dirstate;
+use crate::overlay_dirstate::write_overlay_dirstate;
 use crate::root::TreeStateRoot;
 use crate::serialization::Serializable;
 use crate::store::BlockId;
@@ -49,10 +49,9 @@ pub struct TreeState {
     tree: Tree<FileStateV2>,
     root: TreeStateRoot,
     original_root_id: BlockId,
-    // eden_dirstate_path is only used in the case the case that the treestate is
+    // overlay_dirstate_path is only used in the case the case that the treestate is
     // wrapping a legacy eden dirstate which is necessary for EdenFS compatility.
-    // TODO: Remove once EdenFS has migrated to treestate.
-    eden_dirstate_path: Option<PathBuf>,
+    overlay_dirstate_path: Option<PathBuf>,
     case_sensitive: bool,
     pending_change_count: u64,
 }
@@ -65,8 +64,7 @@ impl fmt::Debug for TreeState {
 
 impl TreeState {
     /// Read `TreeState` from a file, or create an empty new `TreeState` if `root_id` is None.
-    pub fn open<P: AsRef<Path>>(path: P, root_id: BlockId, case_sensitive: bool) -> Result<Self> {
-        let path = path.as_ref();
+    pub fn open(path: &Path, root_id: BlockId, case_sensitive: bool) -> Result<Self> {
         tracing::trace!(target: "treestate::open", "creating filestore at {path:?}");
         let store = FileStore::open(path)?;
         let root = {
@@ -82,7 +80,7 @@ impl TreeState {
             tree,
             root,
             original_root_id: root_id,
-            eden_dirstate_path: None,
+            overlay_dirstate_path: None,
             case_sensitive,
             pending_change_count: 0,
         })
@@ -103,7 +101,7 @@ impl TreeState {
             tree,
             root,
             original_root_id: BlockId(0),
-            eden_dirstate_path: None,
+            overlay_dirstate_path: None,
             case_sensitive,
             pending_change_count: 0,
         };
@@ -130,23 +128,24 @@ impl TreeState {
     /// treestate.
     /// N.B: A legacy eden dirstate has a different binary format to a legacy
     /// dirstate.
-    pub fn from_eden_dirstate<P: AsRef<Path>>(
-        eden_dirstate_path: P,
+    pub fn from_overlay_dirstate(
+        overlay_dirstate_path: &Path,
         case_sensitive: bool,
     ) -> Result<Self> {
-        let store = FileStore::in_memory()?;
+        let store =
+            FileStore::in_memory_with_lock_path(&overlay_dirstate_path.with_extension(".lock"))?;
         let root = TreeStateRoot::default();
         let tree = Tree::new();
 
-        let (metadata, entries) = read_eden_dirstate(eden_dirstate_path.as_ref())?;
+        let (metadata, entries) = read_overlay_dirstate(overlay_dirstate_path)?;
 
-        let path = eden_dirstate_path.as_ref().to_path_buf();
+        let path = overlay_dirstate_path.to_path_buf();
         let mut treestate = TreeState {
             store,
             tree,
             root,
             original_root_id: BlockId(0),
-            eden_dirstate_path: Some(path),
+            overlay_dirstate_path: Some(path),
             case_sensitive,
             pending_change_count: 0,
         };
@@ -156,6 +155,44 @@ impl TreeState {
         for (key, state) in entries {
             treestate.insert(key, &state)?;
         }
+
+        Ok(treestate)
+    }
+
+    /// Similar to `from_overlay_dirstate` but read, edit, write within a lock.
+    /// This allows atomic updates of the overlay dirstate.
+    /// The `edit_func` can modify the treestate and optionally flush it to disk.
+    pub fn from_overlay_dirstate_with_locked_edit(
+        overlay_dirstate_path: &Path,
+        case_sensitive: bool,
+        edit_func: &dyn Fn(&mut Self) -> Result<()>,
+    ) -> Result<Self> {
+        let mut store =
+            FileStore::in_memory_with_lock_path(&overlay_dirstate_path.with_extension(".lock"))?;
+        let _locked = store.lock()?;
+
+        let root = TreeStateRoot::default();
+        let tree = Tree::new();
+
+        let (metadata, entries) = read_overlay_dirstate(overlay_dirstate_path)?;
+
+        let path = overlay_dirstate_path.to_path_buf();
+        let mut treestate = TreeState {
+            store,
+            tree,
+            root,
+            original_root_id: BlockId(0),
+            overlay_dirstate_path: Some(path),
+            case_sensitive,
+            pending_change_count: 0,
+        };
+
+        treestate.set_metadata(metadata)?;
+        for (key, state) in entries {
+            treestate.insert(key, &state)?;
+        }
+
+        edit_func(&mut treestate)?;
 
         Ok(treestate)
     }
@@ -196,11 +233,11 @@ impl TreeState {
     }
 
     /// Save as a new file.
-    pub fn write_new<P: AsRef<Path>>(&mut self, directory: P) -> Result<BlockId> {
+    pub fn write_new(&mut self, directory: &Path) -> Result<BlockId> {
         let name = format!("{:x}", uuid::Uuid::new_v4());
-        let path = directory.as_ref().join(name);
+        let path = directory.join(name);
         tracing::trace!(target: "treestate::write_new", ?path);
-        let mut new_store = FileStore::create(path)?;
+        let mut new_store = FileStore::create(&path)?;
         let _lock = new_store.lock()?;
         let tree_block_id = self.tree.write_full(&mut new_store, &self.store)?;
         self.store = new_store;
@@ -217,12 +254,10 @@ impl TreeState {
         let result = self.store.append(&root_buf)?;
         self.store.flush()?;
 
-        // TODO: Clean up once we migrate EdenFS to TreeState and no longer
-        // need to write to legacy eden dirstate format.
-        if let Some(eden_dirstate_path) = self.eden_dirstate_path.clone() {
+        if let Some(overlay_dirstate_path) = self.overlay_dirstate_path.clone() {
             let metadata = self.metadata()?;
             let entries = self.flatten_tree()?;
-            write_eden_dirstate(&eden_dirstate_path, metadata, entries)?;
+            write_overlay_dirstate(&overlay_dirstate_path, metadata, entries)?;
         }
 
         self.original_root_id = result;
@@ -552,7 +587,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let mut state = TreeState::new(dir.path(), true).expect("open").0;
         let block_id = state.flush().expect("flush");
-        let state = TreeState::open(dir.path().join(state.file_name().unwrap()), block_id, true)
+        let state = TreeState::open(&dir.path().join(state.file_name().unwrap()), block_id, true)
             .expect("open");
         assert!(state.metadata_bytes().is_empty());
         assert_eq!(state.len(), 0);
@@ -563,7 +598,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let mut state = TreeState::new(dir.path(), true).expect("open").0;
         let block_id = state.write_new(dir.path()).expect("write_as");
-        let state = TreeState::open(dir.path().join(state.file_name().unwrap()), block_id, true)
+        let state = TreeState::open(&dir.path().join(state.file_name().unwrap()), block_id, true)
             .expect("open");
         assert!(state.metadata_bytes().is_empty());
         assert_eq!(state.len(), 0);
@@ -578,9 +613,9 @@ mod tests {
         let block_id1 = state.flush().expect("flush");
         let block_id2 = state.write_new(dir.path()).expect("write_as");
         let new_name = state.file_name().unwrap();
-        let state = TreeState::open(dir.path().join(orig_name), block_id1, true).expect("open");
+        let state = TreeState::open(&dir.path().join(orig_name), block_id1, true).expect("open");
         assert_eq!(state.metadata_bytes()[..], b"foobar"[..]);
-        let state = TreeState::open(dir.path().join(new_name), block_id2, true).expect("open");
+        let state = TreeState::open(&dir.path().join(new_name), block_id2, true).expect("open");
         assert_eq!(state.metadata_bytes()[..], b"foobar"[..]);
     }
 
@@ -653,8 +688,8 @@ mod tests {
         b"rust/radixbuf/.git/objects/b3/9b2824f47b66462e92ffa4f978bc95f5fdad2e",
     ];
 
-    fn new_treestate<P: AsRef<Path>>(directory: P) -> TreeState {
-        let mut state = TreeState::new(directory.as_ref(), true).expect("open").0;
+    fn new_treestate(directory: &Path) -> TreeState {
+        let mut state = TreeState::new(directory, true).expect("open").0;
         let mut rng = ChaChaRng::from_seed([0; 32]);
         for path in &SAMPLE_PATHS {
             let file = rng.gen();
@@ -694,7 +729,7 @@ mod tests {
         let mut state = new_treestate(dir.path());
         let block_id = state.flush().expect("flush");
         let mut state =
-            TreeState::open(dir.path().join(state.file_name().unwrap()), block_id, true)
+            TreeState::open(&dir.path().join(state.file_name().unwrap()), block_id, true)
                 .expect("open");
         let mut rng = ChaChaRng::from_seed([0; 32]);
         for path in &SAMPLE_PATHS {
@@ -710,7 +745,7 @@ mod tests {
         let mut state = new_treestate(dir.path());
         let block_id = state.write_new(dir.path()).expect("write_as");
         let mut state =
-            TreeState::open(dir.path().join(state.file_name().unwrap()), block_id, true)
+            TreeState::open(&dir.path().join(state.file_name().unwrap()), block_id, true)
                 .expect("open");
         let mut rng = ChaChaRng::from_seed([0; 32]);
         for path in &SAMPLE_PATHS {
@@ -852,7 +887,7 @@ mod tests {
 
         let block_id = state.flush().expect("flush");
 
-        let state = TreeState::open(dir.path().join(orig_name), block_id, true).expect("open");
+        let state = TreeState::open(&dir.path().join(orig_name), block_id, true).expect("open");
         assert_eq!(
             state.parents().collect::<Result<Vec<_>>>().unwrap(),
             [p1, p3].to_vec()

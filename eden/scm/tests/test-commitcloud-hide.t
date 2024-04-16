@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
   $ setconfig format.use-segmented-changelog=true
   $ setconfig experimental.allowfilepeer=True
 
@@ -31,6 +34,7 @@ manually.
   $ hg bookmark -r $Y other
 
   $ cd $TESTTMP
+  $ setconfig 'remotenames.selectivepulldefault=master other'
   $ clone server client1
   $ cd client1
   $ hg goto -q 'desc(Y)'
@@ -101,6 +105,7 @@ Remove by hash with two related commits removes both of them
   removing heads:
       0d5fa5021fb8  S
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   $ showgraph
@@ -142,6 +147,7 @@ Remove by hash removes commit, all descendants and their bookmarks
   adding heads:
       9c4fc22fed7c  M
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   $ showgraph
@@ -173,6 +179,7 @@ Remove when other heads keep ancestors alive, removing it just removes the head
   removing heads:
       f6a18bc998c9  C
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   $ showgraph
@@ -202,6 +209,7 @@ Remove by bookmark leaves commits alone if there are other bookmarks
   removing bookmarks:
       d-bookmark: fa9d7a2f38d1
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   $ showgraph
@@ -234,6 +242,7 @@ But removing all of the bookmarks pointing to a head removes the head
       d-bookmark2: fa9d7a2f38d1
       d-bookmark3: fa9d7a2f38d1
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   $ showgraph
@@ -261,6 +270,7 @@ Removing a bookmark in the stack doesn't hide the commit
   removing bookmarks:
       b-bookmark: 9272e7e427bf
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   $ showgraph
@@ -288,6 +298,7 @@ Removing a bookmark on a public commit just removes it
   removing bookmarks:
       x-bookmark: 8a0aebad5927
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   $ showgraph
@@ -315,6 +326,7 @@ Removing a lone commit just removes that head
   removing heads:
       9c4fc22fed7c  M
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   $ showgraph
@@ -340,6 +352,7 @@ Removing a remote bookmark works
   removing remote bookmarks:
       remote/other: 1cab361770de
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   $ showgraph
@@ -351,7 +364,7 @@ Removing a remote bookmark works
   │
   o  A: draft
   │
-  │ @  Y: draft
+  │ @  Y: public  remote/other
   │ │
   o │  W: public  remote/master
   │ │
@@ -385,7 +398,7 @@ Merge commits can be removed
   ├─╯
   o  A: draft
   │
-  │ @  Y: draft
+  │ @  Y: public  remote/other
   │ │
   o │  W: public  remote/master
   │ │
@@ -401,6 +414,7 @@ Merge commits can be removed
       080f94b3ed7f  F
       e59c81d53e06  G
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   $ showgraph
@@ -414,7 +428,7 @@ Merge commits can be removed
   ├─╯
   o  A: draft
   │
-  │ @  Y: draft
+  │ @  Y: public  remote/other
   │ │
   o │  W: public  remote/master
   │ │

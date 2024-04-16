@@ -23,12 +23,15 @@ use eagerepo::EagerRepoStore;
 use edenapi::Builder;
 use edenapi::EdenApi;
 use edenapi::EdenApiError;
-use fs_err as fs;
 use manifest_tree::ReadTreeManifest;
 use metalog::MetaLog;
-use once_cell::sync::Lazy;
 use once_cell::sync::OnceCell;
 use parking_lot::RwLock;
+use repo_minimal_info::constants::SUPPORTED_DEFAULT_REQUIREMENTS;
+use repo_minimal_info::constants::SUPPORTED_STORE_REQUIREMENTS;
+pub use repo_minimal_info::read_sharedpath;
+use repo_minimal_info::RepoMinimalInfo;
+use repo_minimal_info::Requirements;
 use repolock::RepoLocker;
 use revisionstore::scmstore;
 use revisionstore::scmstore::FileStoreBuilder;
@@ -49,11 +52,8 @@ use util::path::absolute;
 #[cfg(feature = "wdir")]
 use workingcopy::workingcopy::WorkingCopy;
 
-use crate::constants::SUPPORTED_DEFAULT_REQUIREMENTS;
-use crate::constants::SUPPORTED_STORE_REQUIREMENTS;
 use crate::errors;
 use crate::init;
-use crate::requirements::Requirements;
 use crate::trees::TreeManifestResolver;
 
 pub struct Repo {
@@ -100,7 +100,7 @@ impl Repo {
     where
         P: Into<PathBuf>,
     {
-        Self::build(path, pinned_config, None)
+        Self::build(path.into(), pinned_config, None)
     }
 
     /// Loads the repo at given path, eschewing any config loading in
@@ -111,16 +111,23 @@ impl Repo {
     where
         P: Into<PathBuf>,
     {
-        Self::build(path, &[], Some(config))
+        Self::build(path.into(), &[], Some(config))
     }
 
-    fn build<P>(path: P, pinned_config: &[PinnedConfig], config: Option<ConfigSet>) -> Result<Self>
-    where
-        P: Into<PathBuf>,
-    {
-        let path = path.into();
-        assert!(path.is_absolute());
+    fn build(
+        path: PathBuf,
+        pinned_config: &[PinnedConfig],
+        config: Option<ConfigSet>,
+    ) -> Result<Self> {
+        let info = RepoMinimalInfo::from_repo_root(path)?;
+        Self::build_with_info(info, pinned_config, config)
+    }
 
+    fn build_with_info(
+        info: RepoMinimalInfo,
+        pinned_config: &[PinnedConfig],
+        config: Option<ConfigSet>,
+    ) -> Result<Self> {
         constructors::init();
 
         assert!(
@@ -128,26 +135,22 @@ impl Repo {
             "Don't pass a config and CLI overrides to Repo::build"
         );
 
-        let ident = match identity::sniff_dir(&path)? {
-            Some(ident) => ident,
-            None => {
-                return Err(errors::RepoNotFound(path.to_string_lossy().to_string()).into());
-            }
-        };
-
         let config = match config {
             Some(config) => config,
-            None => configloader::hg::load(Some(&path), pinned_config)?,
+            None => configloader::hg::load(Some(&info), pinned_config)?,
         };
 
-        let dot_hg_path = path.join(ident.dot_dir());
-
-        let (shared_path, shared_ident) = match read_sharedpath(&dot_hg_path)? {
-            Some((path, ident)) => (path, ident),
-            None => (path.clone(), ident.clone()),
-        };
-        let shared_dot_hg_path = shared_path.join(shared_ident.dot_dir());
-        let store_path = shared_dot_hg_path.join("store");
+        let RepoMinimalInfo {
+            path,
+            ident,
+            shared_path,
+            shared_ident,
+            store_path,
+            dot_hg_path,
+            shared_dot_hg_path,
+            requirements,
+            store_requirements,
+        } = info;
 
         let repo_name = configloader::hg::read_repo_name_from_disk(&shared_dot_hg_path)
             .ok()
@@ -156,15 +159,6 @@ impl Repo {
                     .get("remotefilelog", "reponame")
                     .map(|v| v.to_string())
             });
-
-        let requirements = Requirements::open(
-            &dot_hg_path.join("requires"),
-            Lazy::force(&SUPPORTED_DEFAULT_REQUIREMENTS),
-        )?;
-        let store_requirements = Requirements::open(
-            &store_path.join("requires"),
-            Lazy::force(&SUPPORTED_STORE_REQUIREMENTS),
-        )?;
 
         let locker = Arc::new(RepoLocker::new(&config, store_path.clone())?);
 
@@ -199,11 +193,11 @@ impl Repo {
     pub fn reload_requires(&mut self) -> Result<()> {
         self.requirements = Requirements::open(
             &self.dot_hg_path.join("requires"),
-            Lazy::force(&SUPPORTED_DEFAULT_REQUIREMENTS),
+            &SUPPORTED_DEFAULT_REQUIREMENTS,
         )?;
         self.store_requirements = Requirements::open(
             &self.store_path.join("requires"),
-            Lazy::force(&SUPPORTED_STORE_REQUIREMENTS),
+            &SUPPORTED_STORE_REQUIREMENTS,
         )?;
         Ok(())
     }
@@ -333,11 +327,8 @@ impl Repo {
                 return Ok(None);
             }
             Some(path) => {
-                // EagerRepo URLs (test:, eager: file path).
-                if path.starts_with("test:")
-                    || path.starts_with("eager:")
-                    || (!path.contains("://") && EagerRepo::url_to_dir(&path).is_some())
-                {
+                // EagerRepo URLs (test:, eager: file path, dummyssh).
+                if EagerRepo::url_to_dir(&path).is_some() {
                     tracing::trace!(target: "repo::eden_api", "using EagerRepo at {}", &path);
                     return Ok(Some(self.force_construct_eden_api()?));
                 }
@@ -469,11 +460,6 @@ impl Repo {
             file_builder = file_builder.override_edenapi(false);
         }
 
-        tracing::trace!(target: "repo::file_store", "configuring aux data");
-        if self.config.get_or_default("scmstore", "auxindexedlog")? {
-            file_builder = file_builder.store_aux_data();
-        }
-
         tracing::trace!(target: "repo::file_store", "building file store");
         let file_store = file_builder.build().context("when building FileStore")?;
 
@@ -514,6 +500,19 @@ impl Repo {
             tracing::trace!(target: "repo::tree_store", "disabling edenapi");
             tree_builder = tree_builder.override_edenapi(false);
         }
+
+        // Trigger construction of file store.
+        let _ = self.file_store();
+
+        // The presence of the file store on the tree store causes the tree store to
+        // request tree metadata (and write it back to file store aux cache).
+        if let Some(file_store) = self.file_scm_store() {
+            tracing::trace!(target: "repo::tree_store", "configuring filestore for aux fetching");
+            tree_builder = tree_builder.filestore(file_store);
+        } else {
+            tracing::trace!(target: "repo::tree_store", "no filestore for aux fetching");
+        }
+
         let ts = Arc::new(tree_builder.build()?);
         let _ = self.tree_scm_store.set(ts.clone());
         let _ = self.tree_store.set(ts.clone());
@@ -631,33 +630,6 @@ impl Repo {
             }
         }
     }
-}
-
-pub fn read_sharedpath(dot_path: &Path) -> Result<Option<(PathBuf, identity::Identity)>> {
-    let sharedpath = fs::read_to_string(dot_path.join("sharedpath"))
-        .ok()
-        .map(PathBuf::from)
-        .and_then(|p| Some(PathBuf::from(p.parent()?)));
-
-    if let Some(mut possible_path) = sharedpath {
-        // sharedpath can be relative to our dot dir.
-        possible_path = dot_path.join(possible_path);
-
-        if !possible_path.is_dir() {
-            return Err(
-                errors::InvalidSharedPath(possible_path.to_string_lossy().to_string()).into(),
-            );
-        }
-
-        return match identity::sniff_dir(&possible_path)? {
-            Some(ident) => Ok(Some((possible_path, ident))),
-            None => {
-                Err(errors::InvalidSharedPath(possible_path.to_string_lossy().to_string()).into())
-            }
-        };
-    }
-
-    Ok(None)
 }
 
 impl std::fmt::Debug for Repo {

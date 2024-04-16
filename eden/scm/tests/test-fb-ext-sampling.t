@@ -1,5 +1,5 @@
 #chg-compatible
-#require no-fsmonitor
+#require no-fsmonitor no-eden
 
 Setup. SCM_SAMPLING_FILEPATH needs to be cleared as some environments may
 have it set.
@@ -204,7 +204,7 @@ Counters get logged for native commands:
     test_counter=1
 
 Metrics can be printed if devel.print-metrics is set:
-  $ hg log -r null -T '.\n' --config extensions.gauge=$TESTTMP/a.py --config devel.print-metrics=1 --config devel.skip-metrics=watchman
+  $ hg log -r null -T '.\n' --config extensions.gauge=$TESTTMP/a.py --config devel.print-metrics= --config devel.skip-metrics=watchman
   .
   atexit handler executed
   { metrics : { bar : 2,  foo : { a : 1,  b : 5}}}
@@ -247,10 +247,9 @@ Invalid format strings don't crash Mercurial
 
 Test command name:
   $ newclientrepo
-  atexit handler executed
   $ enable sparse
 Both Rust and Python use canonical "update" name:
-  $ SL_LOG=command_info=debug hg go . 2>&1 | grep command=
+  $ SL_LOG=command_info=debug hg go --config checkout.use-rust=false . 2>&1 | grep command=
   DEBUG command_info: command="update"
   DEBUG command_info: command="update"
 Sub commands work:

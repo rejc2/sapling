@@ -1,5 +1,8 @@
 #debugruntest-compatible
 
+#require no-eden
+
+
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 #
 # This software may be used and distributed according to the terms of the
@@ -7,6 +10,8 @@
 
   $ configure modernclient
   $ setconfig devel.segmented-changelog-rev-compat=true
+  $ setconfig experimental.copytrace=on
+  $ setconfig checkout.use-rust=true
 
   $ cat >> $HGRCPATH << 'EOF'
   > [extensions]
@@ -957,7 +962,7 @@
   $ echo '' > root
   $ hg shelve -q
   $ echo contADDent > root
-  $ hg unshelve -q --config 'ui.origbackuppath=.hg/origbackups'
+  $ hg unshelve -q --config 'ui.origbackuppath=@DOTDIR@/origbackups'
   warning: 1 conflicts while merging root! (edit, then use 'hg resolve --mark')
   unresolved conflicts (see 'hg resolve', then 'hg unshelve --continue')
   [1]

@@ -28,7 +28,6 @@ from sapling.i18n import _, _n
 
 from . import (
     background,
-    backup,
     backuplock,
     backupstate,
     dependencies,
@@ -124,7 +123,7 @@ subcmd = cloud.subcommand(
         ("View commits for a cloud workspace", ["log"]),
         (
             "Back up commits",
-            ["backup", "check"],
+            ["upload", "check"],
         ),
         ("Manage automatic backup or sync", ["disable", "enable"]),
         ("Enable sharing for a cloud workspace", ["share"]),
@@ -910,78 +909,6 @@ def cloudrollback(ui, repo, *revs, **opts):
 
 
 @subcmd(
-    "backup",
-    [
-        ("r", "rev", [], _("revisions to back up")),
-        ("", "background", None, "run backup in background"),
-        (
-            "f",
-            "force",
-            None,
-            "reset local state (reinitialise the local cache of backed up heads from the server)",
-        ),
-    ],
-    _("[-r REV...]"),
-)
-def cloudbackup(ui, repo, *revs, **opts):
-    """back up commits to commit cloud
-
-    Commits that have already been backed up will be skipped.
-
-    If no revision is specified, backs up all visible commits.
-    """
-    revs = revs + tuple(opts.get("rev", ()))
-    if ui.configbool("commitcloud", "usehttpupload"):
-        opts["rev"] = revs
-        return cloudupload(ui, repo, **opts)
-
-    repo.ignoreautobackup = True
-
-    force = opts.get("force")
-    inbackground = opts.get("background")
-    if revs:
-        if inbackground:
-            raise error.Abort("'--background' cannot be used with specific revisions")
-        revs = scmutil.revrange(repo, revs)
-    else:
-        revs = None
-
-    if force and inbackground:
-        raise error.Abort("'--background' cannot be used with '--force'")
-
-    if inbackground:
-        background.backgroundbackup(repo)
-        return 0
-
-    backedup, failed = backup.backup(
-        repo,
-        revs,
-        connect_opts=opts,
-        force=force,
-    )
-
-    if backedup:
-        repo.ui.status(
-            _n("backed up %d commit\n", "backed up %d commits\n", len(backedup))
-            % len(backedup),
-            component="commitcloud",
-        )
-    if failed:
-        repo.ui.warn(
-            _n(
-                "failed to back up %d commit\n",
-                "failed to back up %d commits\n",
-                len(failed),
-            )
-            % len(failed),
-            component="commitcloud",
-        )
-    if not backedup and not failed:
-        repo.ui.status(_("nothing to back up\n"))
-    return 0 if not failed else 2
-
-
-@subcmd(
     "listworkspaces|list",
     [
         (
@@ -1348,14 +1275,6 @@ def cloudreclaimworkspaces(ui, repo, **opts):
     + [
         (
             "",
-            "reason",
-            "",
-            _(
-                "reason why the sync has been triggered (used for logging purposes) (ADVANCED)"
-            ),
-        ),
-        (
-            "",
             "best-effort",
             False,
             _(
@@ -1439,7 +1358,7 @@ def cloudcheck(ui, repo, **opts):
     revs = scmutil.revrange(repo, revs)
     helperkey = "results"
 
-    if ui.configbool("commitcloud", "usehttpupload") and remote:
+    if remote:
         # eden api based lookup
         nodestocheck = [repo[r].node() for r in revs]
         missingnodes = set(edenapi_upload._filtercommits(repo, nodestocheck))
@@ -1448,25 +1367,12 @@ def cloudcheck(ui, repo, **opts):
         }
     else:
         nodestocheck = [repo[r].hex() for r in revs]
-        if remote:
-            # wireproto based lookup
-            remotepath = ccutil.getremotepath(ui)
-            getconnection = lambda: repo.connectionpool.get(remotepath, opts)
-            isbackedup = {
-                nodestocheck[i]: res
-                for i, res in enumerate(
-                    dependencies.infinitepush.isbackedupnodes(
-                        getconnection, nodestocheck
-                    )
-                )
-            }
-        else:
-            # local backup state based lookup
-            backeduprevs = unfi.revs("backedup()")
-            isbackedup = {
-                node: (unfi[node].rev() in backeduprevs) or not unfi[node].mutable()
-                for node in nodestocheck
-            }
+        # local backup state based lookup
+        backeduprevs = unfi.revs("backedup()")
+        isbackedup = {
+            node: (unfi[node].rev() in backeduprevs) or not unfi[node].mutable()
+            for node in nodestocheck
+        }
 
         results = {helperkey: isbackedup}
 
@@ -1676,26 +1582,6 @@ def waitbackup(ui, repo, timeout):
 
 
 @command(
-    "pushbackup",
-    [
-        ("r", "rev", [], _("revisions to back up")),
-        ("", "background", None, "run backup in background"),
-    ],
-    _("[-r REV...]"),
-)
-def pushbackup(ui, repo, *revs, **opts):
-    """back up commits to commit cloud (DEPRECATED)
-
-    Commits that have already been backed up will be skipped.
-
-    If no revision is specified, backs up all visible commits.
-
-    '@prog@ pushbackup' is deprecated in favour of '@prog@ cloud backup'.
-    """
-    return cloudbackup(ui, repo, *revs, **opts)
-
-
-@command(
     "isbackedup",
     [
         ("r", "rev", [], _("show the specified revision or revset"), _("REV")),
@@ -1714,7 +1600,7 @@ def isbackedup(ui, repo, **opts):
 
 
 @subcmd(
-    "upload",
+    "upload||backup",
     [
         ("r", "rev", [], _("revisions to upload to Commit Cloud")),
         (
@@ -1723,9 +1609,11 @@ def isbackedup(ui, repo, **opts):
             None,
             "reupload commits without checking what is present on the server",
         ),
+        ("", "background", None, "run backup in background (DEPRECATED)"),
     ],
+    _("[-r] REV..."),
 )
-def cloudupload(ui, repo, **opts):
+def cloudupload(ui, repo, *revs, **opts):
     """Upload draft commits using EdenApi Uploads
 
     Commits that have already been uploaded will be skipped.
@@ -1734,14 +1622,13 @@ def cloudupload(ui, repo, **opts):
 
     repo.ignoreautobackup = True
 
-    revs = opts.get("rev")
+    revs = list(revs) + list(opts.get("rev", []))
     if revs:
         revs = scmutil.revrange(repo, revs)
     else:
         revs = None
 
-    with repo.lock():
-        state = backupstate.BackupState(repo, usehttp=True)
+    state = backupstate.BackupState(repo)
 
     uploaded, failed = upload.upload(
         repo, revs, force=opts.get("force"), localbackupstate=state
@@ -1760,6 +1647,28 @@ def cloudupload(ui, repo, **opts):
                 component="commitcloud",
             )
         return 2
+
+
+# Register main command name as _pushbackup so we don't conflict with hotfix extension
+# that adds back "pushbackup" command.
+@command(
+    "_pushbackup|pushbackup",
+    [
+        ("r", "rev", [], _("revisions to back up")),
+        ("", "background", None, "run backup in background"),
+    ],
+    _("[-r REV...]"),
+)
+def pushbackup(ui, repo, *revs, **opts):
+    """back up commits to commit cloud (DEPRECATED)
+
+    Commits that have already been backed up will be skipped.
+
+    If no revision is specified, backs up all visible commits.
+
+    '@prog@ pushbackup' is deprecated in favour of '@prog@ cloud backup'.
+    """
+    return cloudupload(ui, repo, *revs, **opts)
 
 
 @subcmd("tidyup", workspace.workspaceopts)

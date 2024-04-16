@@ -67,8 +67,8 @@ def _megareponamespace(_repo) -> namespace:
     )
 
 
-@autopullpredicate("megarepo", priority=100)
-def _xrepopull(repo, name) -> deferredpullattempt:
+@autopullpredicate("megarepo", priority=100, rewritepullrev=True)
+def _xrepopull(repo, name, rewritepullrev=False) -> Optional[pullattempt]:
     """Autopull a commit from another repo.
 
     First the xrepo commit is translated to the coresponding commit of
@@ -86,11 +86,34 @@ def _xrepopull(repo, name) -> deferredpullattempt:
             return None
         return autopull.pullattempt(headnodes=[localnode])
 
-    return deferredpullattempt(generate=generateattempt)
+    if rewritepullrev:
+        if repo.ui.configbool("megarepo", "rewrite-pull-rev", True):
+            return generateattempt()
+    elif _may_need_xrepotranslate(repo, name):
+        return deferredpullattempt(generate=generateattempt)
+
+    return None
 
 
 _commithashre = re.compile(r"\A[0-9a-f]{6,40}\Z")
 _diffidre = re.compile(r"\AD\d+\Z")
+
+
+def _may_need_xrepotranslate(repo, commitid) -> bool:
+    """Test if 'commitid' may trigger xrepo lookup without asking remote servers.
+    Returns True if the commitid might trigger xrepo lookup.
+    Returns False if the commitid will NOT trigger xrepo lookup.
+    This is a subset of `_xrepotranslate` but avoids remote lookups.
+    """
+    if (
+        not _diffidre.match(commitid)
+        and not _commithashre.match(commitid)
+        and "/" not in commitid
+    ):
+        return False
+    if not repo.nullableedenapi or commitid in repo:
+        return False
+    return True
 
 
 def _xrepotranslate(repo, commitid):

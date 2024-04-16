@@ -20,7 +20,6 @@ use configmodel::ConfigExt;
 use edenapi_types::FileAuxData;
 use indexedlog::log::IndexOutput;
 use minibytes::Bytes;
-use parking_lot::RwLock;
 use types::hgid::ReadHgIdExt;
 use types::HgId;
 use vlqencoding::VLQDecode;
@@ -104,7 +103,7 @@ fn deserialize(bytes: Bytes) -> Result<(HgId, FileAuxData)> {
     ))
 }
 
-pub struct AuxStore(RwLock<Store>);
+pub struct AuxStore(Store);
 
 impl AuxStore {
     pub fn new(path: impl AsRef<Path>, config: &dyn Config, store_type: StoreType) -> Result<Self> {
@@ -116,14 +115,14 @@ impl AuxStore {
             StoreType::Shared => open_options.shared(&path),
         }?;
 
-        Ok(AuxStore(RwLock::new(log)))
+        Ok(AuxStore(log))
     }
 
     fn open_options(config: &dyn Config) -> Result<StoreOpenOptions> {
         // If you update defaults/logic here, please update the "cache" help topic
         // calculations in help.py.
 
-        let mut open_options = StoreOpenOptions::new()
+        let mut open_options = StoreOpenOptions::new(config)
             .max_log_count(4)
             .max_bytes_per_log(250 * 1000 * 1000 / 4)
             .auto_sync_threshold(10 * 1024 * 1024)
@@ -163,13 +162,18 @@ impl AuxStore {
         deserialize(bytes).map(|(_hgid, entry)| Some(entry))
     }
 
+    pub fn contains(&self, hgid: HgId) -> Result<bool> {
+        let log = self.0.read();
+        Ok(!log.lookup(0, hgid)?.is_empty()?)
+    }
+
     pub fn put(&self, hgid: HgId, entry: &Entry) -> Result<()> {
         let serialized = serialize(entry, hgid)?;
-        self.0.write().append(&serialized)
+        self.0.append(&serialized)
     }
 
     pub fn flush(&self) -> Result<()> {
-        self.0.write().flush()
+        self.0.flush()
     }
 
     #[cfg(test)]
@@ -186,6 +190,7 @@ impl AuxStore {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::str::FromStr;
     use std::sync::Arc;
 
@@ -322,7 +327,7 @@ mod tests {
 
         // Set up local-only FileStore
         let mut store = FileStore::empty();
-        store.aux_local = Some(aux);
+        store.aux_cache = Some(aux);
 
         // Attempt fetch.
         let fetched = store
@@ -351,6 +356,7 @@ mod tests {
             max_bytes: None,
         };
         let content = Arc::new(IndexedLogHgIdDataStore::new(
+            &BTreeMap::<&str, &str>::new(),
             &tmp,
             ExtStoredPolicy::Ignore,
             &config,
@@ -366,7 +372,8 @@ mod tests {
         // Set up local-only FileStore
         let mut store = FileStore::empty();
         store.indexedlog_local = Some(content);
-        store.aux_local = Some(aux.clone());
+        store.aux_cache = Some(aux.clone());
+        store.compute_aux_data = true;
 
         let expected = Entry {
             total_size: 4,

@@ -1,4 +1,5 @@
-#require bash
+#debugruntest-compatible
+#require bash no-eden
 
   $ eagerepo
   $ cat > a.py << EOF

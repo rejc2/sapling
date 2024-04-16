@@ -14,9 +14,8 @@ import {
   openCommitInfoSidebar,
   simulateMessageFromServer,
 } from '../testUtils';
-import {fireEvent, render, screen, waitFor, within} from '@testing-library/react';
+import {fireEvent, render, screen, waitFor, within, act} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {act} from 'react-dom/test-utils';
 
 /* eslint-disable @typescript-eslint/no-non-null-assertion */
 
@@ -44,7 +43,7 @@ describe('FillCommitMessage', () => {
           COMMIT('1', 'some public base', '0', {phase: 'public'}),
           COMMIT('a', 'My Commit', '1'),
           COMMIT('b', 'Head Commit', 'a', {
-            isHead: true,
+            isDot: true,
             description: 'Summary: This is my commit message\n',
           }),
         ],

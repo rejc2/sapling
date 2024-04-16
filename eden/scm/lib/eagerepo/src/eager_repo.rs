@@ -22,12 +22,17 @@ use dag::Dag;
 use dag::Group;
 use dag::Vertex;
 use dag::VertexListWithOptions;
+use futures::lock::Mutex;
+use futures::lock::MutexGuard;
 use manifest_tree::FileType;
 use manifest_tree::Flag;
 use manifest_tree::TreeEntry;
 use metalog::CommitOptions;
 use metalog::MetaLog;
 use minibytes::Bytes;
+use mutationstore::MutationStore;
+use parking_lot::lock_api::RwLockReadGuard;
+use parking_lot::RawRwLock;
 use parking_lot::RwLock;
 use storemodel::SerializationFormat;
 use zstore::Id20;
@@ -63,10 +68,11 @@ use crate::Result;
 /// Currently backed by [`metalog::MetaLog`]. It's a lightweight source control
 /// for atomic metadata changes.
 pub struct EagerRepo {
-    pub(crate) dag: Dag,
+    pub(crate) dag: Mutex<Dag>,
     pub(crate) store: EagerRepoStore,
-    metalog: MetaLog,
+    metalog: RwLock<MetaLog>,
     pub(crate) dir: PathBuf,
+    pub(crate) mut_store: Mutex<MutationStore>,
 }
 
 /// Storage used by `EagerRepo`. Wrapped by `Arc<RwLock>` for easier sharing.
@@ -227,6 +233,23 @@ impl EagerRepo {
         let dag = Dag::open(store_dir.join("segments").join("v1"))?;
         let store = EagerRepoStore::open(&store_dir.join("hgcommits").join("v1"))?;
         let metalog = MetaLog::open(store_dir.join("metalog"), None)?;
+        let mut_store = MutationStore::open(store_dir.join("mutation"))?;
+
+        let repo = Self {
+            dag: Mutex::new(dag),
+            store,
+            metalog: RwLock::new(metalog),
+            dir: dir.to_path_buf(),
+            mut_store: Mutex::new(mut_store),
+        };
+
+        // "eagercompat" is a revlog repo secretly using an eager store under the hood.
+        // It's requirements don't match our expectations, so return early. This is mainly
+        // so we can access the EagerRepo EdenApi trait implementation.
+        if has_eagercompat_requirement(&store_dir) {
+            return Ok(repo);
+        }
+
         // Write "requires" files.
         write_requires(&hg_dir, &["store", "treestate", "windowssymlinks"])?;
         write_requires(
@@ -239,12 +262,6 @@ impl EagerRepo {
                 "invalidatelinkrev",
             ],
         )?;
-        let repo = Self {
-            dag,
-            store,
-            metalog,
-            dir: dir.to_path_buf(),
-        };
         Ok(repo)
     }
 
@@ -252,11 +269,10 @@ impl EagerRepo {
     ///
     /// Supported URLs:
     /// - `eager:dir_path`, `eager://dir_path`
-    /// - `test:name`, `test://name`: same as `eager:$TESTTMP/server-repos/name`
+    /// - `test:name`, `test://name`: same as `eager:$TESTTMP/name`
     /// - `/path/to/dir` where the path is a EagerRepo.
     pub fn url_to_dir(value: &str) -> Option<PathBuf> {
-        let prefix = "eager:";
-        if let Some(path) = value.strip_prefix(prefix) {
+        if let Some(path) = value.strip_prefix("eager:") {
             let path: PathBuf = if cfg!(windows) {
                 // Remove '//' prefix from Windows file path. This makes it
                 // possible to use paths like 'eager://C:\foo\bar'.
@@ -272,8 +288,8 @@ impl EagerRepo {
             tracing::trace!("url_to_dir {} => {}", value, path.display());
             return Some(path);
         }
-        let prefix = "test:";
-        if let Some(path) = value.strip_prefix(prefix) {
+
+        if let Some(path) = value.strip_prefix("test:") {
             let path = path.trim_start_matches('/');
             if let Ok(tmp) = std::env::var("TESTTMP") {
                 let tmp: &Path = Path::new(&tmp);
@@ -282,16 +298,35 @@ impl EagerRepo {
                 return Some(path);
             }
         }
+
+        if let Some(path) = value.strip_prefix("ssh://user@dummy/") {
+            // Allow instantiating EagerRepo for dummyssh servers. This is so we can get a
+            // working EdenApi for server repos in legacy tests.
+            if let Ok(tmp) = std::env::var("TESTTMP") {
+                let path = Path::new(&tmp).join(path);
+                if let Ok(Some(ident)) = identity::sniff_dir(&path) {
+                    let mut store_path = path.clone();
+                    store_path.push(ident.dot_dir());
+                    store_path.push("store");
+                    if has_eagercompat_requirement(&store_path) {
+                        tracing::trace!("url_to_dir {} => {}", value, path.display());
+                        return Some(path);
+                    }
+                }
+            }
+        }
+
         let path = Path::new(value);
         if is_eager_repo(path) {
             tracing::trace!("url_to_dir {} => {}", value, path.display());
             return Some(path.to_path_buf());
         }
+
         None
     }
 
     /// Write pending changes to disk.
-    pub async fn flush(&mut self) -> Result<()> {
+    pub async fn flush(&self) -> Result<()> {
         self.store.flush()?;
         let master_heads = {
             let books = self.get_bookmarks_map()?;
@@ -304,9 +339,10 @@ impl EagerRepo {
             }
             VertexListWithOptions::from(heads).with_highest_group(Group::MASTER)
         };
-        self.dag.flush(&master_heads).await?;
+        self.dag.lock().await.flush(&master_heads).await?;
         let opts = CommitOptions::default();
-        self.metalog.commit(opts)?;
+        self.metalog.write().commit(opts)?;
+        self.mut_store.lock().await.flush().await?;
         Ok(())
     }
 
@@ -316,7 +352,7 @@ impl EagerRepo {
 
     /// Insert SHA1 blob to zstore.
     /// In hg's case, the `data` is `min(p1, p2) + max(p1, p2) + text`.
-    pub fn add_sha1_blob(&mut self, data: &[u8]) -> Result<Id20> {
+    pub fn add_sha1_blob(&self, data: &[u8]) -> Result<Id20> {
         // SPACE: This does not utilize zstore's delta features to save space.
         self.store.add_sha1_blob(data, &[])
     }
@@ -327,7 +363,7 @@ impl EagerRepo {
     }
 
     /// Insert a commit. Return the commit hash.
-    pub async fn add_commit(&mut self, parents: &[Id20], raw_text: &[u8]) -> Result<Id20> {
+    pub async fn add_commit(&self, parents: &[Id20], raw_text: &[u8]) -> Result<Id20> {
         let parents: Vec<Vertex> = parents
             .iter()
             .map(|v| Vertex::copy_from(v.as_ref()))
@@ -365,8 +401,11 @@ impl EagerRepo {
         let parent_map: HashMap<Vertex, Vec<Vertex>> =
             vec![(vertex.clone(), parents)].into_iter().collect();
         self.dag
+            .lock()
+            .await
             .add_heads(&parent_map, &vec![vertex].into())
             .await?;
+
         Ok(id)
     }
 
@@ -385,7 +424,7 @@ impl EagerRepo {
     pub fn get_bookmarks_map(&self) -> Result<BTreeMap<String, Id20>> {
         // Attempt to match the format used by a real client repo.
         let text: String = {
-            let data = self.metalog.get("bookmarks")?;
+            let data = self.metalog.read().get("bookmarks")?;
             let opt_text = data.map(|b| String::from_utf8_lossy(&b).to_string());
             opt_text.unwrap_or_default()
         };
@@ -406,7 +445,7 @@ impl EagerRepo {
     }
 
     /// Set bookmarks.
-    pub fn set_bookmarks_map(&mut self, map: BTreeMap<String, Id20>) -> Result<()> {
+    pub fn set_bookmarks_map(&self, map: BTreeMap<String, Id20>) -> Result<()> {
         for (name, id) in map.iter() {
             if self.store.get_content(*id)?.is_none() {
                 return Err(crate::Error::BookmarkMissingCommit(
@@ -420,18 +459,18 @@ impl EagerRepo {
             .map(|(name, id)| format!("{} {}\n", id.to_hex(), name))
             .collect::<Vec<_>>()
             .concat();
-        self.metalog.set("bookmarks", text.as_bytes())?;
+        self.metalog.write().set("bookmarks", text.as_bytes())?;
         Ok(())
     }
 
     /// Obtain a reference to the commit graph.
-    pub fn dag(&self) -> &Dag {
-        &self.dag
+    pub async fn dag(&self) -> MutexGuard<'_, Dag> {
+        self.dag.lock().await
     }
 
     /// Obtain a reference to the metalog.
-    pub fn metalog(&self) -> &MetaLog {
-        &self.metalog
+    pub fn metalog(&self) -> RwLockReadGuard<RawRwLock, MetaLog> {
+        self.metalog.read()
     }
 
     /// Obtain an instance to the store.
@@ -455,12 +494,17 @@ pub fn is_eager_repo(path: &Path) -> bool {
             }
         }
         tracing::trace!(
-            "url_to_dir {}: missing 'eagerepo' requirment",
+            "url_to_dir {}: missing 'eagerepo' requirement",
             path.display()
         );
     }
 
     false
+}
+
+fn has_eagercompat_requirement(store_path: &Path) -> bool {
+    std::fs::read_to_string(store_path.join("requires"))
+        .is_ok_and(|r| r.split('\n').any(|r| r == "eagercompat"))
 }
 
 /// Convert parents and raw_text to HG SHA1 text format.
@@ -533,7 +577,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
 
-        let mut repo = EagerRepo::open(dir).unwrap();
+        let repo = EagerRepo::open(dir).unwrap();
         let text = &b"blob-text-foo-bar"[..];
         let id = repo.add_sha1_blob(text).unwrap();
         assert_eq!(repo.get_sha1_blob(id).unwrap().as_deref(), Some(text));
@@ -553,14 +597,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
 
-        let mut repo = EagerRepo::open(dir).unwrap();
+        let repo = EagerRepo::open(dir).unwrap();
         let commit1 = repo.add_commit(&[], b"A").await.unwrap();
         let commit2 = repo.add_commit(&[], b"B").await.unwrap();
         let _commit3 = repo.add_commit(&[commit1, commit2], b"C").await.unwrap();
         repo.flush().await.unwrap();
 
         let repo2 = EagerRepo::open(dir).unwrap();
-        let rendered = dag::render::render_namedag(repo2.dag(), |v| {
+        let rendered = dag::render::render_namedag(&*repo2.dag().await, |v| {
             let id = Id20::from_slice(v.as_ref()).unwrap();
             let blob = repo2.get_sha1_blob(id).unwrap().unwrap();
             Some(String::from_utf8_lossy(&blob[Id20::len() * 2..]).to_string())
@@ -642,7 +686,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
 
-        let mut repo = EagerRepo::open(dir).unwrap();
+        let repo = EagerRepo::open(dir).unwrap();
         let missing_id = missing_id();
 
         // Root tree missing.

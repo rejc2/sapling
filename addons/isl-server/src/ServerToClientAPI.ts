@@ -10,7 +10,7 @@ import type {RepositoryReference} from './RepositoryCache';
 import type {ServerSideTracker} from './analytics/serverSideTracker';
 import type {Logger} from './logger';
 import type {ServerPlatform} from './serverPlatform';
-import type {ExecutionContext} from './serverTypes';
+import type {RepositoryContext} from './serverTypes';
 import type {Serializable} from 'isl/src/serialize';
 import type {
   ServerToClientMessage,
@@ -26,6 +26,7 @@ import type {
   FetchedUncommittedChanges,
   LandInfo,
   CodeReviewProviderSpecificClientToServerMessages,
+  StableLocationData,
 } from 'isl/src/types';
 import type {ExportStack, ImportedStack} from 'shared/types/stack';
 
@@ -36,7 +37,7 @@ import {repositoryCache} from './RepositoryCache';
 import {findPublicAncestor, parseExecJson} from './utils';
 import {serializeToString, deserializeFromString} from 'isl/src/serialize';
 import {revsetForComparison} from 'shared/Comparison';
-import {randomId, unwrap} from 'shared/utils';
+import {randomId, nullthrows, notEmpty} from 'shared/utils';
 import {Readable} from 'stream';
 
 export type IncomingMessage = ClientToServerMessage;
@@ -86,7 +87,7 @@ export default class ServerToClientAPI {
   private queuedMessages: Array<IncomingMessage> = [];
   private currentState:
     | {type: 'loading'}
-    | {type: 'repo'; repo: Repository; cwd: string}
+    | {type: 'repo'; repo: Repository; ctx: RepositoryContext}
     | {type: 'error'; error: RepositoryError} = {type: 'loading'};
 
   private pageId = randomId();
@@ -151,10 +152,10 @@ export default class ServerToClientAPI {
     this.processQueuedMessages();
   }
 
-  private setCurrentRepo(repo: Repository, cwd: string) {
+  private setCurrentRepo(repo: Repository, ctx: RepositoryContext) {
     this.disposeRepoDisposables();
 
-    this.currentState = {type: 'repo', repo, cwd};
+    this.currentState = {type: 'repo', repo, ctx};
 
     this.tracker.context.setRepo(repo);
 
@@ -166,6 +167,7 @@ export default class ServerToClientAPI {
       );
     }
 
+    repo.ref();
     this.repoDisposables.push(
       repo.subscribeToHeadCommit(head => {
         const allCommits = repo.getSmartlogCommits();
@@ -178,6 +180,7 @@ export default class ServerToClientAPI {
           },
         });
       }),
+      {dispose: () => repo.unref()},
     );
 
     this.processQueuedMessages();
@@ -197,7 +200,7 @@ export default class ServerToClientAPI {
     // This ensures new messages coming in will be queued and handled only with the new repository
     this.currentState = {type: 'loading'};
     const command = this.connection.command ?? 'sl';
-    const ctx: ExecutionContext = {
+    const ctx: RepositoryContext = {
       cwd: newCwd,
       cmd: command,
       logger: this.logger,
@@ -206,7 +209,7 @@ export default class ServerToClientAPI {
     this.activeRepoRef = repositoryCache.getOrCreate(ctx);
     this.activeRepoRef.promise.then(repoOrError => {
       if (repoOrError instanceof Repository) {
-        this.setCurrentRepo(repoOrError, newCwd);
+        this.setCurrentRepo(repoOrError, ctx);
       } else {
         this.setRepoError(repoOrError);
       }
@@ -254,7 +257,7 @@ export default class ServerToClientAPI {
         }
         this.tracker
           .operation('UploadImage', 'UploadImageError', {}, () =>
-            uploadFile(unwrap(this.connection.logger), {filename, data: payload}),
+            uploadFile(nullthrows(this.connection.logger), {filename, data: payload}),
           )
           .then((result: string) => {
             this.connection.logger?.info('sucessfully uploaded file', filename, result);
@@ -274,8 +277,8 @@ export default class ServerToClientAPI {
     const {currentState} = this;
     switch (currentState.type) {
       case 'repo': {
-        const {repo, cwd} = currentState;
-        this.handleIncomingMessageWithRepo(data as WithRepoMessage, repo, cwd);
+        const {repo, ctx} = currentState;
+        this.handleIncomingMessageWithRepo(data as WithRepoMessage, repo, ctx);
         break;
       }
 
@@ -286,6 +289,7 @@ export default class ServerToClientAPI {
         if (data.type.startsWith('platform/')) {
           this.platform.handleMessageFromClient(
             /*repo=*/ undefined,
+            /*ctx*/ undefined,
             data as PlatformSpecificClientToServerMessages,
             message => this.postMessage(message),
             (dispose: () => unknown) => {
@@ -321,7 +325,7 @@ export default class ServerToClientAPI {
             this.postMessage({
               type: 'repoInfo',
               info: this.currentState.repo.info,
-              cwd: this.currentState.cwd,
+              cwd: this.currentState.ctx.cwd,
             });
             break;
           case 'error':
@@ -343,13 +347,16 @@ export default class ServerToClientAPI {
       }
       case 'fileBugReport': {
         const maybeRepo = this.currentState.type === 'repo' ? this.currentState.repo : undefined;
-        const ctx: ExecutionContext = {
-          // cwd is only needed to run graphql query, here it's just best-effort
-          cwd: maybeRepo?.ctx.cwd ?? process.cwd(),
-          cmd: this.connection.command ?? 'sl',
-          logger: this.logger,
-          tracker: this.tracker,
-        };
+        const ctx: RepositoryContext =
+          this.currentState.type === 'repo'
+            ? this.currentState.ctx
+            : {
+                // cwd is only needed to run graphql query, here it's just best-effort
+                cwd: maybeRepo?.initialConnectionContext.cwd ?? process.cwd(),
+                cmd: this.connection.command ?? 'sl',
+                logger: this.logger,
+                tracker: this.tracker,
+              };
         Internal.fileABug?.(
           ctx,
           data.data,
@@ -376,8 +383,12 @@ export default class ServerToClientAPI {
   /**
    * Handle messages which require a repository to have been successfully set up to run
    */
-  private handleIncomingMessageWithRepo(data: WithRepoMessage, repo: Repository, cwd: string) {
-    const {logger} = repo;
+  private handleIncomingMessageWithRepo(
+    data: WithRepoMessage,
+    repo: Repository,
+    ctx: RepositoryContext,
+  ) {
+    const {cwd, logger} = ctx;
     switch (data.type) {
       case 'subscribe': {
         const {subscriptionID, kind} = data;
@@ -477,17 +488,12 @@ export default class ServerToClientAPI {
       }
       case 'runOperation': {
         const {operation} = data;
-        repo.runOrQueueOperation(
-          operation,
-          progress => {
-            this.postMessage({type: 'operationProgress', ...progress});
-            if (progress.kind === 'queue') {
-              this.tracker.track('QueueOperation', {extras: {operation: operation.trackEventName}});
-            }
-          },
-          this.tracker,
-          cwd,
-        );
+        repo.runOrQueueOperation(ctx, operation, progress => {
+          this.postMessage({type: 'operationProgress', ...progress});
+          if (progress.kind === 'queue') {
+            this.tracker.track('QueueOperation', {extras: {operation: operation.trackEventName}});
+          }
+        });
         break;
       }
       case 'abortRunningOperation': {
@@ -498,7 +504,7 @@ export default class ServerToClientAPI {
       }
       case 'getConfig': {
         repo
-          .getConfig(data.name)
+          .getConfig(ctx, data.name)
           .catch(() => undefined)
           .then(value => {
             logger.info('got config', data.name, value);
@@ -508,7 +514,7 @@ export default class ServerToClientAPI {
       }
       case 'setConfig': {
         logger.info('set config', data.name, data.value);
-        repo.setConfig('user', data.name, data.value).catch(err => {
+        repo.setConfig(ctx, 'user', data.name, data.value).catch(err => {
           logger.error('error setting config', data.name, data.value, err);
         });
         break;
@@ -516,7 +522,7 @@ export default class ServerToClientAPI {
       case 'requestComparison': {
         const {comparison} = data;
         const diff: Promise<Result<string>> = repo
-          .runDiff(comparison)
+          .runDiff(ctx, comparison)
           .then(value => ({value}))
           .catch(error => {
             logger?.error('error running diff', error.toString());
@@ -545,17 +551,23 @@ export default class ServerToClientAPI {
         // we just need the caller to ask with "after" line numbers instead of "before".
         // Note: we would still need to fall back to cat for comparisons that do not involve
         // the working copy.
-        const cat: Promise<string> = repo
-          .cat(relativePath, revsetForComparison(comparison))
-          .catch(() => '');
+        const cat: Promise<string> = repo.cat(ctx, relativePath, revsetForComparison(comparison));
 
-        cat.then(content =>
-          this.postMessage({
-            type: 'comparisonContextLines',
-            lines: content.split('\n').slice(start - 1, start - 1 + numLines),
-            path: relativePath,
-          }),
-        );
+        cat
+          .then(content =>
+            this.postMessage({
+              type: 'comparisonContextLines',
+              lines: {value: content.split('\n').slice(start - 1, start - 1 + numLines)},
+              path: relativePath,
+            }),
+          )
+          .catch((error: Error) =>
+            this.postMessage({
+              type: 'comparisonContextLines',
+              lines: {error},
+              path: relativePath,
+            }),
+          );
         break;
       }
       case 'requestMissedOperationProgress': {
@@ -575,12 +587,12 @@ export default class ServerToClientAPI {
         break;
       }
       case 'fetchCommitMessageTemplate': {
-        this.handleFetchCommitMessageTemplate(repo);
+        this.handleFetchCommitMessageTemplate(repo, ctx);
         break;
       }
       case 'fetchShelvedChanges': {
         repo
-          .getShelvedChanges()
+          .getShelvedChanges(ctx)
           .then(shelvedChanges => {
             this.postMessage({
               type: 'fetchedShelvedChanges',
@@ -595,7 +607,7 @@ export default class ServerToClientAPI {
       }
       case 'fetchLatestCommit': {
         repo
-          .lookupCommits([data.revset])
+          .lookupCommits(ctx, [data.revset])
           .then(commits => {
             this.postMessage({
               type: 'fetchedLatestCommit',
@@ -614,7 +626,7 @@ export default class ServerToClientAPI {
       }
       case 'fetchAllCommitChangedFiles': {
         repo
-          .getAllChangedFiles(data.hash)
+          .getAllChangedFiles(ctx, data.hash)
           .then(files => {
             this.postMessage({
               type: 'fetchedAllCommitChangedFiles',
@@ -632,7 +644,7 @@ export default class ServerToClientAPI {
         break;
       }
       case 'fetchCommitCloudState': {
-        repo.getCommitCloudState(cwd).then(state => {
+        repo.getCommitCloudState(ctx).then(state => {
           this.postMessage({
             type: 'fetchedCommitCloudState',
             state: {value: state},
@@ -642,7 +654,7 @@ export default class ServerToClientAPI {
       }
       case 'fetchGeneratedStatuses': {
         generatedFilesDetector
-          .queryFilesGenerated(repo, repo.logger, repo.info.repoRoot, data.paths)
+          .queryFilesGenerated(repo, ctx, repo.info.repoRoot, data.paths)
           .then(results => {
             this.postMessage({type: 'fetchedGeneratedStatuses', results});
           });
@@ -775,10 +787,9 @@ export default class ServerToClientAPI {
         const exec = repo.runCommand(
           ['debugexportstack', '-r', revs, ...assumeTrackedArgs],
           'ExportStackCommand',
-          undefined,
+          ctx,
           undefined,
           /* don't timeout */ 0,
-          this.tracker,
         );
         const reply = (stack?: ExportStack, error?: string) => {
           this.postMessage({
@@ -797,10 +808,9 @@ export default class ServerToClientAPI {
         const exec = repo.runCommand(
           ['debugimportstack'],
           'ImportStackCommand',
-          undefined,
+          ctx,
           {stdin: stdinStream},
           /* don't timeout */ 0,
-          this.tracker,
         );
         const reply = (imported?: ImportedStack, error?: string) => {
           this.postMessage({type: 'importedStack', imported: imported ?? [], error});
@@ -809,16 +819,32 @@ export default class ServerToClientAPI {
         break;
       }
       case 'fetchFeatureFlag': {
-        Internal.fetchFeatureFlag?.(repo.ctx, data.name).then((passes: boolean) => {
-          this.logger.info(`feature flag ${data.name} ${passes ? 'PASSES' : 'FAILS'}`);
-          this.postMessage({type: 'fetchedFeatureFlag', name: data.name, passes});
-        });
+        Internal.fetchFeatureFlag?.(repo.initialConnectionContext, data.name).then(
+          (passes: boolean) => {
+            this.logger.info(`feature flag ${data.name} ${passes ? 'PASSES' : 'FAILS'}`);
+            this.postMessage({type: 'fetchedFeatureFlag', name: data.name, passes});
+          },
+        );
         break;
       }
       case 'fetchInternalUserInfo': {
-        Internal.fetchUserInfo?.(repo.ctx).then((info: Serializable) => {
+        Internal.fetchUserInfo?.(repo.initialConnectionContext).then((info: Serializable) => {
           this.logger.info('user info:', info);
           this.postMessage({type: 'fetchedInternalUserInfo', info});
+        });
+        break;
+      }
+      case 'fetchAndSetStables': {
+        Internal.fetchStableLocations?.(ctx).then((stables: StableLocationData | undefined) => {
+          this.logger.info('fetched stable locations', stables);
+          if (stables == null) {
+            return;
+          }
+          this.postMessage({type: 'fetchedStables', stables});
+          repo.stableLocations = [...stables.stables, ...stables.special, ...stables.manual]
+            .map(stable => stable.value)
+            .filter(notEmpty);
+          repo.fetchSmartlogCommits();
         });
         break;
       }
@@ -826,8 +852,8 @@ export default class ServerToClientAPI {
         if (Internal.generateAICommitMessage == null) {
           break;
         }
-        repo.runDiff(data.comparison, /* context lines */ 4).then(diff => {
-          Internal.generateAICommitMessage?.(repo.ctx, {
+        repo.runDiff(ctx, data.comparison, /* context lines */ 4).then(diff => {
+          Internal.generateAICommitMessage?.(repo.initialConnectionContext, {
             title: data.title,
             context: diff,
           })
@@ -844,7 +870,7 @@ export default class ServerToClientAPI {
       }
       case 'fetchActiveAlerts': {
         repo
-          .getActiveAlerts()
+          .getActiveAlerts(ctx)
           .then(alerts => {
             if (alerts.length === 0) {
               return;
@@ -868,6 +894,7 @@ export default class ServerToClientAPI {
         }
         this.platform.handleMessageFromClient(
           repo,
+          ctx,
           data as Exclude<typeof data, CodeReviewProviderSpecificClientToServerMessages>,
           message => this.postMessage(message),
           (dispose: () => unknown) => {
@@ -888,19 +915,12 @@ export default class ServerToClientAPI {
     }
   }
 
-  private async handleFetchCommitMessageTemplate(repo: Repository) {
-    const {logger} = repo;
+  private async handleFetchCommitMessageTemplate(repo: Repository, ctx: RepositoryContext) {
+    const {logger} = ctx;
     try {
       const [result, customTemplate] = await Promise.all([
-        repo.runCommand(
-          ['debugcommitmessage', 'isl'],
-          'FetchCommitTemplateCommand',
-          undefined,
-          undefined,
-          undefined,
-          this.tracker,
-        ),
-        Internal.getCustomDefaultCommitTemplate?.(repo.ctx),
+        repo.runCommand(['debugcommitmessage', 'isl'], 'FetchCommitTemplateCommand', ctx),
+        Internal.getCustomDefaultCommitTemplate?.(repo.initialConnectionContext),
       ]);
 
       let template = result.stdout

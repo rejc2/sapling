@@ -81,7 +81,7 @@
 
 # Import it into Mononoke
   $ cd "$TESTTMP"
-  $ gitimport --record-head-symref "$GIT_REPO" --generate-bookmarks full-repo
+  $ gitimport "$GIT_REPO" --generate-bookmarks full-repo
   * using repo "repo" repoid RepositoryId(0) (glob)
   * GitRepo:$TESTTMP/repo-git commit 1 of 7 - Oid:8ce3eae4 => Bid:032cd4dc (glob)
   * GitRepo:$TESTTMP/repo-git commit 2 of 7 - Oid:a612a217 => Bid:148f9770 (glob)
@@ -102,7 +102,7 @@
   * Ref: "refs/tags/tag_version": Some(ChangesetId(Blake2(*))) (glob)
   * Initializing repo: repo (glob)
   * Initialized repo: repo (glob)
-  * All repos initialized. It took: 0 seconds (glob)
+  * All repos initialized. It took: * seconds (glob)
   * Bookmark: "heads/master": ChangesetId(Blake2(*)) (created) (glob)
   * Bookmark: "heads/dev_branch": ChangesetId(Blake2(*)) (created) (glob)
   * Bookmark: "heads/master": ChangesetId(Blake2(*)) (already up-to-date) (glob)
@@ -150,3 +150,14 @@
 # before since the bundle creator would use deltas where appropriate which would skip base packfile items
   $ ls $TESTTMP/blobstore/blobs | grep "git_packfile_base_item" | wc -l
   26
+
+List the delta histogram of the pack file - this way we'll see
+if we change whether we delta or not.
+  $ git verify-pack -sv ./.git/objects/pack/*.pack
+  non delta: 26 objects
+  chain length = 1: 4 objects
+  chain length = 2: 3 objects
+  chain length = 3: 2 objects
+  chain length = 4: 2 objects
+  chain length = 5: 1 object
+  chain length = 6: 1 object

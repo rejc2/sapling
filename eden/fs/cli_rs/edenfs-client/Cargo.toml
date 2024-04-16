@@ -18,7 +18,7 @@ edenfs-error = { version = "0.1.0", path = "../edenfs-error" }
 edenfs-utils = { version = "0.1.0", path = "../edenfs-utils" }
 fbinit = { version = "0.1.2", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 fbthrift_socket = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
-futures = { version = "0.3.28", features = ["async-await", "compat"] }
+futures = { version = "0.3.30", features = ["async-await", "compat"] }
 pathdiff = "0.2"
 regex = "1.9.2"
 serde = { version = "1.0.185", features = ["derive", "rc"] }
@@ -29,10 +29,11 @@ subprocess = "0.2.7"
 sysinfo = "0.26.8"
 thrift-types = { version = "0.1.0", path = "../../../scm/lib/thrift-types" }
 thrift_streaming = { version = "0.1.0", path = "../../service/thrift_streaming" }
-tokio = { version = "1.29.1", features = ["full", "test-util", "tracing"] }
+thrift_streaming_clients = { version = "0.1.0", path = "../../service/thrift_streaming/clients" }
+tokio = { version = "1.36.0", features = ["full", "test-util", "tracing"] }
 tokio-uds-compat = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 toml = "0.8.4"
-tracing = "0.1.40"
+tracing = { version = "0.1.40", features = ["attributes"] }
 util = { version = "0.1.0", path = "../../../scm/lib/util" }
 uuid = { version = "1.2", features = ["serde", "v4", "v5", "v6", "v7", "v8"] }
 

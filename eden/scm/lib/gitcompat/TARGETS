@@ -1,0 +1,18 @@
+load("@fbcode_macros//build_defs:rust_library.bzl", "rust_library")
+
+oncall("mercurial_release")
+
+rust_library(
+    name = "gitcompat",
+    srcs = glob(["src/**/*.rs"]),
+    crate_root = "src/lib.rs",
+    deps = [
+        "fbsource//third-party/rust:anyhow",
+        "fbsource//third-party/rust:fs-err",
+        "//eden/scm/lib/config/model:configmodel",
+        "//eden/scm/lib/identity:identity",
+        "//eden/scm/lib/spawn-ext:spawn-ext",
+        "//eden/scm/lib/treestate:treestate",
+        "//eden/scm/lib/types:types",
+    ],
+)

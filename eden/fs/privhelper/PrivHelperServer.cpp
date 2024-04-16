@@ -36,15 +36,15 @@
 #include <csignal>
 #include <set>
 #include "eden/common/utils/PathFuncs.h"
+#include "eden/common/utils/SysctlUtil.h"
 #include "eden/common/utils/Throw.h"
 #include "eden/fs/privhelper/NfsMountRpc.h"
-#include "eden/fs/utils/SysctlUtil.h"
 
 #ifdef __APPLE__
 #include <CoreFoundation/CoreFoundation.h> // @manual
 #include <IOKit/kext/KextManager.h> // @manual
-#include <eden/fs/utils/Pipe.h>
-#include <eden/fs/utils/SpawnedProcess.h>
+#include <eden/common/utils/Pipe.h>
+#include <eden/common/utils/SpawnedProcess.h>
 #include <fuse_ioctl.h> // @manual
 #include <fuse_mount.h> // @manual
 #include <grp.h> // @manual

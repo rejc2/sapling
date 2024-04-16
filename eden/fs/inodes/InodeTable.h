@@ -11,11 +11,11 @@
 #ifndef _WIN32
 
 #include <optional>
+#include "eden/common/utils/Bug.h"
+#include "eden/common/utils/MappedDiskVector.h"
 #include "eden/fs/inodes/InodeMetadata.h"
 #include "eden/fs/inodes/InodeNumber.h"
 #include "eden/fs/telemetry/EdenStats.h"
-#include "eden/fs/utils/Bug.h"
-#include "eden/fs/utils/MappedDiskVector.h"
 #include "eden/fs/utils/StaticAssert.h"
 
 namespace facebook::eden {
@@ -128,8 +128,7 @@ class InodeTable {
    */
   template <typename PopFn>
   void populateIfNotSet(InodeNumber ino, PopFn&& populate) {
-    modifyOrInsert<void>(
-        ino, [&](auto&) {}, populate, [&](auto&) {});
+    modifyOrInsert<void>(ino, [&](auto&) {}, populate, [&](auto&) {});
   }
 
   /**
@@ -246,7 +245,7 @@ class InodeTable {
 
  private:
   explicit InodeTable(MappedDiskVector<Entry>&& storage, EdenStatsPtr stats)
-      : state_{folly::in_place, std::move(storage)}, stats_{std::move(stats)} {}
+      : state_{std::in_place, std::move(storage)}, stats_{std::move(stats)} {}
 
   /**
    * Helper function that, in the common case that this inode number

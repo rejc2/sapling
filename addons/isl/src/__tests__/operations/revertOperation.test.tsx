@@ -17,8 +17,7 @@ import {
   expectMessageNOTSentToServer,
 } from '../../testUtils';
 import {CommandRunner} from '../../types';
-import {fireEvent, render, screen, within} from '@testing-library/react';
-import {act} from 'react-dom/test-utils';
+import {fireEvent, render, screen, within, act} from '@testing-library/react';
 import {nextTick} from 'shared/testUtils';
 
 /* eslint-disable require-await */
@@ -37,7 +36,7 @@ describe('RevertOperation', () => {
         value: [
           COMMIT('c', 'Commit C', 'b', {
             filesSample: [{path: 'file.txt', status: 'M'}],
-            isHead: true,
+            isDot: true,
           }),
           COMMIT('b', 'Commit B', 'a', {filesSample: [{path: 'file.txt', status: 'M'}]}),
           COMMIT('a', 'Commit A', '1', {filesSample: [{path: 'file.txt', status: 'M'}]}),

@@ -14,6 +14,7 @@ use bonsai_git_mapping::BonsaiGitMappingRef;
 use bonsai_tag_mapping::BonsaiTagMappingEntry;
 use bonsai_tag_mapping::BonsaiTagMappingRef;
 use bookmarks::BookmarksRef;
+use bookmarks_cache::BookmarksCacheRef;
 use bytes::Bytes;
 use chrono::DateTime;
 use chrono::FixedOffset;
@@ -37,6 +38,7 @@ use protocol::types::RequestedRefs;
 use protocol::types::RequestedSymrefs;
 use protocol::types::TagInclusion;
 use repo_blobstore::RepoBlobstoreRef;
+use repo_derived_data::RepoDerivedDataArc;
 use repo_derived_data::RepoDerivedDataRef;
 use repo_identity::RepoIdentityRef;
 
@@ -150,7 +152,7 @@ impl RepoContext {
         head: ChangesetId,
         base: ChangesetId,
     ) -> Result<Bytes, GitError> {
-        repo_stack_git_bundle(self.ctx(), self.inner_repo(), head, base).await
+        repo_stack_git_bundle(self.ctx(), self.repo(), head, base).await
     }
 
     /// Upload the packfile base item corresponding to the raw git object with the
@@ -302,11 +304,13 @@ pub async fn create_annotated_tag(
 
 pub trait Repo = RepoIdentityRef
     + RepoBlobstoreArc
+    + RepoDerivedDataArc
     + BookmarksRef
     + BonsaiGitMappingRef
     + BonsaiTagMappingRef
     + RepoDerivedDataRef
     + GitSymbolicRefsRef
+    + BookmarksCacheRef
     + CommitGraphRef
     + Send
     + Sync;
@@ -350,15 +354,19 @@ pub async fn repo_stack_git_bundle(
         RequestedRefs::IncludedWithValue([(BUNDLE_HEAD.to_owned(), head)].into_iter().collect());
     // Ensure we don't include the base and any of its ancestors in the bundle
     let already_present = vec![base];
+    // NOTE: We are excluding deltas for this bundle since there is a potential for cycles
+    // This should not impact perf since the bundle is for a stack of draft commits. Once native
+    // git server is rolled out, we can just do git pull at the client side instead of relying on
+    // bundles.
     let request = PackItemStreamRequest::new(
         RequestedSymrefs::ExcludeAll, // Need no symrefs for this bundle
         requested_refs,
         already_present,
-        DeltaInclusion::standard(),
+        DeltaInclusion::Exclude, // We don't need deltas for this bundle
         TagInclusion::AsIs,
         PackfileItemInclusion::Generate,
     );
-    let response = generate_pack_item_stream(ctx, repo, request)
+    let response = generate_pack_item_stream(ctx.clone(), repo, request)
         .await
         .map_err(|e| {
             GitError::PackfileError(format!(

@@ -24,6 +24,7 @@ use bookmarks::ArcBookmarks;
 use bookmarks::BookmarkCategory;
 use bookmarks::BookmarkKey;
 use bookmarks::BookmarkUpdateLog;
+use bookmarks::BookmarkUpdateLogId;
 use bookmarks::BookmarkUpdateLogRef;
 use bookmarks::Bookmarks;
 use bookmarks::BookmarksRef;
@@ -61,6 +62,7 @@ use itertools::Itertools;
 use lock_ext::RwLockExt;
 use mercurial_derivation::MappedHgChangesetId;
 use mononoke_types::ChangesetId;
+use mononoke_types::DerivableType;
 use mononoke_types::Timestamp;
 use phases::ArcPhases;
 use repo_derived_data::ArcRepoDerivedData;
@@ -167,35 +169,49 @@ impl WarmBookmarksCacheBuilder {
         phases: &ArcPhases,
     ) -> Result<(), Error> {
         self.add_derived_data_warmers(
-            vec![MappedHgChangesetId::NAME, FilenodesOnlyPublic::NAME],
+            &[MappedHgChangesetId::VARIANT, FilenodesOnlyPublic::VARIANT],
             repo_derived_data,
         )?;
         self.add_public_phase_warmer(phases);
         Ok(())
     }
 
-    fn add_derived_data_warmers<'name, Name>(
+    pub fn add_git_warmers(
         &mut self,
-        types: impl IntoIterator<Item = &'name Name>,
         repo_derived_data: &ArcRepoDerivedData,
-    ) -> Result<(), Error>
-    where
-        Name: 'name + AsRef<str> + ?Sized,
-    {
-        let types = types.into_iter().map(AsRef::as_ref).collect::<HashSet<_>>();
+        phases: &ArcPhases,
+    ) -> Result<(), Error> {
+        self.add_derived_data_warmers(
+            &[
+                MappedGitCommitId::VARIANT,
+                TreeHandle::VARIANT,
+                RootGitDeltaManifestId::VARIANT,
+            ],
+            repo_derived_data,
+        )?;
+        self.add_public_phase_warmer(phases);
+        Ok(())
+    }
+
+    fn add_derived_data_warmers<'a>(
+        &mut self,
+        types: impl IntoIterator<Item = &'a DerivableType>,
+        repo_derived_data: &ArcRepoDerivedData,
+    ) -> Result<(), Error> {
+        let types = types.into_iter().collect::<HashSet<_>>();
 
         let config = repo_derived_data.config();
         for ty in types.iter() {
-            if !config.is_enabled(ty) {
+            if !config.is_enabled(**ty) {
                 return Err(anyhow!(
                     "{} is not enabled for {}",
-                    ty,
+                    ty.name(),
                     self.repo_identity.name()
                 ));
             }
         }
 
-        if types.contains(MappedHgChangesetId::NAME) {
+        if types.contains(&MappedHgChangesetId::VARIANT) {
             self.warmers
                 .push(create_derived_data_warmer::<MappedHgChangesetId>(
                     &self.ctx,
@@ -203,75 +219,74 @@ impl WarmBookmarksCacheBuilder {
                 ));
         }
 
-        if types.contains(RootUnodeManifestId::NAME) {
+        if types.contains(&RootUnodeManifestId::VARIANT) {
             self.warmers
                 .push(create_derived_data_warmer::<RootUnodeManifestId>(
                     &self.ctx,
                     repo_derived_data.clone(),
                 ));
         }
-        if types.contains(RootFsnodeId::NAME) {
+        if types.contains(&RootFsnodeId::VARIANT) {
             self.warmers
                 .push(create_derived_data_warmer::<RootFsnodeId>(
                     &self.ctx,
                     repo_derived_data.clone(),
                 ));
         }
-        if types.contains(RootSkeletonManifestId::NAME) {
+        if types.contains(&RootSkeletonManifestId::VARIANT) {
             self.warmers
                 .push(create_derived_data_warmer::<RootSkeletonManifestId>(
                     &self.ctx,
                     repo_derived_data.clone(),
                 ));
         }
-        if types.contains(RootBlameV2::NAME) {
+        if types.contains(&RootBlameV2::VARIANT) {
             self.warmers.push(create_derived_data_warmer::<RootBlameV2>(
                 &self.ctx,
                 repo_derived_data.clone(),
             ));
         }
-        if types.contains(ChangesetInfo::NAME) {
+        if types.contains(&ChangesetInfo::VARIANT) {
             self.warmers
                 .push(create_derived_data_warmer::<ChangesetInfo>(
                     &self.ctx,
                     repo_derived_data.clone(),
                 ));
         }
-        // deleted manifest share the same name
-        if types.contains(RootDeletedManifestV2Id::NAME) {
+        if types.contains(&RootDeletedManifestV2Id::VARIANT) {
             self.warmers
                 .push(create_derived_data_warmer::<RootDeletedManifestV2Id>(
                     &self.ctx,
                     repo_derived_data.clone(),
                 ));
         }
-        if types.contains(RootFastlog::NAME) {
+        if types.contains(&RootFastlog::VARIANT) {
             self.warmers.push(create_derived_data_warmer::<RootFastlog>(
                 &self.ctx,
                 repo_derived_data.clone(),
             ));
         }
-        if types.contains(RootBssmV3DirectoryId::NAME) {
+        if types.contains(&RootBssmV3DirectoryId::VARIANT) {
             self.warmers
                 .push(create_derived_data_warmer::<RootBssmV3DirectoryId>(
                     &self.ctx,
                     repo_derived_data.clone(),
                 ));
         }
-        if types.contains(TreeHandle::NAME) {
+        if types.contains(&TreeHandle::VARIANT) {
             self.warmers.push(create_derived_data_warmer::<TreeHandle>(
                 &self.ctx,
                 repo_derived_data.clone(),
             ));
         }
-        if types.contains(MappedGitCommitId::NAME) {
+        if types.contains(&MappedGitCommitId::VARIANT) {
             self.warmers
                 .push(create_derived_data_warmer::<MappedGitCommitId>(
                     &self.ctx,
                     repo_derived_data.clone(),
                 ));
         }
-        if types.contains(RootGitDeltaManifestId::NAME) {
+        if types.contains(&RootGitDeltaManifestId::VARIANT) {
             self.warmers
                 .push(create_derived_data_warmer::<RootGitDeltaManifestId>(
                     &self.ctx,
@@ -632,8 +647,6 @@ pub struct LatestUnderivedBookmarkEntry {
     maybe_id_ts: Option<(BookmarkUpdateLogId, Timestamp)>,
 }
 
-pub struct BookmarkUpdateLogId(pub u64);
-
 /// Searches bookmark log for latest entry for which everything is derived. Note that we consider log entry that
 /// deletes a bookmark to be derived.
 pub async fn find_latest_derived_and_underived(
@@ -648,7 +661,9 @@ pub async fn find_latest_derived_and_underived(
     let history_depth_limits = vec![0, 10, 50, 100, 1000, 10000];
 
     for (prev_limit, limit) in history_depth_limits.into_iter().tuple_windows() {
-        debug!(ctx.logger(), "{} bookmark, limit {}", book, limit);
+        if prev_limit > 0 {
+            debug!(ctx.logger(), "{} bookmark, limit {}", book, limit);
+        }
         // Note that since new entries might be inserted to the bookmark log,
         // the next call to `list_bookmark_log_entries(...)` might return
         // entries that were already returned on the previous call `list_bookmark_log_entries(...)`.
@@ -662,7 +677,7 @@ pub async fn find_latest_derived_and_underived(
                 Freshness::MaybeStale,
             )
             .map_ok(|(id, maybe_cs_id, _, ts)| {
-                let id = BookmarkUpdateLogId(id);
+                let id = id.into();
                 (maybe_cs_id, Some((id, ts)))
             })
             .try_collect::<Vec<_>>()
@@ -1098,7 +1113,7 @@ async fn single_bookmark_updater(
             staleness_reporter(ts);
         }
 
-        let bookmark_log_id = maybe_id_ts.as_ref().map(|(id, _)| id.0);
+        let bookmark_log_id = maybe_id_ts.as_ref().map(|(id, _)| u64::from(*id));
         let maybe_ts = maybe_id_ts.map(|(_, ts)| ts);
 
         let ctx = ctx.clone().with_mutated_scuba(|mut scuba| {
@@ -1226,7 +1241,7 @@ mod tests {
             .with_blobstore(blobstore)
             .build()
             .await?;
-        Linear::initrepo(fb, &repo.blob_repo).await;
+        Linear::init_repo(fb, &repo.blob_repo).await?;
         let ctx = CoreContext::test_mock(fb);
 
         let mut warmers: Vec<Warmer> = Vec::new();
@@ -1883,7 +1898,7 @@ mod tests {
     async fn test_single_bookmarks_no_history(fb: FacebookInit) -> Result<(), Error> {
         let factory = TestRepoFactory::new(fb)?;
         let repo: InnerRepo = factory.build().await?;
-        Linear::initrepo(fb, &repo.blob_repo).await;
+        Linear::init_repo(fb, &repo.blob_repo).await?;
         let ctx = CoreContext::test_mock(fb);
 
         let bookmarks = Arc::new(RwLock::new(HashMap::new()));

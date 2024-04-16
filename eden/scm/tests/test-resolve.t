@@ -1,6 +1,10 @@
 #debugruntest-compatible
 
+#require no-eden
+
+
   $ eagerepo
+  $ setconfig commands.update.check=none
 test that a commit clears the merge state.
 
   $ hg init repo

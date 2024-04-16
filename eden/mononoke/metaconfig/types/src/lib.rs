@@ -32,6 +32,7 @@ use derive_more::Into;
 use mononoke_types::path::MPath;
 use mononoke_types::BonsaiChangeset;
 use mononoke_types::ChangesetId;
+use mononoke_types::DerivableType;
 use mononoke_types::NonRootMPath;
 use mononoke_types::PrefixTrie;
 use mononoke_types::RepositoryId;
@@ -231,6 +232,10 @@ pub struct RepoConfig {
     pub deep_sharding_config: Option<ShardingModeConfig>,
     /// Local directory to write files to instead of uploading to everstore
     pub everstore_local_path: Option<String>,
+    /// The concurrency setting to be used during git protocol for this repo
+    pub git_concurrency: Option<GitConcurrencyParams>,
+    /// Configuration for the repo metadata logger
+    pub metadata_logger_config: MetadataLoggerConfig,
 }
 
 /// Config determining if the repo is deep sharded in the context of a service.
@@ -271,6 +276,8 @@ pub enum ShardedService {
     AliasVerify,
     /// Draft Commit Deletion,
     DraftCommitDeletion,
+    /// Mononoke Git Server
+    MononokeGitServer,
 }
 
 /// Indicates types of commit hashes used in a repo context.
@@ -317,18 +324,22 @@ pub struct DerivedDataConfig {
 
 impl DerivedDataConfig {
     /// Returns whether the named derived data type is enabled.
-    pub fn is_enabled(&self, name: &str) -> bool {
+    pub fn is_enabled(&self, derivable_type: DerivableType) -> bool {
         if let Some(config) = self.available_configs.get(&self.enabled_config_name) {
-            config.types.contains(name)
+            config.types.contains(&derivable_type)
         } else {
             false
         }
     }
 
     /// Return whether the named derived data type is enabled in named config
-    pub fn is_enabled_for_config_name(&self, name: &str, config_name: &str) -> bool {
+    pub fn is_enabled_for_config_name(
+        &self,
+        derivable_type: DerivableType,
+        config_name: &str,
+    ) -> bool {
         if let Some(config) = self.available_configs.get(config_name) {
-            config.types.contains(name)
+            config.types.contains(&derivable_type)
         } else {
             false
         }
@@ -349,7 +360,7 @@ impl DerivedDataConfig {
 #[derive(Eq, Clone, Default, Debug, PartialEq)]
 pub struct DerivedDataTypesConfig {
     /// The configured types.
-    pub types: HashSet<String>,
+    pub types: HashSet<DerivableType>,
 
     /// Key prefixes for mappings.  These are used to generate unique
     /// mapping keys when rederiving existing derived data types.
@@ -359,7 +370,7 @@ pub struct DerivedDataTypesConfig {
     ///
     /// The prefix is applied to the commit hash part of the key, i.e.
     /// `derived_root_fsnode.HASH` becomes `derived_root_fsnode.PREFIXHASH`.
-    pub mapping_key_prefixes: HashMap<String, String>,
+    pub mapping_key_prefixes: HashMap<DerivableType, String>,
 
     /// What unode version should be used.
     pub unode_version: UnodeVersion,
@@ -933,10 +944,6 @@ pub enum BlobConfig {
     },
     /// Store in an AWS S3 bucket
     AwsS3 {
-        /// AWS Account ID
-        aws_account_id: String,
-        /// AWS Role
-        aws_role: String,
         /// Bucket to connect to
         bucket: String,
         /// AWS Region
@@ -1080,6 +1087,8 @@ pub struct RemoteMetadataDatabaseConfig {
     pub bonsai_blob_mapping: Option<ShardableRemoteDatabaseConfig>,
     /// Database for deletion log
     pub deletion_log: Option<RemoteDatabaseConfig>,
+    /// Database for commit cloud info
+    pub commit_cloud: Option<RemoteDatabaseConfig>,
 }
 
 /// Configuration for the Metadata database when it is remote.
@@ -1251,6 +1260,38 @@ pub enum GitSubmodulesChangesAction {
     Expand,
 }
 
+/// Default prefix for git submodule metadata files
+pub const DEFAULT_GIT_SUBMODULE_METADATA_FILE_PREFIX: &str = "x-repo-submodule";
+
+/// Stores all the information related to git submodules in a small repo,
+/// e.g. how to handle them and what other repos the small repo might depend on
+/// to expand submodule file changes.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SmallRepoGitSubmoduleConfig {
+    /// Whether any changes made to git submodules should be stripped from
+    /// the changesets before being synced.
+    pub git_submodules_action: GitSubmodulesChangesAction,
+    /// Map from submodule path in the small repo to the ID of the submodule's
+    /// repository in Mononoke.
+    /// These repos have to be loaded with the small repo before syncing starts,
+    /// as file changes from the submodule dependencies might need to be copied.
+    pub submodule_dependencies: HashMap<NonRootMPath, RepositoryId>,
+    /// Each submodule expansion in the large repo will have a metadata file
+    /// named "<PREFIX><SUBMODULE_PATH>", e.g. ".x-repo-submodule-voip".
+    /// This file will store the git commit that the expansion corresponds to.
+    pub submodule_metadata_file_prefix: String,
+}
+
+impl Default for SmallRepoGitSubmoduleConfig {
+    fn default() -> Self {
+        Self {
+            git_submodules_action: GitSubmodulesChangesAction::default(),
+            submodule_dependencies: HashMap::new(),
+            submodule_metadata_file_prefix: DEFAULT_GIT_SUBMODULE_METADATA_FILE_PREFIX.to_string(),
+        }
+    }
+}
+
 /// Commit sync configuration for a small repo
 /// Note: this configuration is always from the point of view
 /// of the small repo, meaning a key in the `map` is a path
@@ -1261,14 +1302,8 @@ pub struct SmallRepoCommitSyncConfig {
     pub default_action: DefaultSmallToLargeCommitSyncPathAction,
     /// A map of prefix replacements when syncing
     pub map: HashMap<NonRootMPath, NonRootMPath>,
-    /// Whether any changes made to git submodules should be stripped from
-    /// the changesets before being synced.
-    pub git_submodules_action: GitSubmodulesChangesAction,
-    /// Map from submodule path in the small repo to the ID of the submodule's
-    /// repository in Mononoke.
-    /// These repos have to be loaded with the small repo before syncing starts,
-    /// as file changes from the submodule dependencies might need to be copied.
-    pub submodule_dependencies: HashMap<NonRootMPath, RepositoryId>,
+    /// All information related to git submodules
+    pub submodule_config: SmallRepoGitSubmoduleConfig,
 }
 
 /// Commit sync direction
@@ -1827,4 +1862,31 @@ pub struct CommitGraphConfig {
     pub scuba_table: Option<String>,
     /// Blobstore key for a preloaded commit graph
     pub preloaded_commit_graph_blobstore_key: Option<String>,
+}
+
+/// Configuration for the repo metadata logger
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
+pub struct MetadataLoggerConfig {
+    /// Bookmarks to log repo metadata for
+    pub bookmarks: Vec<BookmarkKey>,
+}
+
+/// Information on a loaded config
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
+pub struct ConfigInfo {
+    /// A hash of the raw config content
+    pub content_hash: String,
+    /// The time when the config was last updated
+    pub last_updated_at: u64,
+}
+
+/// The concurrency setting to be used during git protocol
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
+pub struct GitConcurrencyParams {
+    /// The concurrency value for tree and blob fetches
+    pub trees_and_blobs: usize,
+    /// The concurrency value for commit fetches
+    pub commits: usize,
+    /// The concurrency value for tag fetches
+    pub tags: usize,
 }

@@ -11,6 +11,10 @@
 #include <fmt/format.h>
 #include <folly/logging/xlog.h>
 
+#include "eden/common/telemetry/StructuredLogger.h"
+#include "eden/common/utils/Bug.h"
+#include "eden/common/utils/FaultInjector.h"
+#include "eden/common/utils/Guid.h"
 #include "eden/common/utils/ImmediateFuture.h"
 #include "eden/common/utils/PathFuncs.h"
 #include "eden/common/utils/StringConv.h"
@@ -21,10 +25,6 @@
 #include "eden/fs/prjfs/PrjfsRequestContext.h"
 #include "eden/fs/telemetry/EdenStats.h"
 #include "eden/fs/telemetry/LogEvent.h"
-#include "eden/fs/telemetry/StructuredLogger.h"
-#include "eden/fs/utils/Bug.h"
-#include "eden/fs/utils/FaultInjector.h"
-#include "eden/fs/utils/Guid.h"
 #include "eden/fs/utils/NotImplemented.h"
 #include "eden/fs/utils/StaticAssert.h"
 
@@ -868,7 +868,8 @@ folly::Try<folly::Unit> removeCachedFileImpl(
         FMT_STRING("Couldn't delete file {}: PrjfsChannel is stopped"), path)}};
   }
 
-  DurationScope statScope{inner->getStats(), &PrjfsStats::removeCachedFile};
+  DurationScope<EdenStats> statScope{
+      inner->getStats(), &PrjfsStats::removeCachedFile};
 
   if (path.empty()) {
     return folly::Try<folly::Unit>{folly::unit};
@@ -1713,7 +1714,7 @@ folly::Try<folly::Unit> PrjfsChannel::addDirectoryPlaceholder(
         path)}};
   }
 
-  DurationScope statScope{
+  DurationScope<EdenStats> statScope{
       inner->getStats(), &PrjfsStats::addDirectoryPlaceholder};
 
   if (path.empty()) {

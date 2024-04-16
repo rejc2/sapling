@@ -21,6 +21,7 @@ use blobstore::Loadable;
 use bonsai_hg_mapping::BonsaiHgMappingRef;
 use bookmarks::BookmarkKey;
 use bookmarks::BookmarkUpdateLogArc;
+use bookmarks::BookmarkUpdateLogId;
 use bookmarks::BookmarkUpdateLogRef;
 use bookmarks::BookmarkUpdateReason;
 use bookmarks::BookmarksArc;
@@ -190,7 +191,12 @@ fn test_sync_entries(fb: FacebookInit) -> Result<(), Error> {
 
         let next_log_entries: Vec<_> = source_repo
             .bookmark_update_log()
-            .read_next_bookmark_log_entries(ctx.clone(), 0, 1000, Freshness::MostRecent)
+            .read_next_bookmark_log_entries(
+                ctx.clone(),
+                BookmarkUpdateLogId(0),
+                1000,
+                Freshness::MostRecent,
+            )
             .try_collect()
             .await?;
 
@@ -201,7 +207,7 @@ fn test_sync_entries(fb: FacebookInit) -> Result<(), Error> {
             &commit_syncer,
             target_repo_dbs.clone(),
             next_log_entries.clone(),
-            0,
+            BookmarkUpdateLogId(0),
             Arc::new(AtomicBool::new(false)),
             CommitSyncContext::Backsyncer,
             false,
@@ -727,8 +733,7 @@ async fn backsync_change_mapping(fb: FacebookInit) -> Result<(), Error> {
                     NonRootMPath::new("current_prefix").unwrap(),
                 ),
                 map: hashmap! { },
-                git_submodules_action: Default::default(),
-                submodule_dependencies: HashMap::new(),
+                submodule_config: Default::default(),
             },
         },
         version_name: current_version.clone(),
@@ -745,8 +750,7 @@ async fn backsync_change_mapping(fb: FacebookInit) -> Result<(), Error> {
                     NonRootMPath::new("new_prefix").unwrap(),
                 ),
                 map: hashmap! { },
-                git_submodules_action: Default::default(),
-                submodule_dependencies: HashMap::new(),
+                submodule_config: Default::default(),
             },
         },
         version_name: new_version.clone(),
@@ -920,7 +924,12 @@ async fn backsync_and_verify_master_wc(
     let next_log_entries: Vec<_> = commit_syncer
         .get_source_repo()
         .bookmark_update_log()
-        .read_next_bookmark_log_entries(ctx.clone(), 0, 1000, Freshness::MaybeStale)
+        .read_next_bookmark_log_entries(
+            ctx.clone(),
+            BookmarkUpdateLogId(0),
+            1000,
+            Freshness::MaybeStale,
+        )
         .try_collect()
         .await?;
     let target_repo_dbs = Arc::new(target_repo_dbs);
@@ -1261,8 +1270,7 @@ impl MoverType {
             Noop => SmallRepoCommitSyncConfig {
                 default_action: DefaultSmallToLargeCommitSyncPathAction::Preserve,
                 map: hashmap! {},
-                git_submodules_action: Default::default(),
-                submodule_dependencies: HashMap::new(),
+                submodule_config: Default::default(),
             },
             Except(files) => {
                 let mut map = hashmap! {};
@@ -1275,8 +1283,7 @@ impl MoverType {
                 SmallRepoCommitSyncConfig {
                     default_action: DefaultSmallToLargeCommitSyncPathAction::Preserve,
                     map,
-                    git_submodules_action: Default::default(),
-                    submodule_dependencies: HashMap::new(),
+                    submodule_config: Default::default(),
                 }
             }
             Only(path) => SmallRepoCommitSyncConfig {
@@ -1286,8 +1293,7 @@ impl MoverType {
                 map: hashmap! {
                     NonRootMPath::new(path).unwrap() => NonRootMPath::new(path).unwrap(),
                 },
-                git_submodules_action: Default::default(),
-                submodule_dependencies: HashMap::new(),
+                submodule_config: Default::default(),
             },
         }
     }
@@ -1312,7 +1318,7 @@ async fn init_repos(
     let mut factory = TestRepoFactory::new(fb)?;
     let source_repo_id = RepositoryId::new(1);
     let source_repo: TestRepo = factory.with_id(source_repo_id).build().await?;
-    Linear::initrepo(fb, &source_repo).await;
+    Linear::init_repo(fb, &source_repo).await?;
 
     let target_repo_id = RepositoryId::new(2);
     let target_repo: TestRepo = factory.with_id(target_repo_id).build().await?;
@@ -1373,7 +1379,7 @@ async fn init_repos(
         &ctx,
         mapping.clone(),
         repos,
-        live_commit_sync_config,
+        live_commit_sync_config.clone(),
     );
 
     // Sync first commit manually
@@ -1391,7 +1397,6 @@ async fn init_repos(
     upload_commits(&ctx, vec![first_bcs.clone()], &source_repo, &target_repo).await?;
     let first_bcs_mut = first_bcs.into_mut();
 
-    let source_repo_deps = SubmoduleDeps::NotNeeded;
     let maybe_rewritten = {
         let empty_map = HashMap::new();
         cloned!(ctx, source_repo);
@@ -1401,9 +1406,9 @@ async fn init_repos(
             &empty_map,
             commit_syncer.get_mover_by_version(&version).await?,
             &source_repo,
-            &source_repo_deps,
             Default::default(),
             git_submodules_action,
+            None, // Submodule expansion data not needed here
         )
         .await
     }?;
@@ -1656,8 +1661,7 @@ async fn init_merged_repos(
                         NonRootMPath::new(format!("smallrepo{}", small_repo.repo_identity().id().id())).unwrap(),
                     ),
                     map: hashmap! { },
-                    git_submodules_action: Default::default(),
-                    submodule_dependencies: HashMap::new(),
+                    submodule_config: Default::default(),
                 },
             },
             version_name: after_merge_version.clone(),
@@ -2031,6 +2035,6 @@ async fn move_bookmark(
         }
     }
 
-    assert!(txn.commit().await?);
+    assert!(txn.commit().await?.is_some());
     Ok(())
 }

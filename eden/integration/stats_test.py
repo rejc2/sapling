@@ -4,6 +4,8 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2.
 
+# pyre-unsafe
+
 import logging
 import os
 import sys
@@ -171,7 +173,7 @@ class ObjectCacheStatsTest(testcase.EdenRepoTest):
 
 
 @testcase.eden_nfs_repo_test
-class HgBackingStoreStatsTest(testcase.EdenRepoTest):
+class SaplingBackingStoreStatsTest(testcase.EdenRepoTest):
     def test_reading_file_gets_file_from_hg(self) -> None:
         counters_before = self.get_counters()
         path = Path(self.mount) / "dir" / "subdir" / "file"

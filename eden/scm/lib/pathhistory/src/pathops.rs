@@ -62,6 +62,7 @@ struct State<'a> {
 }
 
 /// An item of a tree. It optionally contains a resolved `TreeEntry`.
+#[derive(Debug)]
 struct TreeItem<'a> {
     id: HgId,
     flag: Flag,
@@ -330,7 +331,9 @@ impl CompiledPaths {
             }
             // Execute the operation.
             for state in states.iter_mut() {
-                state.execute(op, &*tree_store, &mut self.lookup_cache)?;
+                async_runtime::block_in_place(|| {
+                    state.execute(op, &*tree_store, &mut self.lookup_cache)
+                })?;
             }
         }
 

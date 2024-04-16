@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
   $ configure modern
 
   $ setconfig paths.default=test:e1 ui.traceback=1
@@ -91,6 +94,7 @@ Pull (non-lazy):
     $ hg debugchangelog --migrate revlog
     $ LOG= hg pull -B master -r $B
     pulling from test:e1
+    fetching revlog data for 4 commits
     $ LOG= hg log -Gr 'all()' -T '{desc} {remotenames}'
     o  D remote/master
     │
@@ -105,6 +109,7 @@ Pull (non-lazy):
     $ hg debugchangelog --migrate fullsegments
     $ LOG= hg pull -B master -r $B
     pulling from test:e1
+    fetching revlog data for 4 commits
     $ LOG= hg log -Gr 'all()' -T '{desc} {remotenames}'
     o  B
     │
@@ -163,11 +168,11 @@ Trigger file and tree downloading:
 
   $ hg cat -r $B B A >out 2>err
   $ cat err out
-  DEBUG eagerepo::api: trees d8dc55ad2b89cdc0f1ee969e5d79bd1eaddb5b43
+  DEBUG eagerepo::api: trees d8dc55ad2b89cdc0f1ee969e5d79bd1eaddb5b43 Some(TreeAttributes { manifest_blob: true, parents: true, child_metadata: false })
   TRACE eagerepo::api:  found: d8dc55ad2b89cdc0f1ee969e5d79bd1eaddb5b43, 170 bytes
-  DEBUG eagerepo::api: files 005d992c5dcf32993668f7cede29d296c494a5d9
+  DEBUG eagerepo::api: files_attrs FileSpec { key: Key { path: RepoPathBuf("A"), hgid: HgId("005d992c5dcf32993668f7cede29d296c494a5d9") }, attrs: FileAttributes { content: true, aux_data: false } }
   TRACE eagerepo::api:  found: 005d992c5dcf32993668f7cede29d296c494a5d9, 41 bytes
-  DEBUG eagerepo::api: files 35e7525ce3a48913275d7061dd9a867ffef1e34d
+  DEBUG eagerepo::api: files_attrs FileSpec { key: Key { path: RepoPathBuf("B"), hgid: HgId("35e7525ce3a48913275d7061dd9a867ffef1e34d") }, attrs: FileAttributes { content: true, aux_data: false } }
   TRACE eagerepo::api:  found: 35e7525ce3a48913275d7061dd9a867ffef1e34d, 41 bytes
   AB (no-eol)
 
@@ -198,7 +203,7 @@ Clone:
 Commit hash and message are lazy
 
   $ LOG=dag::protocol=debug,eagerepo=debug hg log -T '{desc} {node}\n' -r 'all()'
-  DEBUG dag::protocol: resolve ids [0] remotely
+  DEBUG dag::protocol: resolve ids [1, 0] remotely
   DEBUG eagerepo::api: revlog_data 748104bd5058bf2c386d074d8dcf2704855380f6, 178c10ffbc2f92d5407c14478ae9d9dea81f232e, 23d30dc6b70380b2d939023947578ae0e0198999
   A 748104bd5058bf2c386d074d8dcf2704855380f6
   C 178c10ffbc2f92d5407c14478ae9d9dea81f232e
@@ -207,9 +212,9 @@ Commit hash and message are lazy
 Read file content:
 
   $ hg cat -r $C C
-  DEBUG eagerepo::api: trees 0ccf968573574750913fcee533939cc7ebe7327d
+  DEBUG eagerepo::api: trees 0ccf968573574750913fcee533939cc7ebe7327d Some(TreeAttributes { manifest_blob: true, parents: true, child_metadata: false })
   TRACE eagerepo::api:  found: 0ccf968573574750913fcee533939cc7ebe7327d, 170 bytes
-  DEBUG eagerepo::api: files a2e456504a5e61f763f1a0b36a6c247c7541b2b3
+  DEBUG eagerepo::api: files_attrs FileSpec { key: Key { path: RepoPathBuf("C"), hgid: HgId("a2e456504a5e61f763f1a0b36a6c247c7541b2b3") }, attrs: FileAttributes { content: true, aux_data: false } }
   TRACE eagerepo::api:  found: a2e456504a5e61f763f1a0b36a6c247c7541b2b3, 41 bytes
   C (no-eol)
 
@@ -269,7 +274,6 @@ Test that auto pull invalidates public() properly:
     pulling '428b6ef7fec737262ee83ba89e4fab5e3a07db44' from 'test:server-autopull'
     DEBUG dag::protocol: resolve names [a81a182e51718edfeccb2f62846c28c7b83de6f1] remotely
     DEBUG dag::protocol: resolve names [428b6ef7fec737262ee83ba89e4fab5e3a07db44] remotely
-    DEBUG dag::protocol: resolve ids [97] remotely
     D1
     D2
     D3
@@ -310,6 +314,6 @@ Test that filtering revset does not use sequential fetches.
 
   $ LOG=dag::protocol=trace,eagerepo::api=debug hg log -r "reverse(master~20::master) & not(file(r're:.*'))"
   DEBUG dag::protocol: resolve ids [9] remotely
-  DEBUG dag::protocol: resolve ids [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27] remotely
+  DEBUG dag::protocol: resolve ids [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28] remotely
   DEBUG eagerepo::api: revlog_data * (glob)
   >>> assert _.count('revlog_data') == 1 and 0 < _.count('resolve id') < 3

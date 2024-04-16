@@ -21,8 +21,14 @@
 #include <folly/system/Pid.h>
 #include <folly/system/ThreadName.h>
 
+#include "eden/common/telemetry/StructuredLogger.h"
+#include "eden/common/utils/Bug.h"
+#include "eden/common/utils/FaultInjector.h"
+#include "eden/common/utils/Future.h"
 #include "eden/common/utils/ImmediateFuture.h"
 #include "eden/common/utils/PathFuncs.h"
+#include "eden/common/utils/SpawnedProcess.h"
+#include "eden/common/utils/UnboundedQueueExecutor.h"
 #include "eden/fs/config/EdenConfig.h"
 #include "eden/fs/config/MountProtocol.h"
 #include "eden/fs/config/ReloadableConfig.h"
@@ -56,17 +62,12 @@
 #include "eden/fs/store/ScmStatusDiffCallback.h"
 #include "eden/fs/store/StatsFetchContext.h"
 #include "eden/fs/store/TreeLookupProcessor.h"
-#include "eden/fs/telemetry/StructuredLogger.h"
-#include "eden/fs/utils/Bug.h"
+#include "eden/fs/telemetry/LogEvent.h"
 #include "eden/fs/utils/Clock.h"
 #include "eden/fs/utils/EdenError.h"
-#include "eden/fs/utils/FaultInjector.h"
 #include "eden/fs/utils/FsChannelTypes.h"
-#include "eden/fs/utils/Future.h"
 #include "eden/fs/utils/NfsSocket.h"
 #include "eden/fs/utils/NotImplemented.h"
-#include "eden/fs/utils/SpawnedProcess.h"
-#include "eden/fs/utils/UnboundedQueueExecutor.h"
 
 #include <chrono>
 
@@ -77,7 +78,6 @@ using folly::Unit;
 using std::make_unique;
 using std::shared_ptr;
 
-DEFINE_int32(fuseNumThreads, 16, "how many fuse dispatcher threads to spawn");
 DEFINE_string(
     edenfsctlPath,
     "edenfsctl",
@@ -140,7 +140,7 @@ constexpr PathComponentPiece kNfsdSocketName{"nfsd.socket"_pc};
 class EdenMount::JournalDiffCallback : public DiffCallback {
  public:
   explicit JournalDiffCallback()
-      : data_{folly::in_place, std::unordered_set<RelativePath>()} {}
+      : data_{std::in_place, std::unordered_set<RelativePath>()} {}
 
   void ignoredPath(RelativePathPiece, dtype_t) override {}
 
@@ -1914,7 +1914,9 @@ std::unique_ptr<FuseChannel, FsChannelDeleter> makeFuseChannel(
       std::move(fuseFd),
       mount->getPath(),
       mount->getServerState()->getFsChannelThreadPool(),
-      FLAGS_fuseNumThreads,
+      mount->getServerState()
+          ->getEdenConfig()
+          ->fuseNumDispatcherThreads.getValue(),
       EdenDispatcherFactory::makeFuseDispatcher(mount),
       &mount->getStraceLogger(),
       mount->getServerState()->getProcessInfoCache(),

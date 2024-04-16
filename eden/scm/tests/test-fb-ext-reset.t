@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
 # coding=utf-8
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 #
@@ -101,7 +104,7 @@
 
 # Reset without a bookmark
 
-  $ hg up tip
+  $ hg up -C tip
   1 files updated, 0 files merged, 0 files removed, 0 files unresolved
   (leaving bookmark foo)
   $ hg book -d foo

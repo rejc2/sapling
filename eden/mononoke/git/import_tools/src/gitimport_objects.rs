@@ -16,10 +16,12 @@ use anyhow::bail;
 use anyhow::format_err;
 use anyhow::Context;
 use anyhow::Error;
+use anyhow::Result;
 use async_trait::async_trait;
 use blobstore::LoadableError;
 use bytes::Bytes;
 use context::CoreContext;
+use derived_data_manager::DerivableType;
 use encoding_rs::Encoding;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
@@ -177,6 +179,7 @@ pub struct GitimportPreferences {
     pub submodules: bool,
     pub lfs: GitImportLfs,
     pub git_command_path: PathBuf,
+    pub backfill_derivation: BackfillDerivation,
 }
 
 impl Default for GitimportPreferences {
@@ -188,6 +191,7 @@ impl Default for GitimportPreferences {
             submodules: true,
             lfs: GitImportLfs::default(),
             git_command_path: PathBuf::from("/usr/bin/git.real"),
+            backfill_derivation: BackfillDerivation::No,
         }
     }
 }
@@ -345,7 +349,7 @@ impl TagMetadata {
 
         let author_date = tagger
             .take()
-            .map(|tagger| convert_time_to_datetime(&tagger.time))
+            .map(|tagger| DateTime::from_gix(tagger.time))
             .transpose()?;
         let author = tagger
             .take()
@@ -495,8 +499,8 @@ impl ExtractedCommit {
             trees
         };
 
-        let author_date = convert_time_to_datetime(&author.time)?;
-        let committer_date = convert_time_to_datetime(&committer.time)?;
+        let author_date = DateTime::from_gix(author.time)?;
+        let committer_date = DateTime::from_gix(committer.time)?;
         let author = format_signature(author.to_ref());
         let committer = format_signature(committer.to_ref());
         let message = decode_message(&message, &encoding, ctx.logger())?;
@@ -616,8 +620,25 @@ impl ExtractedCommit {
     }
 }
 
-pub fn convert_time_to_datetime(time: &gix_date::Time) -> Result<DateTime, Error> {
-    DateTime::from_timestamp(time.seconds, -time.offset)
+#[derive(Clone, Debug)]
+pub enum BackfillDerivation {
+    AllConfiguredTypes,
+    OnlySpecificTypes(Vec<DerivableType>),
+    No,
+}
+
+impl BackfillDerivation {
+    pub fn types(&self, configured_types: &HashSet<DerivableType>) -> Vec<DerivableType> {
+        match self {
+            BackfillDerivation::AllConfiguredTypes => configured_types.iter().cloned().collect(),
+            BackfillDerivation::OnlySpecificTypes(derived_data_types) => derived_data_types
+                .iter()
+                .filter(|ty| configured_types.contains(ty))
+                .cloned()
+                .collect(),
+            BackfillDerivation::No => Vec::new(),
+        }
+    }
 }
 
 #[async_trait]
@@ -701,6 +722,7 @@ pub trait GitUploader: Clone + Send + Sync + 'static {
         &self,
         ctx: &CoreContext,
         dry_run: bool,
+        backfill_derivation: BackfillDerivation,
         changesets: Vec<(Self::IntermediateChangeset, hash::GitSha1)>,
     ) -> Result<(), Error>;
 }

@@ -11,7 +11,9 @@ import {useCommandEvent} from './ISLShortcuts';
 import {Internal} from './Internal';
 import {Kbd} from './Kbd';
 import {Tooltip} from './Tooltip';
-import {VSCodeCheckbox} from './VSCodeCheckbox';
+import {Checkbox} from './components/Checkbox';
+import {Divider} from './components/Divider';
+import {TextField} from './components/TextField';
 import {findCurrentPublicBase} from './getCommitTree';
 import {t, T} from './i18n';
 import {configBackedAtom, readAtom} from './jotaiUtils';
@@ -20,15 +22,16 @@ import {GraftOperation} from './operations/GraftOperation';
 import {PullRevOperation} from './operations/PullRevOperation';
 import {RebaseKeepOperation} from './operations/RebaseKeepOperation';
 import {RebaseOperation} from './operations/RebaseOperation';
+import {useRunOperation} from './operationsState';
 import {dagWithPreviews} from './previews';
-import {forceFetchCommit, useRunOperation} from './serverAPIState';
+import {forceFetchCommit} from './serverAPIState';
 import {succeedableRevset, exactRevset} from './types';
-import {VSCodeButton, VSCodeDivider, VSCodeTextField} from '@vscode/webview-ui-toolkit/react';
+import {VSCodeButton} from '@vscode/webview-ui-toolkit/react';
 import {useAtom} from 'jotai';
 import {useEffect, useRef, useState} from 'react';
 import {Icon} from 'shared/Icon';
 import {KeyCode, Modifier} from 'shared/KeyboardShortcuts';
-import {unwrap} from 'shared/utils';
+import {nullthrows} from 'shared/utils';
 
 import './DownloadCommitsMenu.css';
 
@@ -66,7 +69,7 @@ const downloadCommitShouldGoto = configBackedAtom<boolean>(
 );
 
 function DownloadCommitsTooltip({dismiss}: {dismiss: () => unknown}) {
-  const [enteredDiffNum, setEnteredDiffNum] = useState('');
+  const [enteredRevset, setEnteredRevset] = useState('');
   const runOperation = useRunOperation();
   const supportsDiffDownload = Internal.diffDownloadOperation != null;
   const downloadDiffTextArea = useRef(null);
@@ -90,15 +93,12 @@ function DownloadCommitsTooltip({dismiss}: {dismiss: () => unknown}) {
     // Worst case, the rebase/goto will be queued after some other unrelated actions which should be fine.
 
     try {
-      await runOperation(
-        new PullRevOperation(exactRevset(enteredDiffNum)),
-        /* throwOnError */ true,
-      );
+      await runOperation(new PullRevOperation(exactRevset(enteredRevset)), /* throwOnError */ true);
     } catch (err) {
       if (Internal.diffDownloadOperation != null) {
         // Note: try backup diff download system internally
         await runOperation(
-          Internal.diffDownloadOperation(exactRevset(enteredDiffNum)),
+          Internal.diffDownloadOperation(exactRevset(enteredRevset)),
           /* throwOnError */ true,
         );
       } else {
@@ -108,7 +108,7 @@ function DownloadCommitsTooltip({dismiss}: {dismiss: () => unknown}) {
     }
 
     // Lookup the result of the pull
-    const latest = await forceFetchCommit(enteredDiffNum).catch(() => null);
+    const latest = await forceFetchCommit(enteredRevset).catch(() => null);
     if (!latest) {
       // We can't continue with the rebase/goto if the lookup failed.
       return;
@@ -127,19 +127,25 @@ function DownloadCommitsTooltip({dismiss}: {dismiss: () => unknown}) {
       const dest =
         rebaseType === 'rebase_ontop'
           ? '.'
-          : unwrap(findCurrentPublicBase(readAtom(dagWithPreviews))?.hash);
+          : nullthrows(findCurrentPublicBase(readAtom(dagWithPreviews))?.hash);
       // Use exact revsets for sources, so that you can type a specific hash to download and not be surprised by succession.
       // Only use succession for destination, which may be in flux at the moment you start the download.
-      runOperation(new Op(exactRevset(enteredDiffNum), succeedableRevset(dest)));
+      runOperation(new Op(exactRevset(enteredRevset), succeedableRevset(dest)));
     }
 
     if (
       shouldGoto &&
       // Goto for public commits will be handled by Graft.
-      // Goto on max(latest_successors(revset)) would just yield the existing public commit.
+      // Goto on max(latest_successors(revset)) would just yield the existing public commit,
+      // but for non-landed commits, using succeedableRevset allows goto the newly rebased commit.
       !isPublic
     ) {
-      runOperation(new GotoOperation(exactRevset(enteredDiffNum)));
+      runOperation(
+        new GotoOperation(
+          // if not rebasing, just use the exact revset.
+          rebaseType == null ? exactRevset(enteredRevset) : succeedableRevset(enteredRevset),
+        ),
+      );
     }
   };
 
@@ -150,16 +156,17 @@ function DownloadCommitsTooltip({dismiss}: {dismiss: () => unknown}) {
       data-testid="download-commits-dropdown">
       <div className="download-commits-content">
         <div className="download-commits-input-row">
-          <VSCodeTextField
+          <TextField
+            width="100%"
             placeholder={
-              supportsDiffDownload ? t('Hash, Diff Number, ...') : t('Hash, revset, ...')
+              supportsDiffDownload ? t('Hash, Diff Number, ...') : t('Hash, revset, pr123, ...')
             }
-            value={enteredDiffNum}
+            value={enteredRevset}
             data-testid="download-commits-input"
-            onInput={e => setEnteredDiffNum((e.target as unknown as {value: string})?.value ?? '')}
+            onInput={e => setEnteredRevset((e.target as unknown as {value: string})?.value ?? '')}
             onKeyDown={e => {
               if (e.key === 'Enter') {
-                if (enteredDiffNum.trim().length > 0) {
+                if (enteredRevset.trim().length > 0) {
                   doCommitDownload();
                 }
               }
@@ -169,50 +176,46 @@ function DownloadCommitsTooltip({dismiss}: {dismiss: () => unknown}) {
           <VSCodeButton
             appearance="secondary"
             data-testid="download-commit-button"
-            disabled={enteredDiffNum.trim().length === 0}
+            disabled={enteredRevset.trim().length === 0}
             onClick={doCommitDownload}>
             <T>Pull</T>
           </VSCodeButton>
         </div>
         <div className="download-commits-input-row">
           <Tooltip title={t('After downloading this commit, also go there')}>
-            <VSCodeCheckbox
-              checked={shouldGoto}
-              onChange={e => {
-                setShouldGoto((e.target as HTMLInputElement).checked);
-              }}>
+            <Checkbox checked={shouldGoto} onChange={setShouldGoto}>
               <T>Go to</T>
-            </VSCodeCheckbox>
+            </Checkbox>
           </Tooltip>
           <Tooltip
             title={t(
               'After downloading this commit, rebase it onto the public base of the current stack. Public commits will be copied instead of moved.',
             )}>
-            <VSCodeCheckbox
+            <Checkbox
               checked={rebaseType === 'rebase_base'}
-              onChange={e => {
-                setRebaseType((e.target as HTMLInputElement).checked ? 'rebase_base' : null);
+              onChange={checked => {
+                setRebaseType(checked ? 'rebase_base' : null);
               }}>
               <T>Rebase to Stack Base</T>
-            </VSCodeCheckbox>
+            </Checkbox>
           </Tooltip>
           <Tooltip
             title={t(
               'After downloading this commit, rebase it on top of the current commit. Public commits will be copied instead of moved.',
             )}>
-            <VSCodeCheckbox
+            <Checkbox
               checked={rebaseType === 'rebase_ontop'}
-              onChange={e => {
-                setRebaseType((e.target as HTMLInputElement).checked ? 'rebase_ontop' : null);
+              onChange={checked => {
+                setRebaseType(checked ? 'rebase_ontop' : null);
               }}>
               <T>Rebase onto Stack</T>
-            </VSCodeCheckbox>
+            </Checkbox>
           </Tooltip>
         </div>
       </div>
       {Internal.supportsCommitCloud && (
         <>
-          <VSCodeDivider />
+          <Divider />
           <CommitCloudInfo />
         </>
       )}

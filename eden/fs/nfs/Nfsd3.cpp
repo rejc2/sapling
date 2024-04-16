@@ -14,6 +14,9 @@
 #include <folly/futures/Future.h>
 #include <folly/portability/Stdlib.h>
 
+#include "eden/common/telemetry/RequestMetricsScope.h"
+#include "eden/common/telemetry/StructuredLogger.h"
+#include "eden/common/utils/IDGen.h"
 #include "eden/common/utils/SystemError.h"
 #include "eden/common/utils/Throw.h"
 #include "eden/fs/nfs/NfsRequestContext.h"
@@ -23,10 +26,7 @@
 #include "eden/fs/store/ObjectFetchContext.h"
 #include "eden/fs/telemetry/FsEventLogger.h"
 #include "eden/fs/telemetry/LogEvent.h"
-#include "eden/fs/telemetry/RequestMetricsScope.h"
-#include "eden/fs/telemetry/StructuredLogger.h"
 #include "eden/fs/utils/Clock.h"
-#include "eden/fs/utils/IDGen.h"
 #include "eden/fs/utils/StaticAssert.h"
 
 #ifdef __linux__
@@ -429,7 +429,7 @@ ImmediateFuture<folly::Unit> Nfsd3ServerProcessor::lookup(
              return dispatcher_
                  ->getattr(args.what.dir.ino, context.getObjectFetchContext())
                  .thenValue(
-                     [ino = args.what.dir.ino](struct stat && stat)
+                     [ino = args.what.dir.ino](struct stat&& stat)
                          -> std::tuple<InodeNumber, struct stat> {
                        return {ino, std::move(stat)};
                      });
@@ -440,7 +440,7 @@ ImmediateFuture<folly::Unit> Nfsd3ServerProcessor::lookup(
                    return dispatcher_
                        ->getattr(ino, context.getObjectFetchContext())
                        .thenValue(
-                           [ino](struct stat && stat)
+                           [ino](struct stat&& stat)
                                -> std::tuple<InodeNumber, struct stat> {
                              return {ino, std::move(stat)};
                            });

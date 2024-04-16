@@ -9,6 +9,7 @@ import type {CommitInfo} from '../types';
 import type {CommitInfoMode} from './CommitInfoState';
 import type {CommitMessageFields, FieldConfig} from './types';
 
+import {Internal} from '../Internal';
 import {DOCUMENTATION_DELAY, Tooltip} from '../Tooltip';
 import {tracker} from '../analytics';
 import {LinkButton} from '../components/LinkButton';
@@ -57,7 +58,12 @@ const fillCommitMessageMethods: Array<{
       if (!parent) {
         return undefined;
       }
-      return parseCommitMessageFields(schema, parent.title, parent.description);
+      const fields = parseCommitMessageFields(schema, parent.title, parent.description);
+      if (Internal.diffFieldTag) {
+        // don't fill in diff field, so we don't conflict with a previous diff
+        delete fields[Internal.diffFieldTag];
+      }
+      return fields;
     },
   },
   {
@@ -67,7 +73,7 @@ const fillCommitMessageMethods: Array<{
     ),
     getMessage: (_commit: CommitInfo, _mode: CommitInfoMode) => {
       const template = readAtom(commitMessageTemplate);
-      return template?.fields as CommitMessageFields | undefined;
+      return template as CommitMessageFields | undefined;
     },
   },
 ];
@@ -88,7 +94,7 @@ export function FillCommitMessage({commit, mode}: {commit: CommitInfo; mode: Com
         writeAtom(editedCommitMessages(hashOrHead), getDefaultEditedCommitMessage());
         return;
       }
-      const oldMessage = existing.fields as CommitMessageFields;
+      const oldMessage = existing as CommitMessageFields;
       const buttons = [
         {label: t('Cancel')},
         {label: t('Overwrite')},
@@ -114,10 +120,10 @@ export function FillCommitMessage({commit, mode}: {commit: CommitInfo; mode: Com
       if (answer === buttons[2]) {
         // TODO: T177275949 should we warn about conflicts instead of just merging?
         const merged = mergeCommitMessageFields(schema, oldMessage, newMessage);
-        writeAtom(editedCommitMessages(hashOrHead), {fields: merged});
+        writeAtom(editedCommitMessages(hashOrHead), merged);
         return;
       } else if (answer === buttons[1]) {
-        writeAtom(editedCommitMessages(hashOrHead), {fields: newMessage});
+        writeAtom(editedCommitMessages(hashOrHead), newMessage);
         return;
       }
     },

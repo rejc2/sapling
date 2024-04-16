@@ -83,8 +83,12 @@ impl<T: StoreValue> CommonFetchState<T> {
                 if new.attrs().has(self.request_attrs) {
                     self.found.remove(&key);
                     self.pending.remove(&key);
-                    let new = new.mask(self.request_attrs);
-                    let _ = self.found_tx.send(Ok((key, new)));
+
+                    if !self.mode.ignore_result() {
+                        let new = new.mask(self.request_attrs);
+                        let _ = self.found_tx.send(Ok((key, new)));
+                    }
+
                     return true;
                 } else {
                     *available = new;
@@ -93,8 +97,12 @@ impl<T: StoreValue> CommonFetchState<T> {
             Vacant(entry) => {
                 if value.attrs().has(self.request_attrs) {
                     self.pending.remove(&key);
-                    let value = value.mask(self.request_attrs);
-                    let _ = self.found_tx.send(Ok((key, value)));
+
+                    if !self.mode.ignore_result() {
+                        let value = value.mask(self.request_attrs);
+                        let _ = self.found_tx.send(Ok((key, value)));
+                    }
+
                     return true;
                 } else {
                     entry.insert(value);
@@ -111,12 +119,14 @@ impl<T: StoreValue> CommonFetchState<T> {
         for key in self.pending.into_iter() {
             self.found.remove(&key);
             incomplete.entry(key).or_insert_with(|| {
-                let msg = match self.mode {
-                    FetchMode::LocalOnly => "not found locally and not contacting server",
+                let msg = if self.mode.is_local() {
+                    "not found locally and not contacting server"
+                } else if self.mode.is_remote() {
                     // This should really never happen. If a key fails to fetch, it should've been
                     // associated with a keyed error and put in incomplete already.
-                    FetchMode::RemoteOnly => "server did not provide content",
-                    FetchMode::AllowRemote => "server did not provide content",
+                    "server did not provide content"
+                } else {
+                    "server did not provide content"
                 };
                 vec![anyhow!("{}", msg)]
             });

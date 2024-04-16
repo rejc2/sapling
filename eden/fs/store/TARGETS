@@ -16,13 +16,13 @@ cpp_binary(
     deps = [
         ":rocksdb",
         ":store",
+        "//eden/common/telemetry:structured_logger",
+        "//eden/common/utils:utils",
         "//eden/fs/config:config",
         "//eden/fs/service:init",
         "//eden/fs/service:server",
-        "//eden/fs/telemetry:structured_logger",
-        "//eden/fs/telemetry:telemetry",
+        "//eden/fs/telemetry:stats",
         "//eden/fs/utils:user_info",
-        "//eden/fs/utils:utils",
         "//folly:range",
         "//folly:stop_watch",
         "//folly:string",
@@ -43,11 +43,12 @@ cpp_library(
     srcs = ROCKSDB_SRCS,
     headers = ROCKSDB_HEADERS,
     deps = [
+        "//eden/common/telemetry:structured_logger",
         "//eden/common/utils:throw",
         "//eden/fs/config:config",
-        "//eden/fs/telemetry:structured_logger",
+        "//eden/fs/telemetry:log_info",
+        "//eden/fs/telemetry:stats",
         "//eden/fs/telemetry:task_trace",
-        "//eden/fs/telemetry:telemetry",
         "//fb303:service_data",
         "//folly:string",
         "//folly/futures:core",
@@ -58,8 +59,8 @@ cpp_library(
     ],
     exported_deps = [
         ":store",
+        "//eden/common/utils:utils",
         "//eden/fs/rocksdb:rocksdb",
-        "//eden/fs/utils:utils",
         "//folly:cpp_attributes",
         "//folly:synchronized",
     ],
@@ -74,7 +75,7 @@ cpp_library(
     srcs = SQLITE_SRCS,
     headers = SQLITE_HEADERS,
     deps = [
-        "//eden/fs/telemetry:telemetry",
+        "//eden/fs/telemetry:stats",
         "//folly:string",
         "//folly/container:array",
         "//folly/logging:logging",
@@ -109,14 +110,18 @@ cpp_library(
     exported_deps = [
         "fbsource//third-party/fmt:fmt",
         "//eden/common/os:os",
-        "//eden/fs/utils:ref_ptr",
+        "//eden/common/utils:ref_ptr",
     ],
 )
 
+BACKING_STORE_TYPE_INF = ["BackingStoreType.h"]
+
+BACKING_STORE_TYPE_SRCS = ["BackingStoreType.cpp"]
+
 cpp_library(
     name = "store_type",
-    srcs = ["BackingStoreType.cpp"],
-    headers = ["BackingStoreType.h"],
+    srcs = BACKING_STORE_TYPE_SRCS,
+    headers = BACKING_STORE_TYPE_INF,
     deps = [
         "//eden/common/utils:throw",
     ],
@@ -154,11 +159,12 @@ cpp_library(
         "//folly:varint",
     ],
     exported_deps = [
+        "fbsource//third-party/googletest:gtest_headers",
         ":backing_store_interface",
+        "//eden/common/utils:ref_ptr",
+        "//eden/common/utils:utils",
         "//eden/fs/store/filter:filtered_object_id",
         "//eden/fs/store/filter:filters",
-        "//eden/fs/utils:ref_ptr",
-        "//eden/fs/utils:utils",
     ],
 )
 
@@ -166,19 +172,19 @@ cpp_library(
     name = "store",
     srcs = glob(
         ["*.cpp"],
-        exclude = EDEN_STORE_UTIL_SRCS + ROCKSDB_SRCS + SQLITE_SRCS + CONTEXT_SRCS + FILTERED_BACKING_STORE_SRCS,
+        exclude = EDEN_STORE_UTIL_SRCS + ROCKSDB_SRCS + SQLITE_SRCS + CONTEXT_SRCS + FILTERED_BACKING_STORE_SRCS + BACKING_STORE_TYPE_SRCS,
     ),
     headers = glob(
         ["*.h"],
-        exclude = ROCKSDB_HEADERS + SQLITE_HEADERS + CONTEXT_HEADERS + BACKING_STORE_INF + FILTERED_BACKING_STORE_HEADERS,
+        exclude = ROCKSDB_HEADERS + SQLITE_HEADERS + CONTEXT_HEADERS + BACKING_STORE_INF + FILTERED_BACKING_STORE_HEADERS + BACKING_STORE_TYPE_INF,
     ),
     deps = [
+        "//eden/common/telemetry:structured_logger",
         "//eden/common/utils:process_info_cache",
         "//eden/common/utils:throw",
         "//eden/fs/model/git:git",
         "//eden/fs/model/git:gitignore",
         "//eden/fs/telemetry:log_info",
-        "//eden/fs/telemetry:structured_logger",
         "//eden/fs/telemetry:task_trace",
         "//eden/fs/utils:eden_error",
         "//folly:conv",
@@ -192,18 +198,19 @@ cpp_library(
         "//folly/lang:bits",
     ],
     exported_deps = [
+        "fbsource//third-party/googletest:gtest_headers",
         ":backing_store_interface",
         ":context",
         "//eden/common/utils:case_sensitivity",
         "//eden/common/utils:immediate_future",
         "//eden/common/utils:path",
+        "//eden/common/utils:ref_ptr",
+        "//eden/common/utils:utils",
         "//eden/fs/config:config",
         "//eden/fs/model:model",
         "//eden/fs/model:model-fwd",
         "//eden/fs/service:thrift-cpp2-types",
-        "//eden/fs/telemetry:telemetry",
-        "//eden/fs/utils:ref_ptr",
-        "//eden/fs/utils:utils",
+        "//eden/fs/telemetry:stats",
         "//folly:cancellation_token",
         "//folly:executor",
         "//folly:intrusive_list",

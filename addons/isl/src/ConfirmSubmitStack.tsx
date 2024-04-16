@@ -14,15 +14,16 @@ import {Tooltip} from './Tooltip';
 import {VSCodeCheckbox} from './VSCodeCheckbox';
 import {codeReviewProvider} from './codeReview/CodeReviewInfo';
 import {submitAsDraft, SubmitAsDraftCheckbox} from './codeReview/DraftCheckbox';
+import {Divider} from './components/Divider';
 import {t, T} from './i18n';
 import {configBackedAtom, readAtom} from './jotaiUtils';
 import {CommitPreview} from './previews';
 import {useModal} from './useModal';
-import {VSCodeDivider, VSCodeButton, VSCodeTextField} from '@vscode/webview-ui-toolkit/react';
+import {VSCodeButton, VSCodeTextField} from '@vscode/webview-ui-toolkit/react';
 import {useAtom, useAtomValue} from 'jotai';
 import {useState} from 'react';
 import {useAutofocusRef} from 'shared/hooks';
-import {unwrap} from 'shared/utils';
+import {nullthrows} from 'shared/utils';
 
 import './ConfirmSubmitStack.css';
 
@@ -66,7 +67,10 @@ export function useShowConfirmSubmitStack() {
 
     const provider = readAtom(codeReviewProvider);
 
-    const replace = {$numCommits: String(stack.length), $cmd: unwrap(provider).submitCommandName()};
+    const replace = {
+      $numCommits: String(stack.length),
+      $cmd: nullthrows(provider).submitCommandName(),
+    };
     const title =
       mode === 'submit'
         ? t('Submitting $numCommits commits for review with $cmd', {replace})
@@ -124,7 +128,7 @@ function ConfirmModalContent({
         )}
         <SubmitAsDraftCheckbox commitsToBeSubmit={stack} />
       </div>
-      <VSCodeDivider />
+      <Divider />
       <div className="use-modal-buttons">
         <Tooltip
           placement="bottom"

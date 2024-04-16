@@ -14,7 +14,6 @@ path = "test/main.rs"
 [dependencies]
 anyhow = "1.0.75"
 async-recursion = "1.0.2"
-async-trait = "0.1.71"
 blobstore = { version = "0.1.0", path = "../../blobstore" }
 bonsai_git_mapping = { version = "0.1.0", path = "../../bonsai_git_mapping" }
 bonsai_globalrev_mapping = { version = "0.1.0", path = "../../bonsai_globalrev_mapping" }
@@ -24,7 +23,6 @@ bookmarks = { version = "0.1.0", path = "../../bookmarks" }
 borrowed = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 bounded_traversal = { version = "0.1.0", path = "../../common/bounded_traversal" }
 cacheblob = { version = "0.1.0", path = "../../blobstore/cacheblob" }
-changeset_fetcher = { version = "0.1.0", path = "../../blobrepo/changeset_fetcher" }
 changeset_info = { version = "0.1.0", path = "../../derived_data/changeset_info" }
 changesets = { version = "0.1.0", path = "../../changesets" }
 cloned = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
@@ -38,7 +36,7 @@ facet = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust
 fbinit = { version = "0.1.2", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 filestore = { version = "0.1.0", path = "../../filestore" }
 fsnodes = { version = "0.1.0", path = "../../derived_data/fsnodes" }
-futures = { version = "0.3.28", features = ["async-await", "compat"] }
+futures = { version = "0.3.30", features = ["async-await", "compat"] }
 git_types = { version = "0.1.0", path = "../../git/git_types" }
 justknobs = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 live_commit_sync_config = { version = "0.1.0", path = "../live_commit_sync_config" }
@@ -51,7 +49,6 @@ movers = { version = "0.1.0", path = "../movers" }
 mutable_counters = { version = "0.1.0", path = "../../mutable_counters" }
 phases = { version = "0.1.0", path = "../../phases" }
 pushrebase = { version = "0.1.0", path = "../../pushrebase" }
-pushrebase_hook = { version = "0.1.0", path = "../../pushrebase/pushrebase_hook" }
 pushrebase_hooks = { version = "0.1.0", path = "../../pushrebase/pushrebase_hooks" }
 pushrebase_mutation_mapping = { version = "0.1.0", path = "../../pushrebase_mutation_mapping" }
 rand = { version = "0.8", features = ["small_rng"] }
@@ -65,25 +62,25 @@ scopeguard = "1.0.0"
 scuba_ext = { version = "0.1.0", path = "../../common/scuba_ext" }
 slog = { version = "2.7", features = ["max_level_trace", "nested-values"] }
 sorted_vector_map = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
-sql = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 static_assertions = "1.1.0"
 synced_commit_mapping = { version = "0.1.0", path = "../synced_commit_mapping" }
+synced_commit_mapping_pushrebase_hook = { version = "0.1.0", path = "../synced_commit_mapping/pushrebase_hook" }
 thiserror = "1.0.49"
-tokio = { version = "1.29.1", features = ["full", "test-util", "tracing"] }
+tokio = { version = "1.36.0", features = ["full", "test-util", "tracing"] }
 topo_sort = { version = "0.1.0", path = "../../common/topo_sort" }
 
 [dev-dependencies]
 ascii = "1.0"
-assert_matches = "1.5"
 blobrepo = { version = "0.1.0", path = "../../blobrepo" }
+bulk_derivation = { version = "0.1.0", path = "../../derived_data/bulk_derivation" }
 cross_repo_sync_test_utils = { version = "0.1.0", path = "test_utils" }
 fbinit-tokio = { version = "0.1.2", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 fixtures = { version = "0.1.0", path = "../../tests/fixtures" }
-futures-old = { package = "futures", version = "0.1.31" }
 mercurial_derivation = { version = "0.1.0", path = "../../derived_data/mercurial_derivation" }
 mononoke_types-mocks = { version = "0.1.0", path = "../../mononoke_types/mocks" }
-revset = { version = "0.1.0", path = "../../revset" }
+sql = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 sql_construct = { version = "0.1.0", path = "../../common/sql_construct" }
 sql_ext = { version = "0.1.0", path = "../../common/rust/sql_ext" }
+strum = { version = "0.24", features = ["derive"] }
 test_repo_factory = { version = "0.1.0", path = "../../repo_factory/test_repo_factory" }
 tests_utils = { version = "0.1.0", path = "../../tests/utils" }

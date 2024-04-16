@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # Copyright (c) Mercurial Contributors.
 #
@@ -6,6 +9,7 @@
 # GNU General Public License version 2 or any later version.
 
   $ eagerepo
+  $ setconfig commands.update.check=none
   $ hg init repo
   $ cd repo
 

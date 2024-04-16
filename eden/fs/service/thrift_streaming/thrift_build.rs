@@ -20,7 +20,7 @@ streamingeden crate //eden/fs/service:thrift-streaming-rust",
     ).expect("Failed to write cratemap");
 
     let conf = {
-        let mut conf = Config::from_env(GenContext::Lib).expect("Failed to instantiate thrift_compiler::Config");
+        let mut conf = Config::from_env(GenContext::Types).expect("Failed to instantiate thrift_compiler::Config");
 
         let path_from_manifest_to_base: &Path = "../../../..".as_ref();
         let cargo_manifest_dir =
@@ -53,13 +53,9 @@ streamingeden crate //eden/fs/service:thrift-streaming-rust",
             conf.options(options);
         }
 
-        let lib_include_srcs = vec![
-            
-        ];
         let types_include_srcs = vec![
             
         ];
-        conf.lib_include_srcs(lib_include_srcs);
         conf.types_include_srcs(types_include_srcs);
 
         conf

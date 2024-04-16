@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
 #inprocess-hg-incompatible
   $ setconfig experimental.allowfilepeer=True
 
@@ -78,8 +81,7 @@ update with worker processes
 
   $ hg goto null
   0 files updated, 0 files merged, 100 files removed, 0 files unresolved
-  $ hg goto -v tip | grep 100
-  getting 100
+  $ hg goto tip
   100 files updated, 0 files merged, 0 files removed, 0 files unresolved
 
   $ cd ..

@@ -9,12 +9,13 @@
 
 #include <memory>
 
-#include <fb303/detail/QuantileStatWrappers.h>
 #include <folly/ThreadLocal.h>
-#include <folly/stop_watch.h>
 
+#include "eden/common/telemetry/DurationScope.h"
+#include "eden/common/telemetry/Stats.h"
+#include "eden/common/telemetry/StatsGroup.h"
+#include "eden/common/utils/RefPtr.h"
 #include "eden/fs/eden-config.h"
-#include "eden/fs/utils/RefPtr.h"
 
 namespace facebook::eden {
 
@@ -23,7 +24,7 @@ struct NfsStats;
 struct PrjfsStats;
 struct ObjectStoreStats;
 struct LocalStoreStats;
-struct HgBackingStoreStats;
+struct SaplingBackingStoreStats;
 struct HgImporterStats;
 struct JournalStats;
 struct ThriftStats;
@@ -31,55 +32,6 @@ struct TelemetryStats;
 struct OverlayStats;
 struct InodeMapStats;
 struct InodeMetadataTableStats;
-
-/**
- * StatsGroupBase is a base class for a group of thread-local stats
- * structures.
- *
- * Each StatsGroupBase object should only be used from a single thread. The
- * EdenStats object should be used to maintain one StatsGroupBase object
- * for each thread that needs to access/update the stats.
- */
-class StatsGroupBase {
-  using Stat = fb303::detail::QuantileStatWrapper;
-
- public:
-  /**
-   * Counter is used to record events.
-   */
-  class Counter : private Stat {
-   public:
-    explicit Counter(std::string_view name);
-
-    using Stat::addValue;
-  };
-
-  /**
-   * Duration is used for stats that measure elapsed times.
-   *
-   * In general, EdenFS measures latencies in units of microseconds.
-   * Duration enforces that its stat names end in "_us".
-   */
-  class Duration : private Stat {
-   public:
-    explicit Duration(std::string_view name);
-
-    /**
-     * Record a duration in microseconds to the QuantileStatWrapper. Also
-     * increments the .count statistic.
-     */
-    template <typename Rep, typename Period>
-    void addDuration(std::chrono::duration<Rep, Period> elapsed) {
-      // TODO: Implement a general overflow check when converting from seconds
-      // or milliseconds to microseconds. Fortunately, this use case deals with
-      // short durations.
-      addDuration(
-          std::chrono::duration_cast<std::chrono::microseconds>(elapsed));
-    }
-
-    void addDuration(std::chrono::microseconds elapsed);
-  };
-};
 
 class EdenStats : public RefCounted {
  public:
@@ -120,7 +72,7 @@ class EdenStats : public RefCounted {
   ThreadLocal<PrjfsStats> prjfsStats_;
   ThreadLocal<ObjectStoreStats> objectStoreStats_;
   ThreadLocal<LocalStoreStats> localStoreStats_;
-  ThreadLocal<HgBackingStoreStats> hgBackingStoreStats_;
+  ThreadLocal<SaplingBackingStoreStats> saplingBackingStoreStats_;
   ThreadLocal<HgImporterStats> hgImporterStats_;
   ThreadLocal<JournalStats> journalStats_;
   ThreadLocal<ThriftStats> thriftStats_;
@@ -159,9 +111,9 @@ inline LocalStoreStats& EdenStats::getStatsForCurrentThread<LocalStoreStats>() {
 }
 
 template <>
-inline HgBackingStoreStats&
-EdenStats::getStatsForCurrentThread<HgBackingStoreStats>() {
-  return *hgBackingStoreStats_.get();
+inline SaplingBackingStoreStats&
+EdenStats::getStatsForCurrentThread<SaplingBackingStoreStats>() {
+  return *saplingBackingStoreStats_.get();
 }
 
 template <>
@@ -199,18 +151,6 @@ inline InodeMetadataTableStats&
 EdenStats::getStatsForCurrentThread<InodeMetadataTableStats>() {
   return *inodeMetadataTableStats_.get();
 }
-
-template <typename T>
-class StatsGroup : public StatsGroupBase {
- public:
-  /**
-   * Statistics are often updated on a thread separate from the thread that
-   * started a request. Since stat objects are thread-local, we cannot hold
-   * pointers directly to them. Instead, we store a pointer-to-member and look
-   * up the calling thread's object.
-   */
-  using DurationPtr = Duration T::*;
-};
 
 struct FuseStats : StatsGroup<FuseStats> {
   Duration lookup{"fuse.lookup_us"};
@@ -343,14 +283,14 @@ struct LocalStoreStats : StatsGroup<LocalStoreStats> {
 };
 
 /**
- * @see HgBackingStore
+ * @see SaplingBackingStore
  *
  * Terminology:
  *   get = entire lookup process, including both Sapling disk hits and fetches
  *   fetch = includes asynchronous retrieval from Mononoke
  *   import = fall back process
  */
-struct HgBackingStoreStats : StatsGroup<HgBackingStoreStats> {
+struct SaplingBackingStoreStats : StatsGroup<SaplingBackingStoreStats> {
   Duration getTree{"store.hg.get_tree_us"};
   Duration fetchTree{"store.hg.fetch_tree_us"};
   Counter fetchTreeRetrySuccess{"store.hg.fetch_tree_retry_success"};
@@ -374,7 +314,7 @@ struct HgBackingStoreStats : StatsGroup<HgBackingStoreStats> {
 
 /**
  * @see HgImporter
- * @see HgBackingStore
+ * @see SaplingBackingStore
  */
 struct HgImporterStats : StatsGroup<HgImporterStats> {
   Counter catFile{"hg_importer.cat_file"};
@@ -395,10 +335,6 @@ struct ThriftStats : StatsGroup<ThriftStats> {
 
   Duration streamSelectedChangesSince{
       "thrift.StreamingEdenService.streamSelectedChangesSince.streaming_time_us"};
-};
-
-struct TelemetryStats : StatsGroup<TelemetryStats> {
-  Counter subprocessLoggerFailure{"telemetry.subprocess_logger_failure"};
 };
 
 struct OverlayStats : StatsGroup<OverlayStats> {
@@ -427,49 +363,6 @@ struct InodeMapStats : StatsGroup<InodeMapStats> {
 struct InodeMetadataTableStats : StatsGroup<InodeMetadataTableStats> {
   Counter getHit{"inode_metadata_table.get_hit"};
   Counter getMiss{"inode_metadata_table.get_miss"};
-};
-
-/**
- * On construction, notes the current time. On destruction, records the elapsed
- * time in the specified EdenStats Duration.
- *
- * Moveable, but not copyable.
- */
-class DurationScope {
- public:
-  DurationScope() = delete;
-
-  template <typename T>
-  DurationScope(EdenStatsPtr&& edenStats, StatsGroupBase::Duration T::*duration)
-      : edenStats_{std::move(edenStats)},
-        // This use of std::function won't allocate on libstdc++,
-        // libc++, or Microsoft STL. All three have a couple pointers
-        // worth of small buffer inline storage.
-        updateScope_{[duration](EdenStats& stats, StopWatch::duration elapsed) {
-          stats.addDuration(duration, elapsed);
-        }} {
-    assert(edenStats_);
-  }
-
-  template <typename T>
-  DurationScope(
-      const EdenStatsPtr& edenStats,
-      StatsGroupBase::Duration T::*duration)
-      : DurationScope{edenStats.copy(), duration} {}
-
-  ~DurationScope() noexcept;
-
-  DurationScope(DurationScope&& that) = default;
-  DurationScope& operator=(DurationScope&& that) = default;
-
-  DurationScope(const DurationScope&) = delete;
-  DurationScope& operator=(const DurationScope&) = delete;
-
- private:
-  using StopWatch = folly::stop_watch<>;
-  StopWatch stopWatch_;
-  EdenStatsPtr edenStats_;
-  std::function<void(EdenStats& stats, StopWatch::duration)> updateScope_;
 };
 
 } // namespace facebook::eden

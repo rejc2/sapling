@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
   $ setconfig format.use-segmented-changelog=true
   $ setconfig devel.segmented-changelog-rev-compat=true
   $ setconfig experimental.allowfilepeer=True
@@ -39,17 +42,16 @@ consider all visible local heads (X, Y):
   $ hg hide $Z -q
 
   $ hg pull --debug 2>&1 | grep 'remote heads'
-  local heads: 3; remote heads: 1 (explicit: 1); initial common: 0
+  local heads: 2; remote heads: 1 (explicit: 1); initial common: 0
 
   $ hg log -G -r 'all()' -T '{desc} {remotenames}'
-  o  B remote/master
+  o  X
   │
   │ o  Y
   ├─╯
-  │ o  X
+  │ o  B remote/master
   ├─╯
   o  A
-  
 
 Push exchange should only consider heads being pushed (X), and selected remote
 names (master, B, ignore C):

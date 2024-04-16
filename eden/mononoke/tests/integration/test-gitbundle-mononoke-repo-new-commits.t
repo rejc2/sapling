@@ -45,7 +45,7 @@
 
 # Import it into Mononoke
   $ cd "$TESTTMP"
-  $ gitimport --record-head-symref "$GIT_REPO" --derive-hg --generate-bookmarks full-repo
+  $ gitimport "$GIT_REPO" --derive-hg --generate-bookmarks full-repo
   * using repo "repo" repoid RepositoryId(0) (glob)
   * GitRepo:*repo-git commit 1 of 2 - Oid:* => Bid:* (glob)
   * GitRepo:*repo-git commit 2 of 2 - Oid:* => Bid:* (glob)
@@ -58,7 +58,7 @@
   * Ref: "refs/tags/first_tag": Some(ChangesetId(Blake2(032cd4dce0406f1c1dd1362b6c3c9f9bdfa82f2fc5615e237a890be4fe08b044))) (glob)
   * Initializing repo: repo (glob)
   * Initialized repo: repo (glob)
-  * All repos initialized. It took: 0 seconds (glob)
+  * All repos initialized. It took: * seconds (glob)
   * Bookmark: "heads/master": ChangesetId(Blake2(da93dc81badd8d407db0f3219ec0ec78f1ef750ebfa95735bb483310371af80c)) (created) (glob)
   * Bookmark: "heads/master": ChangesetId(Blake2(da93dc81badd8d407db0f3219ec0ec78f1ef750ebfa95735bb483310371af80c)) (already up-to-date) (glob)
   * Bookmark: "tags/empty_tag": ChangesetId(Blake2(da93dc81badd8d407db0f3219ec0ec78f1ef750ebfa95735bb483310371af80c)) (created) (glob)
@@ -95,9 +95,14 @@
   $ hg commit -q -m "Add file5"
 
 # Backup the created commits to commit cloud
-  $ hgmn cloud backup
-  backing up stack rooted at addc9caddba0
-  commitcloud: backed up 3 commits
+  $ hgedenapi cloud backup
+  commitcloud: head 'c2e143a98b79' hasn't been uploaded yet
+  edenapi: queue 3 commits for upload
+  edenapi: queue 3 files for upload
+  edenapi: uploaded 3 files
+  edenapi: queue 3 trees for upload
+  edenapi: uploaded 3 trees
+  edenapi: uploaded 3 changesets
 
 # Get the bonsai changeset ID for the latest commit in the stack
   $ mononoke_newadmin convert -R repo -f hg -t bonsai $(hg whereami)

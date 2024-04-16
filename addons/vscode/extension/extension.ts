@@ -7,7 +7,7 @@
 
 import type {EnabledSCMApiFeature} from './types';
 import type {Logger} from 'isl-server/src/logger';
-import type {ExecutionContext} from 'isl-server/src/serverTypes';
+import type {RepositoryContext} from 'isl-server/src/serverTypes';
 
 import packageJson from '../package.json';
 import {DeletedFileContentProvider} from './DeletedFileContentProvider';
@@ -35,7 +35,7 @@ export async function activate(context: vscode.ExtensionContext) {
       Internal.getEnabledSCMApiFeatures?.() ?? new Set<EnabledSCMApiFeature>(['blame', 'sidebar']),
     ]);
     logger.info('enabled features: ', [...enabledSCMApiFeatures].join(', '));
-    const ctx: ExecutionContext = {
+    const ctx: RepositoryContext = {
       cmd: getCLICommand(),
       cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd(),
       logger,
@@ -47,12 +47,12 @@ export async function activate(context: vscode.ExtensionContext) {
     const reposList = new VSCodeReposList(logger, extensionTracker, enabledSCMApiFeatures);
     context.subscriptions.push(reposList);
     if (enabledSCMApiFeatures.has('blame')) {
-      context.subscriptions.push(new InlineBlameProvider(reposList, logger, extensionTracker));
+      context.subscriptions.push(new InlineBlameProvider(reposList, ctx));
     }
-    context.subscriptions.push(registerSaplingDiffContentProvider(logger));
+    context.subscriptions.push(registerSaplingDiffContentProvider(ctx));
     context.subscriptions.push(new DeletedFileContentProvider());
 
-    context.subscriptions.push(...registerCommands(extensionTracker));
+    context.subscriptions.push(...registerCommands(ctx));
 
     Internal?.registerInternalBugLogsProvider != null &&
       context.subscriptions.push(Internal.registerInternalBugLogsProvider(logger));

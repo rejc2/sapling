@@ -258,23 +258,27 @@ impl Client {
     /// The keys will be grouped into batches of the specified size and
     /// passed to the `make_req` callback, which should insert them into
     /// a struct that will be CBOR-encoded and used as the request body.
-    fn prepare_requests<T, K, F, R>(
+    fn prepare_requests<T, K, F, R, G>(
         &self,
         url: &Url,
         keys: K,
         batch_size: Option<usize>,
+        min_batch_size: Option<usize>,
         mut make_req: F,
+        mut mutate_url: G,
     ) -> Result<Vec<Request>, EdenApiError>
     where
         K: IntoIterator<Item = T>,
         F: FnMut(Vec<T>) -> R,
+        G: FnMut(&Url, &Vec<T>) -> Url,
         R: ToWire,
     {
-        split_into_batches(keys, batch_size)
+        split_into_batches(keys, batch_size, min_batch_size)
             .into_iter()
             .map(|keys| {
+                let url = mutate_url(url, &keys);
                 let req = make_req(keys).to_wire();
-                self.configure_request(self.inner.client.post(url.clone()))?
+                self.configure_request(self.inner.client.post(url))?
                     .cbor(&req)
                     .map_err(EdenApiError::RequestSerializationFailed)
             })
@@ -451,24 +455,32 @@ impl Client {
             return Ok(Response::empty());
         }
 
-        let mut url = self.build_url(paths::TREES)?;
+        let url = self.build_url(paths::TREES)?;
 
-        if self.config().try_route_consistently && keys.len() == 1 {
-            url.set_query(Some(&format!(
-                "routing_tree={}",
-                keys.first().unwrap().hgid
-            )));
-            tracing::debug!("Requesting tree with a routing key: {}", url);
-        }
+        let try_route_consistently = self.config().try_route_consistently;
+        let min_batch_size: Option<usize> = self.config().min_batch_size;
 
-        let requests = self.prepare_requests(&url, keys, self.config().max_trees, |keys| {
-            let req = TreeRequest {
-                keys,
-                attributes: attributes.clone().unwrap_or_default(),
-            };
-            self.log_request(&req, "trees");
-            req
-        })?;
+        let requests = self.prepare_requests(
+            &url,
+            keys,
+            self.config().max_trees_per_batch,
+            min_batch_size,
+            |keys| {
+                let req = TreeRequest {
+                    keys,
+                    attributes: attributes.clone().unwrap_or_default(),
+                };
+                self.log_request(&req, "trees");
+                req
+            },
+            |url, keys| {
+                let mut url = url.clone();
+                if try_route_consistently && keys.len() == 1 {
+                    url.set_query(Some(&format!("routing_key={}", keys.first().unwrap().hgid)));
+                }
+                url
+            },
+        )?;
 
         self.fetch::<Result<TreeEntry, EdenApiServerError>>(requests)
     }
@@ -488,20 +500,31 @@ impl Client {
 
         let guards = vec![FILES_ATTRS_INFLIGHT.entrance_guard(reqs.len())];
 
-        let mut url = self.build_url(paths::FILES2)?;
-        if self.config().try_route_consistently && reqs.len() == 1 {
-            url.set_query(Some(&format!(
-                "routing_file={}",
-                reqs.first().unwrap().key.hgid
-            )));
-            tracing::debug!("Requesting file with a routing key: {}", url);
-        }
+        let url = self.build_url(paths::FILES2)?;
+        let try_route_consistently = self.config().try_route_consistently;
+        let min_batch_size: Option<usize> = self.config().min_batch_size;
 
-        let requests = self.prepare_requests(&url, reqs, self.config().max_files, |reqs| {
-            let req = FileRequest { reqs, keys: vec![] };
-            self.log_request(&req, "files");
-            req
-        })?;
+        let requests = self.prepare_requests(
+            &url,
+            reqs,
+            self.config().max_files_per_batch,
+            min_batch_size,
+            |reqs| {
+                let req = FileRequest { reqs, keys: vec![] };
+                self.log_request(&req, "files");
+                req
+            },
+            |url, keys| {
+                let mut url = url.clone();
+                if try_route_consistently && keys.len() == 1 {
+                    url.set_query(Some(&format!(
+                        "routing_key={}",
+                        keys.first().unwrap().key.hgid
+                    )));
+                }
+                url
+            },
+        )?;
 
         self.fetch_guard::<FileResponse>(requests, guards)
     }
@@ -718,21 +741,29 @@ impl Client {
             return Ok(Response::empty());
         }
 
-        let mut url = self.build_url(paths::HISTORY)?;
+        let url = self.build_url(paths::HISTORY)?;
 
-        if self.config().try_route_consistently && keys.len() == 1 {
-            url.set_query(Some(&format!(
-                "routing_file={}",
-                keys.first().unwrap().hgid
-            )));
-            tracing::debug!("Requesting history for 1 file with a routing key: {}", url);
-        }
+        let try_route_consistently = self.config().try_route_consistently;
+        let min_batch_size: Option<usize> = self.config().min_batch_size;
 
-        let requests = self.prepare_requests(&url, keys, self.config().max_history, |keys| {
-            let req = HistoryRequest { keys, length };
-            self.log_request(&req, "history");
-            req
-        })?;
+        let requests = self.prepare_requests(
+            &url,
+            keys,
+            self.config().max_history_per_batch,
+            min_batch_size,
+            |keys| {
+                let req = HistoryRequest { keys, length };
+                self.log_request(&req, "history");
+                req
+            },
+            |url, keys| {
+                let mut url = url.clone();
+                if try_route_consistently && keys.len() == 1 {
+                    url.set_query(Some(&format!("routing_key={}", keys.first().unwrap().hgid)));
+                }
+                url
+            },
+        )?;
 
         let Response { entries, stats } = self.fetch::<HistoryResponseChunk>(requests)?;
 
@@ -757,11 +788,13 @@ impl Client {
             &url,
             files,
             Some(MAX_CONCURRENT_BLAMES_PER_REQUEST),
+            None,
             |files| {
                 let req = BlameRequest { files };
                 self.log_request(&req, "blame");
                 req
             },
+            |url, _keys| url.clone(),
         )?;
 
         self.fetch::<BlameResult>(requests)
@@ -783,7 +816,8 @@ impl Client {
         let requests = self.prepare_requests(
             &url,
             commits,
-            self.config().max_commit_translate_id,
+            self.config().max_commit_translate_id_per_batch,
+            None,
             |commits| {
                 let req = CommitTranslateIdRequest {
                     commits,
@@ -794,6 +828,7 @@ impl Client {
                 self.log_request(&req, "commit_translate_id");
                 req
             },
+            |url, _keys| url.clone(),
         )?;
         self.fetch::<CommitTranslateIdResponse>(requests)
     }
@@ -908,12 +943,14 @@ impl Client {
             &url,
             items,
             Some(MAX_CONCURRENT_UPLOAD_FILENODES_PER_REQUEST),
+            None,
             |ids| Batch::<_> {
                 batch: ids
                     .into_iter()
                     .map(|item| UploadHgFilenodeRequest { data: item })
                     .collect(),
             },
+            |url, _keys| url.clone(),
         )?;
         self.fetch::<UploadTokensResponse>(requests)
     }
@@ -933,12 +970,14 @@ impl Client {
             &url,
             items,
             Some(MAX_CONCURRENT_UPLOAD_TREES_PER_REQUEST),
+            None,
             |ids| Batch::<_> {
                 batch: ids
                     .into_iter()
                     .map(|item| UploadTreeRequest { entry: item })
                     .collect(),
             },
+            |url, _keys| url.clone(),
         )?;
 
         self.fetch::<UploadTreeResponse>(requests)
@@ -1054,7 +1093,9 @@ impl EdenApi for Client {
             &url,
             prefixes,
             Some(MAX_CONCURRENT_HASH_LOOKUPS_PER_REQUEST),
+            None,
             |prefixes| Batch::<_> { batch: prefixes },
+            |url, _keys| url.clone(),
         )?;
         self.fetch_vec_with_retry::<CommitHashLookupResponse>(requests)
             .await
@@ -1167,12 +1208,14 @@ impl EdenApi for Client {
         let formatted = self.prepare_requests(
             &url,
             requests,
-            self.config().max_location_to_hash,
+            self.config().max_location_to_hash_per_batch,
+            None,
             |requests| {
                 let batch = CommitLocationToHashRequestBatch { requests };
                 self.log_request(&batch, "commit_location_to_hash");
                 batch
             },
+            |url, _keys| url.clone(),
         )?;
 
         self.fetch_vec_with_retry::<CommitLocationToHashResponse>(formatted)
@@ -1195,8 +1238,12 @@ impl EdenApi for Client {
 
         let url = self.build_url(paths::COMMIT_HASH_TO_LOCATION)?;
 
-        let formatted =
-            self.prepare_requests(&url, hgids, self.config().max_location_to_hash, |hgids| {
+        let formatted = self.prepare_requests(
+            &url,
+            hgids,
+            self.config().max_location_to_hash_per_batch,
+            None,
+            |hgids| {
                 let batch = CommitHashToLocationRequestBatch {
                     master_heads: master_heads.clone(),
                     hgids,
@@ -1204,7 +1251,9 @@ impl EdenApi for Client {
                 };
                 self.log_request(&batch, "commit_hash_to_location");
                 batch
-            })?;
+            },
+            |url, _keys| url.clone(),
+        )?;
 
         self.fetch_vec_with_retry::<CommitHashToLocationResponse>(formatted)
             .await
@@ -1321,6 +1370,7 @@ impl EdenApi for Client {
             &url,
             items,
             Some(MAX_CONCURRENT_LOOKUPS_PER_REQUEST),
+            None,
             |ids| Batch::<LookupRequest> {
                 batch: ids
                     .into_iter()
@@ -1331,6 +1381,7 @@ impl EdenApi for Client {
                     })
                     .collect(),
             },
+            |url, _keys| url.clone(),
         )?;
 
         self.fetch_vec_with_retry::<LookupResponse>(requests).await
@@ -1493,12 +1544,14 @@ impl EdenApi for Client {
         let requests = self.prepare_requests(
             &url,
             commits,
-            self.config().max_commit_mutations,
+            self.config().max_commit_mutations_per_batch,
+            None,
             |commits| {
                 let req = CommitMutationsRequest { commits };
                 self.log_request(&req, "commit_mutations");
                 req
             },
+            |url, _keys| url.clone(),
         )?;
 
         self.fetch_vec_with_retry::<CommitMutationsResponse>(requests)
@@ -1534,14 +1587,31 @@ impl EdenApi for Client {
 fn split_into_batches<T>(
     keys: impl IntoIterator<Item = T>,
     batch_size: Option<usize>,
+    min_batch_size: Option<usize>,
 ) -> Vec<Vec<T>> {
     match batch_size {
-        Some(n) => keys
-            .into_iter()
-            .chunks(n)
-            .into_iter()
-            .map(Vec::from_iter)
-            .collect(),
+        Some(n) => {
+            let mut chunks_vec = Vec::new();
+            for chunk in keys.into_iter().chunks(n).into_iter() {
+                let v = Vec::from_iter(chunk);
+                // This bit is used to not construct small batches
+                // because they are not routed consistently and
+                // because of that are subuptimal.
+                if let Some(min_batch_size) = min_batch_size {
+                    if v.len() >= min_batch_size {
+                        chunks_vec.push(v);
+                    } else {
+                        for key in v.into_iter() {
+                            chunks_vec.push(vec![key]);
+                        }
+                    }
+                } else {
+                    chunks_vec.push(v);
+                }
+            }
+
+            chunks_vec
+        }
         None => vec![keys.into_iter().collect()],
     }
 }
@@ -1604,6 +1674,34 @@ mod tests {
     use anyhow::Result;
 
     use crate::builder::HttpClientBuilder;
+    use crate::client::split_into_batches;
+
+    #[test]
+    fn test_split_into_batches() -> Result<()> {
+        let keys = vec![1, 2, 3];
+        let result = split_into_batches(keys, Some(2), None);
+        assert_eq!(vec![vec![1, 2], vec![3]], result);
+
+        let keys = vec![1, 2, 3, 4];
+        let result = split_into_batches(keys, Some(2), None);
+        assert_eq!(vec![vec![1, 2], vec![3, 4]], result);
+
+        let keys = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let result = split_into_batches(keys, Some(4), Some(3));
+        assert_eq!(
+            vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8], vec![9], vec![10]],
+            result
+        );
+
+        let keys = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let result = split_into_batches(keys, Some(4), None);
+        assert_eq!(
+            vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8], vec![9, 10]],
+            result
+        );
+
+        Ok(())
+    }
 
     #[test]
     fn test_url_escaping() -> Result<()> {

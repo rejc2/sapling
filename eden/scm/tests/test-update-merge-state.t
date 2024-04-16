@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 #
 # This software may be used and distributed according to the terms of the
@@ -7,6 +10,7 @@
   $ eagerepo
   $ enable morestatus
   $ setconfig morestatus.show=True ui.origbackuppath=.hg/origs
+  $ setconfig checkout.use-rust=true
 
 Python utility:
 

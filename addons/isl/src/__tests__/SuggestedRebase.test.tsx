@@ -15,8 +15,7 @@ import {
   simulateRepoConnected,
 } from '../testUtils';
 import {succeedableRevset} from '../types';
-import {fireEvent, render, screen, within} from '@testing-library/react';
-import {act} from 'react-dom/test-utils';
+import {fireEvent, render, screen, within, act} from '@testing-library/react';
 
 describe('Suggested Rebase button', () => {
   beforeEach(() => {
@@ -34,7 +33,7 @@ describe('Suggested Rebase button', () => {
         value: [
           COMMIT('1', 'some public base', '0', {phase: 'public'}),
           COMMIT('a', 'My Commit', '1'),
-          COMMIT('b', 'Another Commit', 'a', {isHead: true}),
+          COMMIT('b', 'Another Commit', 'a', {isDot: true}),
         ],
       });
     });
@@ -47,7 +46,7 @@ describe('Suggested Rebase button', () => {
           COMMIT('main', 'main', '2', {phase: 'public', remoteBookmarks: ['remote/main']}),
           COMMIT('1', 'some public base', '0', {phase: 'public'}),
           COMMIT('a', 'My Commit', '1'),
-          COMMIT('b', 'Another Commit', 'a', {isHead: true}),
+          COMMIT('b', 'Another Commit', 'a', {isDot: true}),
         ],
       });
     });
@@ -62,7 +61,7 @@ describe('Suggested Rebase button', () => {
           COMMIT('main', 'main', '2', {phase: 'public', remoteBookmarks: ['remote/main']}),
           COMMIT('1', 'some public base', '0', {phase: 'public'}),
           COMMIT('a', 'My Commit', '2'), // on remote/main
-          COMMIT('b', 'Another Commit', 'a', {isHead: true}),
+          COMMIT('b', 'Another Commit', 'a', {isDot: true}),
         ],
       });
     });
@@ -80,7 +79,7 @@ describe('Suggested Rebase button', () => {
           }),
           COMMIT('1', 'some public base', '0', {phase: 'public'}),
           COMMIT('a', 'My Commit', '2'), // on stable
-          COMMIT('b', 'Another Commit', 'a', {isHead: true}),
+          COMMIT('b', 'Another Commit', 'a', {isDot: true}),
         ],
       });
     });
@@ -98,7 +97,7 @@ describe('Suggested Rebase button', () => {
           }),
           COMMIT('1', 'some public base', '0', {phase: 'public'}),
           COMMIT('a', 'My Commit', '1'),
-          COMMIT('b', 'Another Commit', 'a', {isHead: true}),
+          COMMIT('b', 'Another Commit', 'a', {isDot: true}),
         ],
       });
     });
@@ -121,7 +120,7 @@ describe('Suggested Rebase button', () => {
           }),
           COMMIT('1', 'some public base', '0', {phase: 'public'}),
           COMMIT('a', 'My Commit', '1'),
-          COMMIT('b', 'Another Commit', 'a', {isHead: true}),
+          COMMIT('b', 'Another Commit', 'a', {isDot: true}),
         ],
       });
     });
@@ -144,7 +143,7 @@ describe('Suggested Rebase button', () => {
           }),
           COMMIT('1', 'some public base', '0', {phase: 'public'}),
           COMMIT('a', 'My Commit', '1'),
-          COMMIT('b', 'Another Commit', 'a', {isHead: true}),
+          COMMIT('b', 'Another Commit', 'a', {isDot: true}),
         ],
       });
     });
@@ -175,7 +174,7 @@ describe('Suggested Rebase button', () => {
           }),
           COMMIT('1', 'some public base', '0', {phase: 'public'}),
           COMMIT('a', 'My Commit', '1'),
-          COMMIT('b', 'Another Commit', 'a', {isHead: true}),
+          COMMIT('b', 'Another Commit', 'a', {isDot: true}),
         ],
       });
     });
@@ -201,7 +200,7 @@ describe('Suggested Rebase button', () => {
       simulateCommits({
         value: [
           COMMIT('3', 'main', '2', {phase: 'public'}),
-          COMMIT('x', 'Commit X', '2', {isHead: true}),
+          COMMIT('x', 'Commit X', '2', {isDot: true}),
           COMMIT('2', 'some public base 2', '0', {
             phase: 'public',
             remoteBookmarks: ['remote/main'],
@@ -227,5 +226,34 @@ describe('Suggested Rebase button', () => {
         args: ['rebase', '-s', succeedableRevset('a'), '-d', succeedableRevset('remote/main')],
       }),
     });
+  });
+
+  it('deselected remote bookmarks in bookmark manager hides them as suggested rebases', () => {
+    act(() => {
+      simulateCommits({
+        value: [
+          COMMIT('3', 'main', '000', {phase: 'public', remoteBookmarks: ['remote/main']}),
+          COMMIT('2', 'something else', '00', {phase: 'public', remoteBookmarks: ['remote/foo']}),
+          COMMIT('1', 'base', '0', {phase: 'public'}),
+          COMMIT('a', 'My Commit', '1'),
+          COMMIT('b', 'Another Commit', 'a', {isDot: true}),
+        ],
+      });
+    });
+
+    fireEvent.click(screen.getByTestId('bookmarks-manager-button'));
+
+    const fooBookmark = within(screen.getByTestId('bookmarks-manager-dropdown')).getByText(
+      'remote/foo',
+    );
+    expect(fooBookmark).toBeInTheDocument();
+    fireEvent.click(fooBookmark); // deselect
+
+    const rebaseOntoButton = screen.getByText(`Rebase onto…`);
+    fireEvent.click(rebaseOntoButton);
+
+    expect(
+      within(screen.getByTestId('context-menu-container')).queryByText('remote/foo'),
+    ).not.toBeInTheDocument();
   });
 });

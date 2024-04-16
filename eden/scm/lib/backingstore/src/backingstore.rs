@@ -20,8 +20,11 @@ use anyhow::anyhow;
 use anyhow::Result;
 use arc_swap::ArcSwap;
 use configloader::hg::PinnedConfig;
+use configloader::Config;
+use edenapi::configmodel::ConfigExt;
 use log::warn;
 use repo::repo::Repo;
+use repo::RepoMinimalInfo;
 use storemodel::BoxIterator;
 use storemodel::Bytes;
 use storemodel::FileAuxData;
@@ -51,7 +54,20 @@ struct Inner {
     // State used to track the touch file and determine if we need to reload ourself.
     create_time: Instant,
     touch_file_mtime: Option<SystemTime>,
+
+    // To prevent multiple threads reloading at the same time.
     already_reloading: AtomicBool,
+
+    // Last time we did a full reload of the Repo.
+    last_reload: Instant,
+
+    // Controlled by config "backingstore.reload-check-interval-secs".
+    // Sets the minimum delay before we check if we need to reload (defaults to 5s).
+    reload_check_interval: Duration,
+
+    // Controlled by config "backingstore.reload-interval-secs".
+    // Sets the maximum time since last reload until we force a reload (defaults to 5m).
+    reload_interval: Duration,
 }
 
 impl BackingStore {
@@ -97,14 +113,24 @@ impl BackingStore {
     ) -> Result<Inner> {
         constructors::init();
 
-        let mut config = configloader::hg::load(Some(root), extra_configs)?;
+        let info = RepoMinimalInfo::from_repo_root(root.to_path_buf())?;
+        let mut config = configloader::hg::load(Some(&info), extra_configs)?;
 
         let source = "backingstore".into();
-        config.set("store", "aux", Some("true"), &source);
         if !allow_retries {
             config.set("lfs", "backofftimes", Some(""), &source);
             config.set("lfs", "throttlebackofftimes", Some(""), &source);
             config.set("edenapi", "max-retry-per-request", Some("0"), &source);
+        }
+
+        // Allow overrideing scmstore.tree-metadata-mode for eden only.
+        if let Some(mode) = config.get_nonempty("eden", "tree-metadata-mode") {
+            config.set(
+                "scmstore",
+                "tree-metadata-mode",
+                Some(mode),
+                &"backingstore".into(),
+            );
         }
 
         // Apply indexed log configs, which can affect edenfs behavior.
@@ -123,6 +149,13 @@ impl BackingStore {
             create_time: Instant::now(),
             touch_file_mtime,
             already_reloading: AtomicBool::new(false),
+            last_reload: Instant::now(),
+            reload_check_interval: config
+                .get_opt("backingstore", "reload-check-interval-secs")?
+                .unwrap_or(Duration::from_secs(5)),
+            reload_interval: config
+                .get_opt("backingstore", "reload-interval-secs")?
+                .unwrap_or(Duration::from_secs(300)),
         })
     }
 
@@ -231,7 +264,7 @@ impl BackingStore {
     fn maybe_reload(&self) -> arc_swap::Guard<Arc<Inner>> {
         let inner = self.inner.load();
 
-        if inner.create_time.elapsed() < Duration::from_secs(5) {
+        if inner.create_time.elapsed() < inner.reload_check_interval {
             return inner;
         }
 
@@ -244,16 +277,18 @@ impl BackingStore {
         }
 
         let new_mtime = touch_file_mtime();
+        let since_last_reload = inner.last_reload.elapsed();
 
-        let needs_reload =
-            new_mtime
+        let needs_reload = (!inner.reload_interval.is_zero()
+            && since_last_reload >= inner.reload_interval)
+            || new_mtime
                 .as_ref()
                 .is_some_and(|new_mtime| match &inner.touch_file_mtime {
                     Some(old_mtime) => new_mtime > old_mtime,
                     None => true,
                 });
 
-        tracing::debug!(old_mtime=?inner.touch_file_mtime, ?new_mtime, "checking touch file mtime");
+        tracing::debug!(last_reload=?since_last_reload, old_mtime=?inner.touch_file_mtime, ?new_mtime, "checking if we need to reload");
 
         let new_inner = if needs_reload {
             tracing::info!("reloading backing store");
@@ -269,13 +304,17 @@ impl BackingStore {
                 &inner.extra_configs,
                 new_mtime,
             ) {
-                Ok(new_inner) => new_inner,
+                Ok(mut new_inner) => {
+                    new_inner.last_reload = Instant::now();
+                    new_inner
+                }
                 Err(err) => {
                     tracing::warn!(?err, "error reloading backingstore");
                     inner.as_ref().soft_reload(new_mtime)
                 }
             }
         } else {
+            tracing::debug!("not reloading backing store");
             inner.as_ref().soft_reload(new_mtime)
         };
 
@@ -297,7 +336,10 @@ impl Inner {
 
             touch_file_mtime,
             create_time: Instant::now(),
+            last_reload: self.last_reload,
             already_reloading: AtomicBool::new(false),
+            reload_check_interval: self.reload_check_interval,
+            reload_interval: self.reload_interval,
         }
     }
 
@@ -339,6 +381,7 @@ where
     fn get_batch_iter(
         &self,
         keys: Vec<Key>,
+        fetch_mode: FetchMode,
     ) -> Result<BoxIterator<Result<(Key, IntermediateType)>>>;
 
     // The following methods are "derived" from the above.
@@ -379,7 +422,7 @@ where
             let mut key_to_index = indexed_keys(&keys);
             let mut remaining = keys.len();
             let mut errors = Vec::new();
-            match self.get_batch_iter(keys) {
+            match self.get_batch_iter(keys, fetch_mode) {
                 Err(e) => errors.push(e),
                 Ok(iter) => {
                     for entry in iter {
@@ -423,8 +466,12 @@ impl LocalRemoteImpl<Bytes, Vec<u8>> for Arc<dyn FileStore> {
     fn get_single(&self, path: &RepoPath, id: HgId, fetch_mode: FetchMode) -> Result<Bytes> {
         self.get_content(path, id, fetch_mode)
     }
-    fn get_batch_iter(&self, keys: Vec<Key>) -> Result<BoxIterator<Result<(Key, Bytes)>>> {
-        self.get_content_iter(keys, FetchMode::AllowRemote)
+    fn get_batch_iter(
+        &self,
+        keys: Vec<Key>,
+        fetch_mode: FetchMode,
+    ) -> Result<BoxIterator<Result<(Key, Bytes)>>> {
+        self.get_content_iter(keys, fetch_mode)
     }
 }
 
@@ -436,8 +483,12 @@ impl LocalRemoteImpl<FileAuxData> for Arc<dyn FileStore> {
     fn get_single(&self, path: &RepoPath, id: HgId, fetch_mode: FetchMode) -> Result<FileAuxData> {
         self.get_aux(path, id, fetch_mode)
     }
-    fn get_batch_iter(&self, keys: Vec<Key>) -> Result<BoxIterator<Result<(Key, FileAuxData)>>> {
-        self.get_aux_iter(keys, FetchMode::AllowRemote)
+    fn get_batch_iter(
+        &self,
+        keys: Vec<Key>,
+        fetch_mode: FetchMode,
+    ) -> Result<BoxIterator<Result<(Key, FileAuxData)>>> {
+        self.get_aux_iter(keys, fetch_mode)
     }
 }
 
@@ -464,8 +515,9 @@ impl LocalRemoteImpl<Box<dyn TreeEntry>> for Arc<dyn TreeStore> {
     fn get_batch_iter(
         &self,
         keys: Vec<Key>,
+        fetch_mode: FetchMode,
     ) -> Result<BoxIterator<Result<(Key, Box<dyn TreeEntry>)>>> {
-        self.get_tree_iter(keys, FetchMode::AllowRemote)
+        self.get_tree_iter(keys, fetch_mode)
     }
 }
 

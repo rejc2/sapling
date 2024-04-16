@@ -9,13 +9,13 @@ license = "GPLv2+"
 
 [dependencies]
 anyhow = "1.0.75"
-bytes = { version = "1.1", features = ["serde"] }
+bytes = { version = "1.6.0", features = ["serde"] }
 context = { version = "0.1.0", path = "../server/context" }
 filestore = { version = "0.1.0", path = "../filestore" }
-futures = { version = "0.3.28", features = ["async-await", "compat"] }
+futures = { version = "0.3.30", features = ["async-await", "compat"] }
 mercurial_types = { version = "0.1.0", path = "../mercurial/types" }
 mononoke_types = { version = "0.1.0", path = "../mononoke_types" }
 repo_blobstore = { version = "0.1.0", path = "../blobrepo/repo_blobstore" }
 slog = { version = "2.7", features = ["max_level_trace", "nested-values"] }
-tokio = { version = "1.29.1", features = ["full", "test-util", "tracing"] }
+tokio = { version = "1.36.0", features = ["full", "test-util", "tracing"] }
 tokio-util = { version = "0.7.10", features = ["full"] }

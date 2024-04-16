@@ -77,9 +77,6 @@ Configs::
     # By default only local bookmarks that belong to draft commits or their public roots are returned.
     sl_showallbookmarks = False
 
-    # Use EdenApi Uploads for uploading commit cloud commits during sync
-    usehttpupload = True
-
     # Sync remote bookmarks via commitcloud
     remotebookmarkssync = True
 
@@ -121,12 +118,12 @@ from . import (
     background,
     backuplock,
     backupstate,
+    bookmarks,
     checkoutlocations,
     commands as cccommands,
     dependencies,
     status,
     sync,
-    syncstate,
     util as ccutil,
     workspace,
 )
@@ -152,14 +149,16 @@ configitem("commitcloud", "enableprogress", default=True)
 configitem("commitcloud", "pullsizelimit", 300)
 configitem("commitcloud", "sl_showremotebookmarks", default=False)
 configitem("commitcloud", "sl_showallbookmarks", default=False)
-configitem("commitcloud", "usehttpupload", default=False)
 configitem("commitcloud", "remotebookmarkssync", default=False)
 configitem("infinitepushbackup", "enablestatus", default=True)
 configitem("infinitepushbackup", "maxheadstobackup", default=-1)
+# Use the http Edenapi protocol to fetch bookmarks
+configitem("infinitepush", "httpbookmarks", default=True)
 
 
 def extsetup(ui):
     background.extsetup(ui)
+    bookmarks.extsetup(ui)
     dependencies.extsetup(ui)
 
     localrepo.localrepository._wlockfreeprefix.add(backuplock.progressfilename)
@@ -245,10 +244,8 @@ def _smartlogomittedcommitsmsg(repo):
 @hint("commitcloud-update-on-move")
 def hintupdateonmove():
     return _(
-        "if you would like to update to the moved version automatically add\n"
-        "[commitcloud]\n"
-        "updateonmove = true\n"
-        "to your .hgrc config file\n"
+        "if you would like to update to the moved version automatically, run:\n"
+        "`@prog@ config --user commitcloud.updateonmove=true`\n"
     )
 
 

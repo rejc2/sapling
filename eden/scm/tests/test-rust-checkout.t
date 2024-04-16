@@ -1,5 +1,8 @@
 #debugruntest-compatible
 
+#require no-eden
+
+
   $ configure modernclient
   $ setconfig checkout.use-rust=true
   $ setconfig experimental.nativecheckout=true
@@ -47,7 +50,8 @@ Run it again to make sure we didn't clear out state file:
   [255]
 
   $ hg go --continue
-  abort: not in an interrupted goto state
+  abort: outstanding merge conflicts
+  (use 'hg resolve --list' to list, 'hg resolve --mark FILE' to mark resolved)
   [255]
 
   $ hg resolve --mark foo
@@ -252,18 +256,18 @@ Update active bookmark
   cat: .hg/bookmarks.current: $ENOENT$
   [1]
   $ hg go BOOK_B
-  (activating bookmark BOOK_B)
   1 files updated, 0 files merged, 0 files removed, 0 files unresolved
+  (activating bookmark BOOK_B)
   $ cat .hg/bookmarks.current
   BOOK_B (no-eol)
   $ hg go BOOK_A
-  (changing active bookmark from BOOK_B to BOOK_A)
   0 files updated, 0 files merged, 1 files removed, 0 files unresolved
+  (changing active bookmark from BOOK_B to BOOK_A)
   $ cat .hg/bookmarks.current
   BOOK_A (no-eol)
   $ hg go $B
-  (leaving bookmark BOOK_A)
   1 files updated, 0 files merged, 0 files removed, 0 files unresolved
+  (leaving bookmark BOOK_A)
   $ cat .hg/bookmarks.current
   cat: .hg/bookmarks.current: $ENOENT$
   [1]
@@ -317,7 +321,7 @@ Test --check
   abort: uncommitted changes
   [255]
   $ hg go --clean --check -q null
-  abort: can only specify one of --check, --clean, or --merge
+  abort: can only specify one of -C/--clean, -c/--check, or -m/--merge
   [255]
 
 Bail on dir/path conflict with added file:
@@ -432,3 +436,25 @@ Don't output too many conflicts:
    ...and 95 more
   (commit, shelve, goto --clean to discard all your changes, or goto --merge to merge them)
   [255]
+
+Test update_distance logging:
+  $ newclientrepo
+  $ drawdag <<'EOS'
+  > C
+  > |
+  > B D
+  > |/
+  > A
+  > EOS
+  $ LOG=update_size=trace hg go -q $A
+   INFO update_size: update_distance=1
+  $ LOG=update_size=trace hg go -q $A
+   INFO update_size: update_distance=0
+  $ LOG=update_size=trace hg go -q $D
+   INFO update_size: update_distance=1
+  $ LOG=update_size=trace hg go -q $C
+   INFO update_size: update_distance=3
+  $ LOG=update_size=trace hg go -q $B
+   INFO update_size: update_distance=1
+  $ LOG=update_size=trace hg go -q null
+   INFO update_size: update_distance=2

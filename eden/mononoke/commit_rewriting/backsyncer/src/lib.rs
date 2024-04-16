@@ -24,9 +24,12 @@
 //!    log id.
 
 use std::collections::HashSet;
+use std::iter::once;
+use std::iter::repeat;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::bail;
@@ -42,13 +45,12 @@ use bookmarks::BookmarkTransactionError;
 use bookmarks::BookmarkUpdateLog;
 use bookmarks::BookmarkUpdateLogArc;
 use bookmarks::BookmarkUpdateLogEntry;
+use bookmarks::BookmarkUpdateLogId;
 use bookmarks::BookmarkUpdateLogRef;
 use bookmarks::BookmarkUpdateReason;
 use bookmarks::Bookmarks;
 use bookmarks::BookmarksArc;
 use bookmarks::Freshness;
-use changeset_fetcher::ChangesetFetcher;
-use changeset_fetcher::ChangesetFetcherArc;
 use changesets::Changesets;
 use cloned::cloned;
 use commit_graph::CommitGraph;
@@ -60,7 +62,6 @@ use cross_repo_sync::CommitSyncContext;
 use cross_repo_sync::CommitSyncOutcome;
 use cross_repo_sync::CommitSyncer;
 use filestore::FilestoreConfig;
-use futures::compat::Stream01CompatExt;
 use futures::future;
 use futures::stream;
 use futures::Future;
@@ -86,7 +87,6 @@ use repo_identity::RepoIdentity;
 use repo_identity::RepoIdentityRef;
 use repo_update_logger::find_draft_ancestors;
 use repo_update_logger::log_new_bonsai_changesets;
-use revset::AncestorsNodeStream;
 use slog::debug;
 use slog::error;
 use slog::info;
@@ -109,7 +109,6 @@ pub struct Repo(
     dyn Bookmarks,
     dyn BookmarkUpdateLog,
     dyn Changesets,
-    dyn ChangesetFetcher,
     FilestoreConfig,
     dyn MutableCounters,
     dyn Phases,
@@ -137,6 +136,65 @@ pub enum BacksyncLimit {
     Limit(u64),
 }
 
+/// Block until a specific bookmark transaction (identified by its log id) is confirmed to be
+/// backsynced.
+///
+/// The backsyncer tw jobs are responsible for backsyncing bookmark transactions.
+/// When they do, they update a mutable counter to the id found in the bookmark update log for this
+/// transaction.
+/// Wait until the mutable counters indicate that backyncing caught up.
+///
+/// Note that we use some form of exponential backoff to avoid causing a thundering herd problem on
+/// reading the mutable counters if the backsync is lagging
+///
+/// We also use a hard-coded timeout to avoid being stuck forever waiting for the backsync if it is
+/// lagging. Not having this timeout has caused SEVs in the past, blocking lands.
+pub async fn ensure_backsynced<M, R>(
+    ctx: CoreContext,
+    commit_syncer: CommitSyncer<M, R>,
+    target_repo_dbs: Arc<TargetRepoDbs>,
+    log_id: BookmarkUpdateLogId,
+) -> Result<(), Error>
+where
+    M: SyncedCommitMapping + Clone + 'static,
+    R: RepoLike + Send + Sync + Clone + 'static,
+{
+    let timeout = Duration::from_secs(
+        justknobs::get_as::<u64>(
+            "scm/mononoke:defer_to_backsyncer_for_backsync_timeout_seconds",
+            None,
+        )
+        .unwrap_or(60),
+    );
+
+    let source_repo_id = commit_syncer.get_source_repo().repo_identity().id();
+    let counter_name = format_counter(&source_repo_id);
+    let start_instant = Instant::now();
+
+    let mut sleep_times = once(1)
+        .chain(once(2))
+        .chain(once(5))
+        .chain(repeat(10))
+        .map(Duration::from_secs);
+    while start_instant.elapsed() < timeout {
+        let counter: BookmarkUpdateLogId = target_repo_dbs
+            .counters
+            .get_counter(&ctx, &counter_name)
+            .await?
+            .unwrap_or(0)
+            .try_into()?;
+        if counter >= log_id {
+            return Ok(());
+        }
+        std::thread::sleep(
+            sleep_times
+                .next()
+                .expect("sleep_times is an unbounded iterator"),
+        )
+    }
+    bail!("Timeout expired while waiting for backsyncing")
+}
+
 pub async fn backsync_latest<M, R>(
     ctx: CoreContext,
     commit_syncer: CommitSyncer<M, R>,
@@ -155,13 +213,14 @@ where
     let source_repo_id = commit_syncer.get_source_repo().repo_identity().id();
     let counter_name = format_counter(&source_repo_id);
 
-    let counter = target_repo_dbs
+    let counter: BookmarkUpdateLogId = target_repo_dbs
         .counters
         .get_counter(&ctx, &counter_name)
         .await?
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .try_into()?;
 
-    debug!(ctx.logger(), "fetched counter {}", counter);
+    debug!(ctx.logger(), "fetched counter {}", &counter);
 
     let log_entries_limit = match limit {
         BacksyncLimit::Limit(limit) => limit,
@@ -175,7 +234,7 @@ where
         .bookmark_update_log()
         .read_next_bookmark_log_entries(
             ctx.clone(),
-            counter as u64,
+            counter,
             log_entries_limit,
             Freshness::MostRecent,
         )
@@ -213,7 +272,7 @@ async fn sync_entries<M, R>(
     commit_syncer: &CommitSyncer<M, R>,
     target_repo_dbs: Arc<TargetRepoDbs>,
     entries: Vec<BookmarkUpdateLogEntry>,
-    mut counter: i64,
+    mut counter: BookmarkUpdateLogId,
     cancellation_requested: Arc<AtomicBool>,
     sync_context: CommitSyncContext,
     disable_lease: bool,
@@ -248,8 +307,8 @@ where
                 .set_counter(
                     &ctx,
                     &format_counter(&commit_syncer.get_source_repo().repo_identity().id()),
-                    entry.id,
-                    Some(counter),
+                    entry.id.try_into()?,
+                    Some(counter.try_into()?),
                 )
                 .await?;
             counter = entry.id;
@@ -288,7 +347,7 @@ where
         }
 
         let mut scuba_sample = ctx.scuba().clone();
-        scuba_sample.add("backsyncer_bookmark_log_entry_id", entry.id);
+        scuba_sample.add("backsyncer_bookmark_log_entry_id", u64::from(entry.id));
 
         let start_instant = Instant::now();
 
@@ -316,8 +375,8 @@ where
                     .set_counter(
                         &ctx,
                         &format_counter(&commit_syncer.get_source_repo().repo_identity().id()),
-                        entry.id,
-                        Some(counter),
+                        entry.id.try_into()?,
+                        Some(counter.try_into()?),
                     )
                     .await?;
                 counter = entry.id;
@@ -339,7 +398,7 @@ where
         }
 
         let new_counter = entry.id;
-        let success = backsync_bookmark(
+        let maybe_log_id = backsync_bookmark(
             ctx.clone(),
             commit_syncer,
             target_repo_dbs.clone(),
@@ -352,10 +411,10 @@ where
             "backsync_duration_ms",
             u64::try_from(start_instant.elapsed().as_millis()).unwrap_or(u64::max_value()),
         );
-        scuba_sample.add("backsync_previously_done", !success);
+        scuba_sample.add("backsync_previously_done", maybe_log_id.is_none());
         scuba_sample.log_with_msg("Backsyncing", None);
 
-        if success {
+        if let Some(_log_id) = maybe_log_id {
             counter = new_counter;
         } else {
             debug!(
@@ -371,7 +430,8 @@ where
                 .counters
                 .get_counter(&ctx, &counter_name)
                 .await?
-                .unwrap_or(0);
+                .unwrap_or(0)
+                .try_into()?;
             if new_counter <= counter {
                 return Err(format_err!(
                     "backsync transaction failed, but the counter didn't move forward. Was {}, became {}",
@@ -401,8 +461,9 @@ async fn commits_added_by_bookmark_move(
     match (from_cs_id, to_cs_id) {
         (_, None) => Ok(HashSet::new()),
         (None, Some(to_id)) => {
-            AncestorsNodeStream::new(ctx.clone(), &repo.changeset_fetcher_arc(), to_id)
-                .compat()
+            repo.commit_graph()
+                .ancestors_difference_stream(ctx, vec![to_id], vec![])
+                .await?
                 .try_collect()
                 .await
         }
@@ -422,13 +483,14 @@ async fn backsync_bookmark<M, R>(
     ctx: CoreContext,
     commit_syncer: &CommitSyncer<M, R>,
     target_repo_dbs: Arc<TargetRepoDbs>,
-    prev_counter: Option<i64>,
+    prev_counter: Option<BookmarkUpdateLogId>,
     log_entry: BookmarkUpdateLogEntry,
-) -> Result<bool, Error>
+) -> Result<Option<BookmarkUpdateLogId>, Error>
 where
     M: SyncedCommitMapping + Clone + 'static,
     R: RepoLike + Send + Sync + Clone + 'static,
 {
+    let prev_counter: Option<i64> = prev_counter.map(|x| x.try_into()).transpose()?;
     let target_repo_id = commit_syncer.get_target_repo().repo_identity().id();
     let source_repo_id = commit_syncer.get_source_repo().repo_identity().id();
 
@@ -575,6 +637,7 @@ where
                     bail!("unexpected bookmark move");
                 }
             };
+            let new_counter = new_counter.try_into()?;
 
             let txn_hook = Arc::new({
                 move |ctx: CoreContext, txn: Transaction| {
@@ -600,6 +663,7 @@ where
 
                         if !globalrev_entries.is_empty() {
                             bonsai_globalrev_mapping::add_globalrevs(
+                                &ctx,
                                 txn,
                                 target_repo_id,
                                 &globalrev_entries,
@@ -614,7 +678,10 @@ where
                 }
             });
 
-            let res = bookmark_txn.commit_with_hook(txn_hook).await?;
+            let res = bookmark_txn
+                .commit_with_hook(txn_hook)
+                .await?
+                .map(|x| x.into());
             log_new_bonsai_changesets(
                 &ctx,
                 target_repo,
@@ -637,17 +704,22 @@ where
         debug!(ctx.logger(), "Renamed bookmark is None. No sync happening.");
     }
 
-    let updated = target_repo_dbs
+    let maybe_log_id = if target_repo_dbs
         .counters
         .set_counter(
             &ctx,
             &format_counter(&source_repo_id),
-            new_counter,
+            new_counter.try_into()?,
             prev_counter,
         )
-        .await?;
+        .await?
+    {
+        Some(new_counter)
+    } else {
+        None
+    };
 
-    Ok(updated)
+    Ok(maybe_log_id)
 }
 
 pub async fn open_backsyncer_dbs(repo: &impl RepoLike) -> Result<TargetRepoDbs, Error> {

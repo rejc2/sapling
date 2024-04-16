@@ -17,6 +17,8 @@
 #include <csignal>
 #include <type_traits>
 
+#include "eden/common/utils/Bug.h"
+#include "eden/common/utils/IDGen.h"
 #include "eden/common/utils/Synchronized.h"
 #include "eden/common/utils/SystemError.h"
 #include "eden/fs/fuse/FuseDirList.h"
@@ -24,8 +26,6 @@
 #include "eden/fs/fuse/FuseRequestContext.h"
 #include "eden/fs/privhelper/PrivHelper.h"
 #include "eden/fs/telemetry/FsEventLogger.h"
-#include "eden/fs/utils/Bug.h"
-#include "eden/fs/utils/IDGen.h"
 #include "eden/fs/utils/StaticAssert.h"
 #include "eden/fs/utils/Thread.h"
 
@@ -657,9 +657,9 @@ FuseChannel::InvalidationEntry::~InvalidationEntry() {
 
 FuseChannel::InvalidationEntry::
     InvalidationEntry(InvalidationEntry&& other) noexcept(
-        std::is_nothrow_move_constructible_v<PathComponent>&&
-            std::is_nothrow_move_constructible_v<folly::Promise<folly::Unit>>&&
-                std::is_nothrow_move_constructible_v<DataRange>)
+        std::is_nothrow_move_constructible_v<PathComponent> &&
+        std::is_nothrow_move_constructible_v<folly::Promise<folly::Unit>> &&
+        std::is_nothrow_move_constructible_v<DataRange>)
     : type(other.type), inode(other.inode) {
   switch (type) {
     case InvalidationType::INODE:
@@ -815,6 +815,14 @@ FuseChannel::FuseChannel(
       traceBus_(TraceBus<FuseTraceEvent>::create(
           "FuseTrace" + mountPath.asString(),
           fuseTraceBusCapacity)) {
+  XLOGF(
+      INFO,
+      "Creating FuseChannel: mountPath={}, numThreads={}, requireUtf8={}, maximumBackgroundRequests={}, useWriteBackCache={}",
+      mountPath,
+      numThreads,
+      requireUtf8Path,
+      maximumBackgroundRequests,
+      useWriteBackCache);
   XCHECK_GE(numThreads_, 1ul);
   installSignalHandler();
 

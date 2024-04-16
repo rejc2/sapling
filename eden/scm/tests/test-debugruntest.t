@@ -68,7 +68,7 @@ Diff output:
 Skip:
 
   $ cat > test-skip.t << 'EOF'
-  > #require false
+  > #require false no-eden
   > EOF
 
 Exception:
@@ -243,3 +243,21 @@ The doctest passes with the autofix changes:
   $ hg debugruntest doctest:testmodule
   # Ran 1 tests, 0 skipped, 0 failed.
 
+
+Test the "test" builtin:
+
+  $ [ -f foo ]
+  [1]
+  $ [ -f foo -o -f bar ]
+  [1]
+  $ touch foo
+  $ [ -f foo ]
+  $ [ -f foo -o -f bar ]
+  $ [ -f bar -o -f foo ]
+
+Python -c works:
+
+  $ python -c 'print("hello")'
+  hello
+  $ hg debugpython -- -c 'print("hello")'
+  hello

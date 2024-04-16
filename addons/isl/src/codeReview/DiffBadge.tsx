@@ -10,8 +10,8 @@ import type {UICodeReviewProvider} from './UICodeReviewProvider';
 import type {ReactNode} from 'react';
 
 import {useShowConfirmSubmitStack} from '../ConfirmSubmitStack';
-import {ExternalLink} from '../ExternalLink';
 import {Internal} from '../Internal';
+import {Link} from '../Link';
 import {Tooltip} from '../Tooltip';
 import {clipboardCopyLink, clipboardCopyText} from '../clipboard';
 import {T, t} from '../i18n';
@@ -19,13 +19,13 @@ import {CircleEllipsisIcon} from '../icons/CircleEllipsisIcon';
 import {CircleExclamationIcon} from '../icons/CircleExclamationIcon';
 import {configBackedAtom, useAtomGet} from '../jotaiUtils';
 import {PullRevOperation} from '../operations/PullRevOperation';
-import platform from '../platform';
-import {useRunOperation} from '../serverAPIState';
+import {useRunOperation} from '../operationsState';
 import {exactRevset} from '../types';
 import {codeReviewProvider, diffSummary} from './CodeReviewInfo';
 import {DiffCommentsDetails} from './DiffComments';
 import {openerUrlForDiffUrl} from './github/GitHubUrlOpener';
 import {SyncStatus, syncStatusAtom} from './syncStatus';
+import * as stylex from '@stylexjs/stylex';
 import {VSCodeButton} from '@vscode/webview-ui-toolkit/react';
 import {useAtomValue} from 'jotai';
 import {Component, Suspense, useState} from 'react';
@@ -41,10 +41,11 @@ export const showDiffNumberConfig = configBackedAtom<boolean>('isl.show-diff-num
  */
 export function DiffInfo({commit, hideActions}: {commit: CommitInfo; hideActions: boolean}) {
   const repo = useAtomValue(codeReviewProvider);
-  const diffId = commit.diffId;
+  const {diffId} = commit;
   if (repo == null || diffId == null) {
     return null;
   }
+
   // Do not show diff info (and "Ship It" button) if there are successors.
   // Users should look at the diff info and buttons from the successor commit instead.
   // But the diff number can still be useful so show it.
@@ -59,6 +60,30 @@ export function DiffInfo({commit, hideActions}: {commit: CommitInfo; hideActions
     </DiffErrorBoundary>
   );
 }
+
+const styles = stylex.create({
+  diffBadge: {
+    color: 'white',
+    cursor: 'pointer',
+    textDecoration: {
+      default: 'none',
+      ':hover': 'underline',
+    },
+  },
+  diffFollower: {
+    alignItems: 'center',
+    display: 'inline-flex',
+    gap: '5px',
+    opacity: '0.9',
+    fontSize: '90%',
+    padding: '0 var(--halfpad)',
+  },
+  diffFollowerIcon: {
+    '::before': {
+      fontSize: '90%',
+    },
+  },
+});
 
 export function DiffBadge({
   diff,
@@ -76,9 +101,22 @@ export function DiffBadge({
   const openerUrl = useAtomValue(openerUrlForDiffUrl(url));
 
   return (
-    <ExternalLink href={openerUrl} className={`diff-badge ${provider.name}-diff-badge`}>
+    <Link href={openerUrl} xstyle={styles.diffBadge}>
       <provider.DiffBadgeContent diff={diff} children={children} syncStatus={syncStatus} />
-    </ExternalLink>
+    </Link>
+  );
+}
+
+export function DiffFollower({commit}: {commit: CommitInfo}) {
+  if (!commit.isFollower) {
+    return null;
+  }
+
+  return (
+    <span {...stylex.props(styles.diffFollower)}>
+      <Icon icon="fold-up" size="S" {...stylex.props(styles.diffFollowerIcon)} />
+      <T>follower</T>
+    </span>
   );
 }
 

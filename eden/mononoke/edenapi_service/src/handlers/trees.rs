@@ -15,6 +15,7 @@ use edenapi_types::AnyId;
 use edenapi_types::Batch;
 use edenapi_types::EdenApiServerError;
 use edenapi_types::FileMetadata;
+use edenapi_types::TreeAttributes;
 use edenapi_types::TreeChildEntry;
 use edenapi_types::TreeEntry;
 use edenapi_types::TreeRequest;
@@ -32,6 +33,7 @@ use gotham::state::State;
 use gotham_derive::StateData;
 use gotham_derive::StaticResponseExtender;
 use gotham_ext::error::HttpError;
+use gotham_ext::middleware::request_context::RequestContext;
 use gotham_ext::middleware::scuba::ScubaMiddlewareState;
 use gotham_ext::response::TryIntoResponse;
 use manifest::Entry;
@@ -57,7 +59,6 @@ use super::HandlerResult;
 use crate::context::ServerContext;
 use crate::errors::ErrorKind;
 use crate::middleware::request_dumper::RequestDumper;
-use crate::middleware::RequestContext;
 use crate::utils::custom_cbor_stream;
 use crate::utils::get_repo;
 use crate::utils::parse_wire_request;
@@ -87,9 +88,6 @@ pub async fn trees(state: &mut State) -> Result<impl TryIntoResponse, HttpError>
     if let Some(rd) = RequestDumper::try_borrow_mut_from(state) {
         rd.add_request(&request);
     };
-    repo.ctx()
-        .perf_counters()
-        .add_to_counter(PerfCounterType::EdenapiTrees, request.keys.len() as i64);
 
     ScubaMiddlewareState::try_set_sampling_rate(state, nonzero_ext::nonzero!(256_u64));
 
@@ -106,9 +104,8 @@ fn fetch_all_trees(
 ) -> impl Stream<Item = Result<TreeEntry, EdenApiServerError>> {
     let ctx = repo.ctx().clone();
 
-    let fetch_metadata = request.attributes.child_metadata;
     let fetches = request.keys.into_iter().map(move |key| {
-        fetch_tree(repo.clone(), key.clone(), fetch_metadata)
+        fetch_tree(repo.clone(), key.clone(), request.attributes)
             .map(|r| r.map_err(|e| EdenApiServerError::with_key(key, e)))
     });
 
@@ -125,8 +122,9 @@ fn fetch_all_trees(
 async fn fetch_tree(
     repo: HgRepoContext,
     key: Key,
-    fetch_metadata: bool,
+    attributes: TreeAttributes,
 ) -> Result<TreeEntry, Error> {
+    let mut entry = TreeEntry::new(key.clone());
     let id = HgManifestId::from_node_hash(HgNodeHash::from(key.hgid));
 
     let ctx = id
@@ -135,15 +133,28 @@ async fn fetch_tree(
         .with_context(|| ErrorKind::TreeFetchFailed(key.clone()))?
         .with_context(|| ErrorKind::KeyDoesNotExist(key.clone()))?;
 
-    let (data, _) = ctx
-        .content()
-        .await
-        .with_context(|| ErrorKind::TreeFetchFailed(key.clone()))?;
-    let parents = ctx.hg_parents().into();
+    if attributes.manifest_blob {
+        repo.ctx()
+            .perf_counters()
+            .increment_counter(PerfCounterType::EdenapiTrees);
 
-    let mut entry = TreeEntry::new(key.clone(), data, parents);
+        let (data, _) = ctx
+            .content()
+            .await
+            .with_context(|| ErrorKind::TreeFetchFailed(key.clone()))?;
 
-    if fetch_metadata {
+        entry.with_data(Some(data));
+    }
+
+    if attributes.parents {
+        entry.with_parents(Some(ctx.hg_parents().into()));
+    }
+
+    if attributes.child_metadata {
+        repo.ctx()
+            .perf_counters()
+            .increment_counter(PerfCounterType::EdenapiTreesAuxData);
+
         if let Some(entries) = fetch_child_metadata_entries(&repo, &ctx).await? {
             let children: Vec<Result<TreeChildEntry, EdenApiServerError>> = entries
                 .buffer_unordered(MAX_CONCURRENT_METADATA_FETCHES_PER_TREE_FETCH)

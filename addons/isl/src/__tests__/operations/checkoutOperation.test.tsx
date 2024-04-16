@@ -17,8 +17,7 @@ import {
   expectYouAreHerePointAt,
 } from '../../testUtils';
 import {CommandRunner, succeedableRevset} from '../../types';
-import {fireEvent, render, screen} from '@testing-library/react';
-import {act} from 'react-dom/test-utils';
+import {fireEvent, render, screen, act} from '@testing-library/react';
 
 describe('GotoOperation', () => {
   beforeEach(() => {
@@ -36,7 +35,7 @@ describe('GotoOperation', () => {
           COMMIT('2', 'master', '00', {phase: 'public', remoteBookmarks: ['remote/master']}),
           COMMIT('1', 'Commit 1', '0', {phase: 'public'}),
           COMMIT('a', 'Commit A', '1'),
-          COMMIT('b', 'Commit B', 'a', {isHead: true}),
+          COMMIT('b', 'Commit B', 'a', {isDot: true}),
           COMMIT('c', 'Commit C', 'b'),
         ],
       });
@@ -83,7 +82,7 @@ describe('GotoOperation', () => {
       simulateCommits({
         value: [
           COMMIT('1', 'Commit 1', '0', {phase: 'public'}),
-          COMMIT('a', 'Commit A', '1', {isHead: true}),
+          COMMIT('a', 'Commit A', '1', {isDot: true}),
           COMMIT('b', 'Commit B', 'a'),
           COMMIT('c', 'Commit C', 'b'),
         ],
@@ -130,7 +129,7 @@ describe('GotoOperation', () => {
             COMMIT('2', 'master', '00', {phase: 'public', remoteBookmarks: ['remote/master']}),
             COMMIT('1', 'Commit 1', '0', {phase: 'public'}),
             COMMIT('a2', 'Commit A', '1', {closestPredecessors: ['a']}),
-            COMMIT('b2', 'Commit B', 'a2', {isHead: true, closestPredecessors: ['b']}),
+            COMMIT('b2', 'Commit B', 'a2', {isDot: true, closestPredecessors: ['b']}),
             COMMIT('c2', 'Commit C', 'b2', {closestPredecessors: ['c']}),
           ],
         });

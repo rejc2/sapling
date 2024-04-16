@@ -1,8 +1,8 @@
 #debugruntest-compatible
 
-#require no-fsmonitor
+#require no-fsmonitor no-eden
 
-  $ disable treemanifest
+  $ disable treemanifest copytrace
   $ hg debugextensions --excludedefault
 
   $ enable histedit rebase

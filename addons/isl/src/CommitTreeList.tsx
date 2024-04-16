@@ -6,13 +6,12 @@
  */
 
 import type {RenderGlyphResult} from './RenderDag';
-import type {Dag, DagCommitInfo} from './dag/dag';
+import type {DagCommitInfo} from './dag/dag';
 import type {ExtendedGraphRow} from './dag/render';
-import type {HashSet} from './dag/set';
 import type {Hash} from './types';
 
 import serverAPI from './ClientToServerAPI';
-import {Commit} from './Commit';
+import {Commit, InlineProgressSpan} from './Commit';
 import {Center, LargeSpinner} from './ComponentUtils';
 import {ErrorNotice} from './ErrorNotice';
 import {isHighlightedCommit} from './HighlightedCommits';
@@ -23,15 +22,20 @@ import {YOU_ARE_HERE_VIRTUAL_COMMIT} from './dag/virtualCommit';
 import {T, t} from './i18n';
 import {atomFamilyWeak} from './jotaiUtils';
 import {CreateEmptyInitialCommitOperation} from './operations/CreateEmptyInitialCommitOperation';
+import {inlineProgressByHash, useRunOperation} from './operationsState';
 import {dagWithPreviews, treeWithPreviews, useMarkOperationsCompleted} from './previews';
 import {isNarrowCommitTree} from './responsive';
-import {useArrowKeysToChangeSelection, useBackspaceToHideSelected} from './selection';
+import {
+  selectedCommits,
+  useArrowKeysToChangeSelection,
+  useBackspaceToHideSelected,
+  useCommitCallbacks,
+} from './selection';
 import {
   commitFetchError,
   commitsShownRange,
   isFetchingAdditionalCommits,
   latestUncommittedChangesData,
-  useRunOperation,
 } from './serverAPIState';
 import {MaybeEditStackModal} from './stackEdit/ui/EditStackModal';
 import {VSCodeButton} from '@vscode/webview-ui-toolkit/react';
@@ -55,11 +59,19 @@ const dagWithYouAreHere = atom(get => {
   return dag;
 });
 
+const renderSubsetUnionSelection = atom(get => {
+  const dag = get(dagWithYouAreHere);
+  const subset = dag.subsetForRendering();
+  // If selectedCommits includes commits unknown to dag (ex. in tests), ignore them to avoid errors.
+  const selection = dag.present(get(selectedCommits));
+  return subset.union(selection);
+});
+
 function DagCommitList(props: DagCommitListProps) {
   const {isNarrow} = props;
 
   const dag = useAtomValue(dagWithYouAreHere);
-  const subset = getRenderSubset(dag);
+  const subset = useAtomValue(renderSubsetUnionSelection);
 
   return (
     <RenderDag
@@ -70,6 +82,7 @@ function DagCommitList(props: DagCommitListProps) {
       renderCommit={renderCommit}
       renderCommitExtras={renderCommitExtras}
       renderGlyph={renderGlyph}
+      useExtraCommitRowProps={useExtraCommitRowProps}
     />
   );
 }
@@ -91,10 +104,29 @@ function renderCommitExtras(info: DagCommitInfo, row: ExtendedGraphRow) {
 
 function renderGlyph(info: DagCommitInfo): RenderGlyphResult {
   if (info.isYouAreHere) {
-    return ['replace-tile', <YouAreHereGlyph info={info} />];
+    return ['replace-tile', <YouAreHereGlyphWithProgress info={info} />];
   } else {
     return ['inside-tile', <HighlightedGlyph info={info} />];
   }
+}
+
+function useExtraCommitRowProps(info: DagCommitInfo): React.HTMLAttributes<HTMLDivElement> | void {
+  const {isSelected, onClickToSelect, onDoubleClickToShowDrawer} = useCommitCallbacks(info);
+
+  return {
+    onClick: onClickToSelect,
+    onDoubleClick: onDoubleClickToShowDrawer,
+    className: isSelected ? 'commit-row-selected' : '',
+  };
+}
+
+function YouAreHereGlyphWithProgress({info}: {info: DagCommitInfo}) {
+  const inlineProgress = useAtomValue(inlineProgressByHash(info.hash));
+  return (
+    <YouAreHereGlyph info={info}>
+      {inlineProgress && <InlineProgressSpan message={inlineProgress} />}
+    </YouAreHereGlyph>
+  );
 }
 
 const dagHasChildren = atomFamilyWeak((key: string) => {
@@ -153,10 +185,6 @@ function HighlightedGlyph({info}: {info: DagCommitInfo}) {
       <RegularGlyph info={info} />
     </>
   );
-}
-
-function getRenderSubset(dag: Dag): HashSet {
-  return dag.subsetForRendering();
 }
 
 export function CommitTreeList() {
@@ -230,7 +258,7 @@ function FetchingAdditionalCommitsButton() {
   if (shownRange === undefined) {
     return null;
   }
-  const commitsShownMessage = t('Showing comits from the last $numDays days', {
+  const commitsShownMessage = t('Showing commits from the last $numDays days', {
     replace: {$numDays: shownRange.toString()},
   });
   return (

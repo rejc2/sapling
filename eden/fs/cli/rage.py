@@ -4,6 +4,8 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2.
 
+# pyre-strict
+
 import csv
 import getpass
 import io
@@ -33,7 +35,12 @@ from . import (
 from .config import EdenInstance
 
 try:
-    from .facebook.rage import find_fb_cdb, get_host_dashboard_url, setup_fb_env
+    from .facebook.rage import (
+        find_fb_cdb,
+        get_host_dashboard_url,
+        get_quickstack_cmd,
+        setup_fb_env,
+    )
 
 except ImportError:
 
@@ -46,6 +53,11 @@ except ImportError:
     def get_host_dashboard_url(
         normalized_hostname: str, period_end: datetime
     ) -> Optional[str]:
+        return None
+
+    def get_quickstack_cmd(
+        instance: EdenInstance,
+    ) -> Optional[List[str]]:
         return None
 
 
@@ -72,6 +84,11 @@ except ImportError:
     ) -> None:
         print("_report_edenfs_bug() is unimplemented.", file=sys.stderr)
         return None
+
+
+THRIFT_COUNTER_REGEX = (
+    r"thrift\.(EdenService|BaseService)\..*(time|num_samples|num_calls).*"
+)
 
 
 def section_title(message: str, out: IO[bytes]) -> None:
@@ -282,6 +299,12 @@ def print_diagnostic_info(
             out.write(stats_stream.getvalue().encode())
 
     print_counters(instance, "EdenFS", top_mod.COUNTER_REGEX, out)
+    print_counters(
+        instance,
+        "Thrift",
+        THRIFT_COUNTER_REGEX,
+        out,
+    )
 
     if health_status.is_healthy() and not dry_run and processor:
         print_recent_events(processor, out, dry_run)
@@ -300,6 +323,17 @@ def print_diagnostic_info(
     print_system_mount_table(out)
 
     print_system_load(out)
+
+    quickstack_cmd = get_quickstack_cmd(instance)
+
+    if quickstack_cmd:
+        section_title("Quickstack:", out)
+        paste_output(
+            lambda sink: run_cmd(quickstack_cmd, sink, out),
+            processor,
+            out,
+            dry_run,
+        )
 
     print_ulimits(out)
 
@@ -601,8 +635,17 @@ def print_system_load(out: IO[bytes]) -> None:
         out.write(f"Error printing system load: {e}\n".encode())
 
 
-def run_edenfsctl_cmd(cmd: List[str], sink: IO[bytes]) -> None:
-    subprocess.run(cmd, check=True, stderr=subprocess.STDOUT, stdout=sink)
+def run_cmd(
+    cmd: List[str], sink: IO[bytes], out: IO[bytes], timeout: float = 10
+) -> None:
+    try:
+        subprocess.run(
+            cmd, check=True, stderr=subprocess.STDOUT, stdout=sink, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        out.write(
+            f"Command {' '.join(cmd)} timed out after {timeout} seconds\n".encode()
+        )
 
 
 def print_eden_config(
@@ -612,7 +655,7 @@ def print_eden_config(
     fsconfig_cmd = ["edenfsctl", "fsconfig", "--all"]
 
     result = paste_output(
-        lambda sink: run_edenfsctl_cmd(fsconfig_cmd, sink),
+        lambda sink: run_cmd(fsconfig_cmd, sink, out),
         processor,
         out,
         dry_run,
@@ -727,7 +770,7 @@ def print_recent_events(processor: str, out: IO[bytes], dry_run: bool) -> None:
         try:
             out.write(f"{opt}: ".encode())
             paste_output(
-                lambda sink: run_edenfsctl_cmd(trace_cmd, sink),
+                lambda sink, trace_cmd=trace_cmd: run_cmd(trace_cmd, sink, out),
                 processor,
                 out,
                 dry_run,

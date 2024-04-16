@@ -27,6 +27,7 @@ http-client = { version = "0.1.0", path = "../../http-client", optional = true }
 identity = { version = "0.1.0", path = "../../identity" }
 minibytes = { version = "0.1.0", path = "../../minibytes" }
 regex = { version = "1.9.2", optional = true }
+repo-minimal-info = { version = "0.1.0", path = "../../repo/repo-minimal-info" }
 serde = { version = "1.0.185", features = ["derive", "rc"], optional = true }
 serde_json = { version = "1.0.100", features = ["float_roundtrip", "unbounded_depth"], optional = true }
 serde_urlencoded = { version = "0.7", optional = true }
@@ -34,7 +35,7 @@ sha2 = { version = "0.10.6", optional = true }
 spawn-ext = { version = "0.1.0", path = "../../spawn-ext" }
 staticconfig = { version = "0.1.0", path = "../static" }
 tempfile = { version = "3.8", optional = true }
-tracing = "0.1.40"
+tracing = { version = "0.1.40", features = ["attributes"] }
 types = { version = "0.1.0", path = "../../types", optional = true }
 unionconfig = { version = "0.1.0", path = "../union" }
 url = "2.2.2"
@@ -51,3 +52,4 @@ testutil = { version = "0.1.0", path = "../../util/testutil" }
 [features]
 default = []
 fb = ["filetime", "hgtime", "http-client", "identity/fb", "regex", "serde", "serde_json", "serde_urlencoded", "sha2", "sha2", "tempfile", "types", "zstd"]
+sl_oss = []

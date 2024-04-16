@@ -9,7 +9,7 @@
 import os
 import shlex
 import sys
-from datetime import date, datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from textwrap import dedent
 from typing import Dict, List, Optional, Set
@@ -30,6 +30,7 @@ from eden.fs.cli.doctor.util import (
     get_dependent_repos,
     hg_doctor_in_backing_repo,
 )
+
 from facebook.eden.ttypes import GetStatInfoParams, MountState
 from fb303_core.ttypes import fb303_status
 
@@ -85,6 +86,7 @@ def cure_what_ails_you(
     *,
     debug: bool = False,
     fast: bool = False,
+    min_severity_to_report: ProblemSeverity = ProblemSeverity.ADVICE,
     mount_table: Optional[mtab.MountTable] = None,
     fs_util: Optional[filesystem.FsUtil] = None,
     proc_utils: Optional[proc_utils_mod.ProcUtils] = None,
@@ -97,6 +99,7 @@ def cure_what_ails_you(
         dry_run,
         debug,
         fast,
+        min_severity_to_report,
         mount_table,
         fs_util,
         proc_utils,
@@ -366,6 +369,7 @@ class EdenDoctorChecker:
 class EdenDoctor(EdenDoctorChecker):
     fixer: ProblemFixer
     dry_run: bool
+    min_severity_to_report: ProblemSeverity
 
     def __init__(
         self,
@@ -373,6 +377,7 @@ class EdenDoctor(EdenDoctorChecker):
         dry_run: bool,
         debug: bool,
         fast: bool,
+        min_severity_to_report: ProblemSeverity,
         mount_table: Optional[mtab.MountTable] = None,
         fs_util: Optional[filesystem.FsUtil] = None,
         proc_utils: Optional[proc_utils_mod.ProcUtils] = None,
@@ -381,11 +386,22 @@ class EdenDoctor(EdenDoctorChecker):
         out: Optional[ui.Output] = None,
     ) -> None:
         self.dry_run = dry_run
+        self.min_severity_to_report = min_severity_to_report
         out = out if out is not None else ui.get_output()
         if dry_run:
-            self.fixer = DryRunFixer(instance, out, debug)
+            self.fixer = DryRunFixer(
+                instance,
+                out,
+                debug,
+                min_severity_to_report,
+            )
         else:
-            self.fixer = ProblemFixer(instance, out, debug)
+            self.fixer = ProblemFixer(
+                instance,
+                out,
+                debug,
+                min_severity_to_report,
+            )
 
         super().__init__(
             instance,
@@ -884,9 +900,6 @@ class OutOfDateVersion(Problem):
 
 
 def check_edenfs_version(tracker: ProblemTracker, instance: EdenInstance) -> None:
-    def date_from_version(version: str) -> date:
-        return datetime.strptime(version, "%Y%m%d").date()
-
     rver, release = instance.get_running_version_parts()
     if not rver or not release:
         # This could be a dev build that returns the empty
@@ -899,8 +912,12 @@ def check_edenfs_version(tracker: ProblemTracker, instance: EdenInstance) -> Non
         # dev build of eden client returns empty strings here
         return
 
-    # check if the runnig version is more than two weeks old
-    daysgap = date_from_version(iversion) - date_from_version(rver)
+    # check if the running version is more than two weeks old
+    iversion_date = version.date_from_version(iversion)
+    rversion_date = version.date_from_version(rver)
+    if not iversion_date or not rversion_date:
+        return
+    daysgap = iversion_date - rversion_date
     if daysgap.days < 14:
         return
 

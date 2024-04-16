@@ -1,13 +1,19 @@
+#debugruntest-compatible
+
+#require no-eden
+
+#inprocess-hg-incompatible
+
   $ eagerepo
   $ setconfig devel.segmented-changelog-rev-compat=true
   $ cat >> fakepager.py <<EOF
   > import sys
   > printed = False
-  > for line in sys.stdin:
-  >     sys.stdout.write('paged! %r\n' % line)
+  > for line in sys.stdin.buffer:
+  >     sys.stdout.buffer.write(('paged! %r\n' % line.decode()).encode())
   >     printed = True
   > if not printed:
-  >     sys.stdout.write('paged empty output!\n')
+  >     sys.stdout.buffer.write(b'paged empty output!\n')
   > EOF
 
 Enable ui.assume-tty so that the pager will start, and set the pager to our
@@ -15,7 +21,7 @@ fake pager that lets us see when the pager was running.
   $ setconfig ui.assume-tty=yes ui.color=no
   $ cat >>$HGRCPATH <<EOF
   > [pager]
-  > pager = $PYTHON $TESTTMP/fakepager.py
+  > pager = hg debugpython $TESTTMP/fakepager.py
   > EOF
 
   $ hg init repo
@@ -343,13 +349,11 @@ During pushbuffer, pager should not start:
 
 Environment variables like LESS and LV are set automatically:
   $ cat > $TESTTMP/printlesslv.py <<EOF
-  > from __future__ import absolute_import
   > import os
   > import sys
   > sys.stdin.read()
   > for name in ['LESS', 'LV']:
   >     sys.stdout.write(('%s=%s\n') % (name, os.environ.get(name, '-')))
-  > sys.stdout.flush()
   > EOF
 
   $ cat >> $HGRCPATH <<EOF
@@ -358,7 +362,7 @@ Environment variables like LESS and LV are set automatically:
   > [ui]
   > formatted=1
   > [pager]
-  > pager = $PYTHON $TESTTMP/printlesslv.py
+  > pager = hg debugpython $TESTTMP/printlesslv.py
   > EOF
   $ unset LESS
   $ unset LV

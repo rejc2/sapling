@@ -29,6 +29,7 @@ use crate::lfs::LfsRemote;
 use crate::lfs::LfsStore;
 use crate::scmstore::activitylogger::ActivityLogger;
 use crate::scmstore::file::FileStoreMetrics;
+use crate::scmstore::tree::TreeMetadataMode;
 use crate::scmstore::FileStore;
 use crate::scmstore::TreeStore;
 use crate::util::get_indexedlogdatastore_aux_path;
@@ -43,7 +44,6 @@ pub struct FileStoreBuilder<'a> {
     config: &'a dyn Config,
     local_path: Option<PathBuf>,
     suffix: Option<PathBuf>,
-    store_aux_data: bool,
     override_edenapi: Option<bool>,
 
     indexedlog_local: Option<Arc<IndexedLogHgIdDataStore>>,
@@ -61,7 +61,6 @@ impl<'a> FileStoreBuilder<'a> {
             config,
             local_path: None,
             suffix: None,
-            store_aux_data: config.get_or("store", "aux", || true).unwrap_or(true),
             override_edenapi: None,
             indexedlog_local: None,
             indexedlog_cache: None,
@@ -79,11 +78,6 @@ impl<'a> FileStoreBuilder<'a> {
 
     pub fn suffix(mut self, suffix: impl AsRef<Path>) -> Self {
         self.suffix = Some(suffix.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn store_aux_data(mut self) -> Self {
-        self.store_aux_data = true;
         self
     }
 
@@ -181,6 +175,7 @@ impl<'a> FileStoreBuilder<'a> {
                 max_bytes: None,
             };
             Some(Arc::new(IndexedLogHgIdDataStore::new(
+                self.config,
                 get_indexedlogdatastore_path(local_path)?,
                 self.get_extstored_policy()?,
                 &config,
@@ -213,26 +208,12 @@ impl<'a> FileStoreBuilder<'a> {
             max_bytes,
         };
         Ok(Some(Arc::new(IndexedLogHgIdDataStore::new(
+            self.config,
             get_indexedlogdatastore_path(cache_path)?,
             self.get_extstored_policy()?,
             &config,
             StoreType::Shared,
         )?)))
-    }
-
-    #[context("failed to build aux local")]
-    pub fn build_aux_local(&self) -> Result<Option<Arc<AuxStore>>> {
-        Ok(if let Some(local_path) = self.local_path.clone() {
-            let local_path = get_local_path(local_path, &self.suffix)?;
-            let local_path = get_indexedlogdatastore_aux_path(local_path)?;
-            Some(Arc::new(AuxStore::new(
-                local_path,
-                self.config,
-                StoreType::Local,
-            )?))
-        } else {
-            None
-        })
     }
 
     #[context("failed to build aux cache")]
@@ -324,13 +305,7 @@ impl<'a> FileStoreBuilder<'a> {
         };
 
         tracing::trace!(target: "revisionstore::filestore", "processing aux data");
-        let (aux_local, aux_cache) = if self.store_aux_data {
-            let aux_local = self.build_aux_local()?;
-            let aux_cache = self.build_aux_cache()?;
-            (aux_local, aux_cache)
-        } else {
-            (None, None)
-        };
+        let aux_cache = self.build_aux_cache()?;
 
         tracing::trace!(target: "revisionstore::filestore", "processing lfs remote");
         let lfs_remote = if self.use_lfs()? {
@@ -382,9 +357,15 @@ impl<'a> FileStoreBuilder<'a> {
             .config
             .get_or_default::<bool>("scmstore", "lfsptrwrites")?;
 
-        let prefer_computing_aux_data = self
-            .config
-            .get_or_default::<bool>("scmstore", "prefercomputingauxdata")?;
+        // Top level flag allow disabling all local computation of aux data.
+        let compute_aux_data =
+            self.config
+                .get_or::<bool>("scmstore", "compute-aux-data", || true)?;
+
+        // Make prefetch() calls request aux data.
+        let prefetch_aux_data =
+            self.config
+                .get_or::<bool>("scmstore", "prefetch-aux-data", || true)?;
 
         let activity_logger =
             if let Some(path) = self.config.get_opt::<String>("scmstore", "activitylog")? {
@@ -403,7 +384,9 @@ impl<'a> FileStoreBuilder<'a> {
             lfs_threshold_bytes,
             edenapi_retries,
             allow_write_lfs_ptrs,
-            prefer_computing_aux_data,
+
+            prefetch_aux_data,
+            compute_aux_data,
 
             indexedlog_local,
             lfs_local,
@@ -419,7 +402,6 @@ impl<'a> FileStoreBuilder<'a> {
             fetch_logger,
             metrics: FileStoreMetrics::new(),
 
-            aux_local,
             aux_cache,
 
             lfs_progress: AggregatingProgressBar::new("fetching", "LFS"),
@@ -545,6 +527,7 @@ impl<'a> TreeStoreBuilder<'a> {
                 max_bytes: None,
             };
             Some(Arc::new(IndexedLogHgIdDataStore::new(
+                self.config,
                 get_indexedlogdatastore_path(local_path)?,
                 ExtStoredPolicy::Use,
                 &config,
@@ -578,6 +561,7 @@ impl<'a> TreeStoreBuilder<'a> {
         };
 
         Ok(Some(Arc::new(IndexedLogHgIdDataStore::new(
+            self.config,
             get_indexedlogdatastore_path(cache_path)?,
             ExtStoredPolicy::Use,
             &config,
@@ -631,6 +615,13 @@ impl<'a> TreeStoreBuilder<'a> {
             None
         };
 
+        let tree_metadata_mode = match self.config.get("scmstore", "tree-metadata-mode").as_deref()
+        {
+            Some("always") => TreeMetadataMode::Always,
+            None | Some("opt-in") => TreeMetadataMode::OptIn,
+            _ => TreeMetadataMode::Never,
+        };
+
         tracing::trace!(target: "revisionstore::treestore", "constructing TreeStore");
         Ok(TreeStore {
             indexedlog_local,
@@ -639,7 +630,9 @@ impl<'a> TreeStoreBuilder<'a> {
             edenapi,
             contentstore,
             filestore: self.filestore,
+            tree_metadata_mode,
             flush_on_drop: true,
+            metrics: Default::default(),
         })
     }
 }

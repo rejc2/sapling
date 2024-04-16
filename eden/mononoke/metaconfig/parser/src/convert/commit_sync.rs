@@ -13,7 +13,7 @@ use anyhow::Context;
 use anyhow::Result;
 use ascii::AsciiString;
 use bookmarks_types::BookmarkKey;
-use commitsync::types::CommonCommitSyncConfig as RawCommonCommitSyncConfig;
+use commitsync::CommonCommitSyncConfig as RawCommonCommitSyncConfig;
 use itertools::Itertools;
 use metaconfig_types::CommitSyncConfig;
 use metaconfig_types::CommitSyncConfigVersion;
@@ -21,7 +21,9 @@ use metaconfig_types::CommonCommitSyncConfig;
 use metaconfig_types::DefaultSmallToLargeCommitSyncPathAction;
 use metaconfig_types::GitSubmodulesChangesAction;
 use metaconfig_types::SmallRepoCommitSyncConfig;
+use metaconfig_types::SmallRepoGitSubmoduleConfig;
 use metaconfig_types::SmallRepoPermanentConfig;
+use metaconfig_types::DEFAULT_GIT_SUBMODULE_METADATA_FILE_PREFIX;
 use mononoke_types::NonRootMPath;
 use mononoke_types::RepositoryId;
 use repos::RawCommitSyncConfig;
@@ -187,8 +189,12 @@ impl Convert for RawCommitSyncSmallRepoConfig {
             mapping,
             git_submodules_action,
             submodule_dependencies,
+            submodule_metadata_file_prefix,
             ..
         } = self;
+
+        let submodule_metadata_file_prefix = submodule_metadata_file_prefix
+            .unwrap_or(DEFAULT_GIT_SUBMODULE_METADATA_FILE_PREFIX.to_string());
 
         let default_action = match default_action.as_str() {
             "preserve" => DefaultSmallToLargeCommitSyncPathAction::Preserve,
@@ -225,8 +231,11 @@ impl Convert for RawCommitSyncSmallRepoConfig {
         Ok(SmallRepoCommitSyncConfig {
             default_action,
             map,
-            git_submodules_action,
-            submodule_dependencies,
+            submodule_config: SmallRepoGitSubmoduleConfig {
+                git_submodules_action,
+                submodule_dependencies,
+                submodule_metadata_file_prefix,
+            },
         })
     }
 }

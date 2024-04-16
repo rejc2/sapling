@@ -15,7 +15,7 @@ dag-types = { version = "0.1.0", path = "dag-types", default-features = false }
 drawdag = { version = "0.1.0", path = "../drawdag" }
 fail = { version = "0.4", features = ["failpoints"] }
 fs2 = { version = "0.4", optional = true }
-futures = { version = "0.3.28", features = ["async-await", "compat"] }
+futures = { version = "0.3.30", features = ["async-await", "compat"] }
 indexedlog = { version = "0.1.0", path = "../indexedlog", optional = true }
 indexmap = { version = "2.1.0", features = ["arbitrary", "rayon", "serde"] }
 mincode = { version = "0.1.0", path = "../mincode" }
@@ -26,7 +26,7 @@ renderdag = { version = "0.1.0", path = "../renderdag", optional = true }
 serde = { version = "1.0.185", features = ["derive", "rc"] }
 tempfile = { version = "3.8", optional = true }
 thiserror = "1.0.49"
-tracing = "0.1.40"
+tracing = { version = "0.1.40", features = ["attributes"] }
 vlqencoding = { version = "0.1.0", path = "../vlqencoding" }
 
 [dev-dependencies]
@@ -38,7 +38,7 @@ once_cell = "1.12"
 quickcheck = "1.0"
 renderdag = { version = "0.1.0", path = "../renderdag" }
 tempfile = "3.8"
-tokio = { version = "1.29.1", features = ["full", "test-util", "tracing"] }
+tokio = { version = "1.36.0", features = ["full", "test-util", "tracing"] }
 
 [features]
 default = ["indexedlog-backend", "render"]

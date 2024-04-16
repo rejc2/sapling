@@ -58,7 +58,11 @@ impl GlobalrevPushrebaseHook {
 
 #[async_trait]
 impl PushrebaseHook for GlobalrevPushrebaseHook {
-    async fn in_critical_section(&self) -> Result<Box<dyn PushrebaseCommitHook>, Error> {
+    async fn in_critical_section(
+        &self,
+        _ctx: &CoreContext,
+        _old_bookmark_value: Option<ChangesetId>,
+    ) -> Result<Box<dyn PushrebaseCommitHook>, Error> {
         let max = self.mapping.get_max(&self.ctx).await?;
         let increment = 1;
 
@@ -160,10 +164,10 @@ struct GlobalrevTransactionHook {
 impl PushrebaseTransactionHook for GlobalrevTransactionHook {
     async fn populate_transaction(
         &self,
-        _ctx: &CoreContext,
+        ctx: &CoreContext,
         txn: Transaction,
     ) -> Result<Transaction, BookmarkTransactionError> {
-        let txn = add_globalrevs(txn, self.repo_id, &self.entries[..])
+        let txn = add_globalrevs(ctx, txn, self.repo_id, &self.entries[..])
             .await
             .map_err(|e| match e {
                 AddGlobalrevsErrorKind::Conflict => BookmarkTransactionError::LogicError,

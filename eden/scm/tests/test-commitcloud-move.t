@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
   $ setconfig format.use-segmented-changelog=true
   $ setconfig experimental.allowfilepeer=True
 
@@ -41,6 +44,7 @@ manually.
   $ hg bookmark -r $Y other
 
   $ cd $TESTTMP
+  $ setconfig 'remotenames.selectivepulldefault=master other'
   $ clone server client1
   $ cd client1
   $ hg goto -q 'desc(Y)'
@@ -158,6 +162,7 @@ Move by hash with two related commits removes both of them
   moving heads:
       0d5fa5021fb8  S
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -197,7 +202,7 @@ Move by hash with two related commits removes both of them
   │
   o  P: draft
   │
-  o  Y: draft
+  o  Y: public  remote/other
   │
   │ o  W: public  remote/master
   │ │
@@ -218,6 +223,7 @@ Move by hash moves commit, all descendants and their bookmarks
   adding heads:
       9c4fc22fed7c  M
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -259,7 +265,7 @@ Move by hash moves commit, all descendants and their bookmarks
   │ │
   │ o  M: draft
   ├─╯
-  o  Y: draft
+  o  Y: public  remote/other
   │
   │ o  W: public  remote/master
   │ │
@@ -274,6 +280,7 @@ Move when other heads keep ancestors alive, moving it just moves the head
   moving heads:
       f6a18bc998c9  C
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -319,7 +326,7 @@ Move when other heads keep ancestors alive, moving it just moves the head
   ├─╯ │
   │   o  A: draft
   │   │
-  o   │  Y: draft
+  o   │  Y: public  remote/other
   │   │
   │   o  W: public  remote/master
   │   │
@@ -334,6 +341,7 @@ Move by bookmark leaves commits alone if there are other bookmarks. The moved bo
   moving bookmarks:
       d-bookmark: fa9d7a2f38d1
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -381,7 +389,7 @@ Move by bookmark leaves commits alone if there are other bookmarks. The moved bo
   ├─╯ │
   │   o  A: draft
   │   │
-  o   │  Y: draft
+  o   │  Y: public  remote/other
   │   │
   │   o  W: public  remote/master
   │   │
@@ -399,9 +407,9 @@ But moving all of the bookmarks pointing to a head removes the head from the sou
       d-bookmark2: fa9d7a2f38d1
       d-bookmark3: fa9d7a2f38d1
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
-  
   $ showgraph
   o  F: draft
   │
@@ -444,7 +452,7 @@ But moving all of the bookmarks pointing to a head removes the head from the sou
   ├─╯ │
   │   o  A: draft
   │   │
-  o   │  Y: draft
+  o   │  Y: public  remote/other
   │   │
   │   o  W: public  remote/master
   │   │
@@ -459,6 +467,7 @@ Moving a bookmark in the stack doesn't hide the commit in the source workspace.
   moving bookmarks:
       b-bookmark: 9272e7e427bf
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -504,7 +513,7 @@ Moving a bookmark in the stack doesn't hide the commit in the source workspace.
   ├─╯ │
   │   o  A: draft
   │   │
-  o   │  Y: draft
+  o   │  Y: public  remote/other
   │   │
   │   o  W: public  remote/master
   │   │
@@ -519,9 +528,9 @@ Moving a bookmark on a public commit just moves it.
   moving bookmarks:
       x-bookmark: 8a0aebad5927
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
-  
   $ showgraph
   o  F: draft
   │
@@ -564,7 +573,7 @@ Moving a bookmark on a public commit just moves it.
   ├─╯ │
   │   o  A: draft
   │   │
-  o   │  Y: draft
+  o   │  Y: public  remote/other
   │   │
   │   o  W: public  remote/master
   │   │
@@ -579,9 +588,9 @@ Moving a lone commit just moves that head.
   moving heads:
       9c4fc22fed7c  M
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
-  
   $ showgraph
   o  F: draft
   │
@@ -622,7 +631,7 @@ Moving a lone commit just moves that head.
   ├─╯ │
   │   o  A: draft
   │   │
-  o   │  Y: draft
+  o   │  Y: public  remote/other
   │   │
   │   o  W: public  remote/master
   │   │
@@ -637,9 +646,9 @@ Moving a remote bookmark works.
   moving remote bookmarks:
       remote/other: 1cab361770de
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
-  
   $ showgraph
   o  F: draft
   │
@@ -649,7 +658,7 @@ Moving a remote bookmark works.
   │
   o  A: draft
   │
-  │ @  Y: draft
+  │ @  Y: public  remote/other
   │ │
   o │  W: public  remote/master
   │ │
@@ -715,7 +724,7 @@ Merge commits can be moved
   ├─╯
   o  A: draft
   │
-  │ @  Y: draft
+  │ @  Y: public  remote/other
   │ │
   o │  W: public  remote/master
   │ │
@@ -732,6 +741,7 @@ Merge commits can be moved
       080f94b3ed7f  F
       e59c81d53e06  G
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -746,7 +756,7 @@ Merge commits can be moved
   ├─╯
   o  A: draft
   │
-  │ @  Y: draft
+  │ @  Y: public  remote/other
   │ │
   o │  W: public  remote/master
   │ │
@@ -767,10 +777,12 @@ Merge commits can be moved
   ├─╯
   o  A: draft
   │
-  o  W: public  remote/master
-  │
-  o  X: public
-  │
+  │ o  Y: public  remote/other
+  │ │
+  o │  W: public  remote/master
+  │ │
+  o │  X: public
+  ├─╯
   @  Z: public
 
 
@@ -781,6 +793,7 @@ Try to move the same stack twice
   moving heads:
       080f94b3ed7f  F
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -789,7 +802,7 @@ Try to move the same stack twice
   │
   o  A: draft
   │
-  │ @  Y: draft
+  │ @  Y: public  remote/other
   │ │
   o │  W: public  remote/master
   │ │
@@ -806,10 +819,12 @@ Try to move the same stack twice
   │
   o  A: draft
   │
-  o  W: public  remote/master
-  │
-  o  X: public
-  │
+  │ o  Y: public  remote/other
+  │ │
+  o │  W: public  remote/master
+  │ │
+  o │  X: public
+  ├─╯
   @  Z: public
 
   $ hg pull -r 080f94b3ed7f
@@ -825,7 +840,7 @@ Try to move the same stack twice
   ├─╯
   o  A: draft
   │
-  │ @  Y: draft
+  │ @  Y: public  remote/other
   │ │
   o │  W: public  remote/master
   │ │
@@ -840,6 +855,7 @@ Try to move the same stack twice
   moving heads:
       080f94b3ed7f  F
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -848,7 +864,7 @@ Try to move the same stack twice
   │
   o  A: draft
   │
-  │ @  Y: draft
+  │ @  Y: public  remote/other
   │ │
   o │  W: public  remote/master
   │ │
@@ -865,10 +881,12 @@ Try to move the same stack twice
   │
   o  A: draft
   │
-  o  W: public  remote/master
-  │
-  o  X: public
-  │
+  │ o  Y: public  remote/other
+  │ │
+  o │  W: public  remote/master
+  │ │
+  o │  X: public
+  ├─╯
   @  Z: public
 
 
@@ -881,13 +899,14 @@ Try move with specified raw source and raw destination
   adding heads:
       fb4a94a976cf  A
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
   $ showgraph
   o  A: draft
   │
-  │ @  Y: draft
+  │ @  Y: public  remote/other
   │ │
   o │  W: public  remote/master
   │ │
@@ -900,10 +919,12 @@ Try move with specified raw source and raw destination
   │
   o  A: draft
   │
-  o  W: public  remote/master
-  │
-  o  X: public
-  │
+  │ o  Y: public  remote/other
+  │ │
+  o │  W: public  remote/master
+  │ │
+  o │  X: public
+  ├─╯
   @  Z: public
 
 
@@ -915,23 +936,28 @@ Test `hg cloud archive` command
   moving heads:
       fb4a94a976cf  A
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
   $ showgraph
-  o  W: public  remote/master
+  o  Y: public  remote/other
   │
-  o  X: public
-  │
+  │ o  W: public  remote/master
+  │ │
+  │ o  X: public
+  ├─╯
   @  Z: public
 
   $ showgraphother archive
   o  A: draft
   │
-  o  W: public  remote/master
-  │
-  o  X: public
-  │
+  │ o  Y: public  remote/other
+  │ │
+  o │  W: public  remote/master
+  │ │
+  o │  X: public
+  ├─╯
   @  Z: public
 
 Test copying commits and bookmarks between workspaces
@@ -939,6 +965,7 @@ Test copying commits and bookmarks between workspaces
   $ hg bookmark -r $B "new"
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   $ gensmartlogdata
@@ -949,6 +976,7 @@ Test copying commits and bookmarks between workspaces
   copying bookmarks:
       new: 9272e7e427bf
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -957,10 +985,12 @@ Test copying commits and bookmarks between workspaces
   │
   o  A: draft
   │
-  o  W: public  remote/master
-  │
-  o  X: public
-  │
+  │ o  Y: public  remote/other
+  │ │
+  o │  W: public  remote/master
+  │ │
+  o │  X: public
+  ├─╯
   @  Z: public
 
   $ showgraph copytest
@@ -968,8 +998,10 @@ Test copying commits and bookmarks between workspaces
   │
   o  A: draft
   │
-  o  W: public  remote/master
-  │
-  o  X: public
-  │
+  │ o  Y: public  remote/other
+  │ │
+  o │  W: public  remote/master
+  │ │
+  o │  X: public
+  ├─╯
   @  Z: public

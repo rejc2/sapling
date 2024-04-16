@@ -25,10 +25,10 @@ use slog::debug;
 use synced_commit_mapping::SyncedCommitMapping;
 use synced_commit_mapping::WorkingCopyEquivalence;
 
-use crate::get_small_repos_for_version;
+use crate::commit_sync_config_utils::get_small_repos_for_version;
+use crate::types::Repo;
 use crate::types::Source;
 use crate::types::Target;
-use crate::Repo;
 
 /// The state of a source repo commit in a target repo, assuming
 /// that any multiple `RewrittenAs` options have been resolved
@@ -422,7 +422,7 @@ impl<R: Repo> fmt::Debug for DesiredRelationship<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AncestorOf(cs_id, _) => {
-                write!(f, "DesiredRelationship::AncsetorOf({})", cs_id.0)
+                write!(f, "DesiredRelationship::AncestorOf({})", cs_id.0)
             }
             Self::DescendantOf(cs_id, _) => {
                 write!(f, "DesiredRelationship::DescendantOf({})", cs_id.0)

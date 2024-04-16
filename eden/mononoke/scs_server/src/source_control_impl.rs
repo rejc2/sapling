@@ -41,6 +41,7 @@ use mononoke_api::RepoContext;
 use mononoke_api::SessionContainer;
 use mononoke_api::TreeContext;
 use mononoke_api::TreeId;
+use mononoke_configs::MononokeConfigs;
 use mononoke_types::hash::Sha1;
 use mononoke_types::hash::Sha256;
 use once_cell::sync::Lazy;
@@ -52,8 +53,8 @@ use scuba_ext::MononokeScubaSampleBuilder;
 use scuba_ext::ScubaValue;
 use slog::Logger;
 use source_control as thrift;
-use source_control::server::SourceControlService;
-use source_control::services::source_control_service as service;
+use source_control_services::errors::source_control_service as service;
+use source_control_services::SourceControlService;
 use srserver::RequestContext;
 use stats::prelude::*;
 use time_ext::DurationExt;
@@ -102,6 +103,7 @@ pub(crate) struct SourceControlServiceImpl {
     pub(crate) scuba_builder: MononokeScubaSampleBuilder,
     pub(crate) identity: Identity,
     pub(crate) scribe: Scribe,
+    pub(crate) configs: Arc<MononokeConfigs>,
     identity_proxy_checker: Arc<ConnectionSecurityChecker>,
 }
 
@@ -116,6 +118,7 @@ impl SourceControlServiceImpl {
         mut scuba_builder: MononokeScubaSampleBuilder,
         scribe: Scribe,
         identity_proxy_checker: ConnectionSecurityChecker,
+        configs: Arc<MononokeConfigs>,
         common_config: &CommonConfig,
     ) -> Self {
         scuba_builder.add_common_server_data();
@@ -131,6 +134,7 @@ impl SourceControlServiceImpl {
                 common_config.internal_identity.id_data.as_str(),
             ),
             scribe,
+            configs,
             identity_proxy_checker: Arc::new(identity_proxy_checker),
         }
     }
@@ -180,6 +184,11 @@ impl SourceControlServiceImpl {
             if let Some(path) = specifier.scuba_path() {
                 scuba.add("path", path);
             }
+        }
+
+        if let Some(config_info) = self.configs.as_ref().config_info().as_ref() {
+            scuba.add("config_store_version", config_info.content_hash.clone());
+            scuba.add("config_store_last_updated_at", config_info.last_updated_at);
         }
 
         let sampling_rate = core::num::NonZeroU64::new(if POPULAR_METHODS.contains(name) {
@@ -735,6 +744,11 @@ impl SourceControlService for SourceControlServiceThriftImpl {
             commit: thrift::CommitSpecifier,
             params: thrift::CommitInfoParams,
         ) -> Result<thrift::CommitInfo, service::CommitInfoExn>;
+
+        async fn commit_generation(
+            commit: thrift::CommitSpecifier,
+            params: thrift::CommitGenerationParams,
+        ) -> Result<i64, service::CommitGenerationExn>;
 
         async fn commit_is_ancestor_of(
             commit: thrift::CommitSpecifier,

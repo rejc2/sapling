@@ -4,7 +4,8 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2.
 
-# pyre-unsafe
+# pyre-strict
+
 
 import errno
 from typing import List, Tuple
@@ -17,6 +18,7 @@ from eden.fs.cli.doctor.test.lib.testcase import DoctorTestBase
 
 
 class StaleMountsCheckTest(DoctorTestBase):
+    # pyre-fixme[4]: Attribute must be annotated.
     maxDiff = None
 
     def setUp(self) -> None:
@@ -37,9 +39,28 @@ class StaleMountsCheckTest(DoctorTestBase):
         self.assertEqual([], self.mount_table.unmount_lazy_calls)
         self.assertEqual([], self.mount_table.unmount_force_calls)
 
+    def test_does_not_unmount_active_mounts_fuseedenfs(self) -> None:
+        self.active_mounts.append(b"/mnt/fuseedenfs")
+        self.mount_table.add_mount("/mnt/fuseedenfs", vfstype="fuse.edenfs")
+        fixer, out = self.run_check(dry_run=False)
+        self.assertEqual("", out)
+        self.assert_results(fixer, num_problems=0)
+        self.assertEqual([], self.mount_table.unmount_lazy_calls)
+        self.assertEqual([], self.mount_table.unmount_force_calls)
+
     def test_working_nonactive_mount_is_not_unmounted(self) -> None:
         # Add a working edenfs mount that is not part of our active list
         self.mount_table.add_mount("/mnt/other1")
+
+        fixer, out = self.run_check(dry_run=False)
+        self.assertEqual("", out)
+        self.assert_results(fixer, num_problems=0)
+        self.assertEqual([], self.mount_table.unmount_lazy_calls)
+        self.assertEqual([], self.mount_table.unmount_force_calls)
+
+    def test_working_nonactive_mount_is_not_unmounted_fuseedenfs(self) -> None:
+        # Add a working edenfs mount that is not part of our active list
+        self.mount_table.add_mount("/mnt/fuseedenfs", vfstype="fuse.edenfs")
 
         fixer, out = self.run_check(dry_run=False)
         self.assertEqual("", out)
@@ -69,6 +90,23 @@ Unmounting 2 stale edenfs mounts...<green>fixed<reset>
             [b"/mnt/stale1", b"/mnt/stale2"], self.mount_table.unmount_lazy_calls
         )
         self.assertEqual([b"/mnt/stale1"], self.mount_table.unmount_force_calls)
+
+    def test_unmount_for_fuseedenfs_mount(self) -> None:
+        self.mount_table.add_stale_mount("/mnt/fuseedenfs", vfstype="fuse.edenfs")
+
+        fixer, out = self.run_check(dry_run=False)
+        self.assertEqual(
+            """\
+<yellow>- Found problem:<reset>
+Found 1 stale edenfs mount:
+  /mnt/fuseedenfs
+Unmounting 1 stale edenfs mount...<green>fixed<reset>
+
+""",
+            out,
+        )
+        self.assert_results(fixer, num_problems=1, num_fixed_problems=1)
+        self.assertEqual([b"/mnt/fuseedenfs"], self.mount_table.unmount_lazy_calls)
 
     def test_dry_run_prints_stale_mounts_and_does_not_unmount(self) -> None:
         self.mount_table.add_stale_mount("/mnt/stale1")

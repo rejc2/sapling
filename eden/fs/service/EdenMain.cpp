@@ -6,7 +6,7 @@
  */
 
 #include "eden/fs/service/EdenMain.h"
-#include "eden/fs/telemetry/SessionId.h"
+#include "eden/common/telemetry/SessionId.h"
 
 #include <optional>
 
@@ -21,11 +21,13 @@
 #include <folly/logging/xlog.h>
 #include <folly/portability/GFlags.h>
 #include <folly/portability/Unistd.h>
-#include <folly/ssl/Init.h>
 #include <folly/stop_watch.h>
 #include <thrift/lib/cpp2/Flags.h>
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 
+#include "eden/common/telemetry/SessionInfo.h"
+#include "eden/common/telemetry/StructuredLogger.h"
+#include "eden/common/utils/Bug.h"
 #include "eden/fs/config/EdenConfig.h"
 #include "eden/fs/eden-config.h"
 #include "eden/fs/inodes/ServerState.h"
@@ -39,13 +41,10 @@
 #include "eden/fs/store/BackingStoreLogger.h"
 #include "eden/fs/store/EmptyBackingStore.h"
 #include "eden/fs/store/FilteredBackingStore.h"
-#include "eden/fs/store/LocalStoreCachedBackingStore.h"
 #include "eden/fs/store/filter/HgSparseFilter.h"
-#include "eden/fs/store/hg/HgQueuedBackingStore.h"
+#include "eden/fs/store/hg/SaplingBackingStore.h"
 #include "eden/fs/telemetry/IHiveLogger.h"
-#include "eden/fs/telemetry/SessionInfo.h"
-#include "eden/fs/telemetry/StructuredLogger.h"
-#include "eden/fs/utils/Bug.h"
+#include "eden/fs/telemetry/LogEvent.h"
 #include "eden/fs/utils/UserInfo.h"
 #include "eden/fs/utils/WinStackTrace.h"
 
@@ -136,30 +135,23 @@ void EdenMain::runServer(const EdenServer& server) {
 }
 
 namespace {
-std::shared_ptr<HgQueuedBackingStore> createHgQueuedBackingStore(
+std::shared_ptr<SaplingBackingStore> createSaplingBackingStore(
     const BackingStoreFactory::CreateParams& params,
     const AbsolutePath& repoPath,
     std::shared_ptr<ReloadableConfig> reloadableConfig,
-    std::unique_ptr<HgBackingStoreOptions> runtimeOptions) {
-  auto underlyingStore = std::make_unique<HgBackingStore>(
+    std::unique_ptr<SaplingBackingStoreOptions> runtimeOptions) {
+  return std::make_shared<SaplingBackingStore>(
       repoPath,
       params.localStore,
+      params.sharedStats.copy(),
       params.serverState->getThreadPool().get(),
       reloadableConfig,
       std::move(runtimeOptions),
-      params.sharedStats.copy(),
-      params.serverState->getStructuredLogger(),
-      &params.serverState->getFaultInjector());
-
-  return std::make_shared<HgQueuedBackingStore>(
-      params.localStore,
-      params.sharedStats.copy(),
-      std::move(underlyingStore),
-      reloadableConfig,
       params.serverState->getStructuredLogger(),
       std::make_unique<BackingStoreLogger>(
           params.serverState->getStructuredLogger(),
-          params.serverState->getProcessInfoCache()));
+          params.serverState->getProcessInfoCache()),
+      &params.serverState->getFaultInjector());
 }
 } // namespace
 
@@ -174,20 +166,10 @@ void EdenMain::registerStandardBackingStores() {
     const auto repoPath = realpath(params.name);
     auto reloadableConfig = params.serverState->getReloadableConfig();
 
-    auto runtimeOptions = std::make_unique<HgBackingStoreOptions>(
+    auto runtimeOptions = std::make_unique<SaplingBackingStoreOptions>(
         /*ignoreFilteredPathsConfig=*/false);
-    auto hgQueuedBackingStore = createHgQueuedBackingStore(
+    return createSaplingBackingStore(
         params, repoPath, reloadableConfig, std::move(runtimeOptions));
-
-    auto localStoreCaching = reloadableConfig->getEdenConfig()
-                                 ->hgEnableBlobMetaLocalStoreCaching.getValue()
-        ? LocalStoreCachedBackingStore::CachingPolicy::TreesAndBlobMetadata
-        : LocalStoreCachedBackingStore::CachingPolicy::Trees;
-    return std::make_shared<LocalStoreCachedBackingStore>(
-        std::move(hgQueuedBackingStore),
-        params.localStore,
-        params.sharedStats.copy(),
-        localStoreCaching);
   });
 
   registerBackingStore(
@@ -195,24 +177,14 @@ void EdenMain::registerStandardBackingStores() {
       [](const BackingStoreFactory::CreateParams& params) {
         const auto repoPath = realpath(params.name);
         auto reloadableConfig = params.serverState->getReloadableConfig();
-        auto localStoreCaching =
-            reloadableConfig->getEdenConfig()
-                ->hgEnableBlobMetaLocalStoreCaching.getValue()
-            ? LocalStoreCachedBackingStore::CachingPolicy::TreesAndBlobMetadata
-            : LocalStoreCachedBackingStore::CachingPolicy::Trees;
         auto hgSparseFilter = std::make_unique<HgSparseFilter>(repoPath);
 
-        auto options = std::make_unique<HgBackingStoreOptions>(
+        auto options = std::make_unique<SaplingBackingStoreOptions>(
             /*ignoreFilteredPathsConfig=*/true);
-        auto hgQueuedBackingStore = createHgQueuedBackingStore(
+        auto saplingBackingStore = createSaplingBackingStore(
             params, repoPath, reloadableConfig, std::move(options));
-        auto wrappedStore = std::make_shared<FilteredBackingStore>(
-            std::move(hgQueuedBackingStore), std::move(hgSparseFilter));
-        return std::make_shared<LocalStoreCachedBackingStore>(
-            std::move(wrappedStore),
-            params.localStore,
-            params.sharedStats.copy(),
-            localStoreCaching);
+        return std::make_shared<FilteredBackingStore>(
+            std::move(saplingBackingStore), std::move(hgSparseFilter));
       });
 
   registerBackingStore(
@@ -220,11 +192,7 @@ void EdenMain::registerStandardBackingStores() {
       [](const CreateParams& params) -> std::shared_ptr<BackingStore> {
 #ifdef EDEN_HAVE_GIT
         const auto repoPath = realpath(params.name);
-        return std::make_shared<LocalStoreCachedBackingStore>(
-            std::make_shared<GitBackingStore>(repoPath),
-            params.localStore,
-            params.sharedStats.copy(),
-            LocalStoreCachedBackingStore::CachingPolicy::TreesAndBlobMetadata);
+        return std::make_shared<GitBackingStore>(repoPath);
 #else // EDEN_HAVE_GIT
         (void)params;
         throw std::domain_error(

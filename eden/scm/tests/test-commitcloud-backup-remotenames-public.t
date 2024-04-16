@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
 #inprocess-hg-incompatible
   $ setconfig experimental.allowfilepeer=True
 
@@ -62,10 +65,13 @@ Create scratch commit and back it up.
   o  first
   
   $ hg cloud backup
-  backing up stack rooted at ce87a066ebc2
-  commitcloud: backed up 1 commit
-  remote: pushing 1 commit:
-  remote:     ce87a066ebc2  scratch
+  commitcloud: head 'ce87a066ebc2' hasn't been uploaded yet
+  edenapi: queue 1 commit for upload
+  edenapi: queue 1 file for upload
+  edenapi: uploaded 1 file
+  edenapi: queue 1 tree for upload
+  edenapi: uploaded 1 tree
+  edenapi: uploaded 1 changeset
   $ cd ..
 
 Create second client
@@ -106,11 +112,13 @@ Download scratch commit. It also downloads a few public commits
 
 Run cloud backup and make sure only scratch commits are backed up.
   $ hg cloud backup
-  nothing to back up
+  commitcloud: nothing to upload
   $ mkcommit scratch2
   $ hg cloud backup
-  backing up stack rooted at ce87a066ebc2
-  commitcloud: backed up 1 commit
-  remote: pushing 2 commits:
-  remote:     ce87a066ebc2  scratch
-  remote:     4dbf2c8dd7d9  scratch2
+  commitcloud: head '4dbf2c8dd7d9' hasn't been uploaded yet
+  edenapi: queue 1 commit for upload
+  edenapi: queue 1 file for upload
+  edenapi: uploaded 1 file
+  edenapi: queue 1 tree for upload
+  edenapi: uploaded 1 tree
+  edenapi: uploaded 1 changeset

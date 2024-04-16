@@ -16,10 +16,10 @@ use async_trait::async_trait;
 use blobstore::Loadable;
 use bookmarks_types::BookmarkKey;
 use bookmarks_types::BookmarkKind;
-use changeset_fetcher::ChangesetFetcherRef;
 use changesets::ChangesetsRef;
 use chrono::DateTime;
 use chrono::Utc;
+use commit_graph::CommitGraphRef;
 use context::CoreContext;
 use ephemeral_blobstore::BubbleId;
 use futures::stream;
@@ -179,7 +179,7 @@ impl PlainCommitInfo {
 
         let (mut pusher_correlator, mut pusher_entry_point, mut pusher_main_id) =
             (None, None, None);
-        if let Some(cri) = ctx.metadata().client_request_info() {
+        if let Some(cri) = ctx.client_request_info() {
             pusher_correlator = Some(cri.correlator.clone());
             pusher_entry_point = Some(cri.entry_point.to_string());
             pusher_main_id = cri.main_id.clone();
@@ -330,7 +330,7 @@ pub async fn log_new_bonsai_changesets(
 /// once when they're actually created, second time when they become public.
 pub async fn find_draft_ancestors(
     ctx: &CoreContext,
-    repo: &(impl RepoIdentityRef + RepoConfigRef + PhasesRef + ChangesetFetcherRef + RepoBlobstoreRef),
+    repo: &(impl RepoIdentityRef + RepoConfigRef + PhasesRef + CommitGraphRef + RepoBlobstoreRef),
     to_cs_id: ChangesetId,
 ) -> Result<Vec<BonsaiChangeset>, Error> {
     ctx.scuba()
@@ -354,7 +354,7 @@ pub async fn find_draft_ancestors(
         }
         drafts.push(cs_id);
 
-        let parents = repo.changeset_fetcher().get_parents(ctx, cs_id).await?;
+        let parents = repo.commit_graph().changeset_parents(ctx, cs_id).await?;
         for p in parents {
             if visited.insert(p) {
                 queue.push_back(p);

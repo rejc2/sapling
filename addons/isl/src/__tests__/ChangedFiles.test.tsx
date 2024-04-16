@@ -21,9 +21,8 @@ import {
   simulateMessageFromServer,
 } from '../testUtils';
 import {leftPad} from '../utils';
-import {fireEvent, render, screen} from '@testing-library/react';
+import {fireEvent, render, screen, act} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {act} from 'react-dom/test-utils';
 
 jest.mock('shared/OperatingSystem', () => ({
   isMac: true,
@@ -45,7 +44,7 @@ describe('Changed Files', () => {
         value: [
           COMMIT('1', 'some public base', '0', {phase: 'public'}),
           COMMIT('a', 'My Commit', '1'),
-          COMMIT('b', 'Another Commit', 'a', {isHead: true}),
+          COMMIT('b', 'Another Commit', 'a', {isDot: true}),
         ],
       });
       // Reset to the default display type.
@@ -309,7 +308,7 @@ describe('Changed Files', () => {
           value: [
             COMMIT('1', 'some public base', '0', {phase: 'public'}),
             COMMIT('a', 'Commit', '1', {
-              isHead: true,
+              isDot: true,
               filesSample: makeFiles(500),
               totalFileCount: 1010,
             }),

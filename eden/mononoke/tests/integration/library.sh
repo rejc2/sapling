@@ -603,6 +603,9 @@ edenapi.cert=$TEST_CERTDIR/${OVERRIDE_CLIENT_CERT:-client0}.crt
 edenapi.key=$TEST_CERTDIR/${OVERRIDE_CLIENT_CERT:-client0}.key
 edenapi.prefix=localhost
 edenapi.cacerts=$TEST_CERTDIR/root-ca.crt
+
+[checkout]
+use-rust=false
 EOF
 }
 
@@ -721,6 +724,7 @@ function db_config() {
     echo "primary = { db_address = \"$DB_SHARD_NAME\" }"
     echo "filenodes = { unsharded = { db_address = \"$DB_SHARD_NAME\" } }"
     echo "mutation = { db_address = \"$DB_SHARD_NAME\" }"
+    echo "commit_cloud = { db_address = \"$DB_SHARD_NAME\" }"
   else
     echo "[$blobstorename.metadata.local]"
     echo "local_db_path = \"$TESTTMP/monsql\""
@@ -1155,7 +1159,7 @@ CONFIG
 else
   cat >> "repos/$reponame_urlencoded/server.toml" <<CONFIG
 [derived_data_config.available_configs.default]
-types=["blame", "changeset_info", "deleted_manifest", "fastlog", "filenodes", "fsnodes", "unodes", "hgchangesets", "skeleton_manifests", "bssm_v3", "testmanifest", "testshardedmanifest"]
+types=["blame", "changeset_info", "deleted_manifest", "fastlog", "filenodes", "fsnodes", "unodes", "hgchangesets", "skeleton_manifests", "bssm_v3", "test_manifests", "test_sharded_manifests"]
 CONFIG
 fi
 
@@ -1440,7 +1444,7 @@ function wait_for_bookmark_delete() {
 function get_bookmark_value_edenapi {
   local repo="$1"
   local bookmark="$2"
-  REPONAME="$repo" hgedenapi debugapi -e bookmarks -i "[\"$bookmark\"]" | jq ".$bookmark"
+  REPONAME="$repo" hgedenapi debugapi -e bookmarks -i "[\"$bookmark\"]" | jq -r ".$bookmark"
 }
 
 function wait_for_bookmark_move_away_edenapi() {
@@ -1460,6 +1464,24 @@ function wait_for_bookmark_move_away_edenapi() {
     fi
     sleep 2
     flush_mononoke_bookmarks
+  done
+}
+
+function wait_for_git_bookmark_move() {
+  local bookmark_name="$1"
+  local last_bookmark_target="$2"
+  local attempt=1
+  last_status_regex="$last_bookmark_target\s+$bookmark_name"
+  last_status="$last_bookmark_target$bookmark_name"
+  while [[ "$(git_client ls-remote --quiet | grep -E "$last_status_regex" | tr -d '[:space:]')" == "$last_status" ]]
+  do
+    attempt=$((attempt + 1))
+    if [[ $attempt -gt 30 ]]
+    then
+        echo "bookmark move of $bookmark away from $last_bookmark_target has not happened"
+        return 1
+    fi
+    sleep 2
   done
 }
 
@@ -1620,7 +1642,13 @@ function lfs_server {
 }
 
 function git_client {
-  git -c http.sslCAInfo="$TEST_CERTDIR/root-ca.crt" -c http.sslCert="$TEST_CERTDIR/localhost.crt" -c http.sslKey="$TEST_CERTDIR/localhost.key" "$@"
+  git_client_as "client0" "$@"
+}
+
+function git_client_as {
+  local name="$1"
+  shift
+  git -c http.sslCAInfo="$TEST_CERTDIR/root-ca.crt" -c http.sslCert="$TEST_CERTDIR/$name.crt" -c http.sslKey="$TEST_CERTDIR/$name.key" "$@"
 }
 
 function mononoke_git_service {
@@ -1635,6 +1663,7 @@ function mononoke_git_service {
     --tls-certificate "$TEST_CERTDIR/localhost.crt" \
     --tls-ticket-seeds "$TEST_CERTDIR/server.pem.seeds" \
     --listen-port 0 \
+    --scuba-dataset "file://$TESTTMP/scuba.json" \
     --log-level DEBUG \
     --mononoke-config-path "$TESTTMP/mononoke-config" \
     --bound-address-file "$TESTTMP/mononoke_git_service_addr.txt" \
@@ -1648,7 +1677,7 @@ function mononoke_git_service {
     "${MONONOKE_GIT_SERVICE_START_TIMEOUT:-"$MONONOKE_GIT_SERVICE_DEFAULT_START_TIMEOUT"}" "$bound_addr_file"
 
   export MONONOKE_GIT_SERVICE_BASE_URL
-  MONONOKE_GIT_SERVICE_BASE_URL="https://localhost:$MONONOKE_GIT_SERVICE_PORT"
+  MONONOKE_GIT_SERVICE_BASE_URL="https://localhost:$MONONOKE_GIT_SERVICE_PORT/repos/git/ro"
 }
 
 # Run an hg binary configured with the settings required to talk to Mononoke
@@ -1730,7 +1759,7 @@ EOF
 }
 
 function hgmn_clone() {
-  quiet hgmn clone --shallow  --config remotefilelog.reponame="$REPONAME" "$@" --config extensions.treemanifest= --config treemanifest.treeonly=True && \
+  quiet hgmn clone --shallow  --config extensions.remotenames= --config remotefilelog.reponame="$REPONAME" "$@" --config extensions.treemanifest= --config treemanifest.treeonly=True && \
   cat >> "$2"/.hg/hgrc <<EOF
 [extensions]
 treemanifest=
@@ -1852,12 +1881,12 @@ EOF
 
 function setup_hg_lfs() {
   cat >> .hg/hgrc <<EOF
-[extensions]
-lfs=
 [lfs]
 url=$1
 threshold=$2
 usercache=$3
+[remotefilelog]
+lfs=True
 EOF
 }
 
@@ -2451,4 +2480,14 @@ function zeloscli() {
   PORT=$1
   shift
   "$ZELOSCLI" --server localhost:"$PORT" -x "$@" 2>/dev/null
+}
+
+function x_repo_lookup() {
+  SOURCE_REPO="$1"
+  TARGET_REPO="$2"
+  HASH="$3"
+  TRANSLATED=$(REPONAME=$SOURCE_REPO hgedenapi debugapi -e committranslateids -i "[{'Hg': '$HASH'}]" -i "'Hg'" -i "'$SOURCE_REPO'" -i "'$TARGET_REPO'")
+  hgedenapi debugshell <<EOF
+print(hex(${TRANSLATED}[0]["translated"]["Hg"]))
+EOF
 }

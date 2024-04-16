@@ -6,6 +6,7 @@
  */
 
 include "fb303/thrift/fb303_core.thrift"
+include "thrift/annotation/thrift.thrift"
 include "configerator/structs/scm/mononoke/megarepo/megarepo_configs.thrift"
 include "eden/mononoke/derived_data/if/derived_data_type.thrift"
 
@@ -209,6 +210,12 @@ struct CommitInfo {
   /// Extra git headers associated with the commit if the commit is a
   /// mirrored version from a git repo.
   10: optional map<small_binary, binary_bytes> git_extra_headers;
+
+  /// The date the commit was committed (if available - commit comes from Git).
+  11: optional i64 committer_date;
+
+  /// The identity of the person who committed this commit, as opposed to authored it (if available - commit comes from Git).
+  12: optional string committer;
 }
 
 struct BookmarkInfo {
@@ -298,11 +305,11 @@ struct TreeInfo {
   /// The id of the tree that can be used in subsequent look-ups.
   1: binary id;
 
-  /// The sha1 of the simple format of the directory.
-  2: binary simple_format_sha1;
+  /// DEPRECATED: The sha1 of the simple format of the directory.
+  2: optional binary simple_format_sha1;
 
-  /// The sha256 of the simple format of the directory.
-  3: binary simple_format_sha256;
+  /// DEPRECATED: The sha256 of the simple format of the directory.
+  3: optional binary simple_format_sha256;
 
   /// The count of files inside the directory (excluding files inside
   /// subdirectories).
@@ -963,7 +970,7 @@ struct RepoCreateStackParams {
 }
 
 struct RepoCreateBookmarkParams {
-  /// The name of the bookmark to move.
+  /// The name of the bookmark to create.
   1: string bookmark;
 
   /// The target commit for the bookmark.
@@ -972,7 +979,7 @@ struct RepoCreateBookmarkParams {
   /// The pushvars to use when creating the bookmark.
   4: optional map<string, binary> pushvars;
 
-  /// Service identity to use for this bookmark move.
+  /// Service identity to use for this bookmark creation.
   3: optional string service_identity;
 }
 
@@ -1105,6 +1112,8 @@ struct CommitInfoParams {
   /// Commit identity schemes to return.
   1: set<CommitIdentityScheme> identity_schemes;
 }
+
+struct CommitGenerationParams {}
 
 /// Parameters for the `commit_is_ancestor_of` method.
 ///
@@ -1455,6 +1464,10 @@ struct CommitLookupXRepoParams {
   /// Do not sync the requests commit on-demand. Returns quicker with result or not-existing mapped
   /// commit if the commit wasn't synced yet.
   4: bool no_ondemand_sync;
+  /// Return result only if there's exact match for the requested commit - rather than commit with
+  /// equivalent working copy (which happens in case the source commit rewrites to nothing in target
+  /// repo).
+  5: bool exact;
 }
 
 /// Synchronization target
@@ -2048,19 +2061,21 @@ enum RequestErrorKind {
   MERGE_CONFLICTS = 11,
 }
 
-exception RequestError {
+stateful client exception RequestError {
   1: RequestErrorKind kind;
+  @thrift.ExceptionMessage
   2: string reason;
-} (message = "reason")
+}
 
-exception InternalError {
+transient server exception InternalError {
+  @thrift.ExceptionMessage
   1: string reason;
   2: optional string backtrace;
   3: list<string> source_chain;
-} (message = "reason")
+}
 
 struct RequestErrorStruct {
-  1: source_control.RequestErrorKind kind;
+  1: RequestErrorKind kind;
   2: string reason;
 }
 
@@ -2080,11 +2095,12 @@ struct PushrebaseConflict {
   2: Path right;
 }
 
-exception PushrebaseConflictsException {
+permanent client exception PushrebaseConflictsException {
+  @thrift.ExceptionMessage
   1: string reason;
   /// Always non-empty
   2: list<PushrebaseConflict> conflicts;
-} (message = "reason")
+}
 
 struct HookRejection {
   /// The hook that rejected the output
@@ -2095,11 +2111,12 @@ struct HookRejection {
   3: HookOutcomeRejected reason;
 }
 
-exception HookRejectionsException {
+stateful client exception HookRejectionsException {
+  @thrift.ExceptionMessage
   1: string reason;
   /// Always non-empty
   2: list<HookRejection> rejections;
-} (message = "reason")
+}
 
 /// Service Definition
 
@@ -2265,6 +2282,12 @@ service SourceControlService extends fb303_core.BaseService {
   CommitInfo commit_info(
     1: CommitSpecifier commit,
     2: CommitInfoParams params,
+  ) throws (1: RequestError request_error, 2: InternalError internal_error);
+
+  /// Get commit generation.
+  i64 commit_generation(
+    1: CommitSpecifier commit,
+    2: CommitGenerationParams params,
   ) throws (1: RequestError request_error, 2: InternalError internal_error);
 
   /// Check if this commit is an ancestor of some other commit.

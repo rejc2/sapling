@@ -14,12 +14,12 @@ import {Tooltip} from './Tooltip';
 import {codeReviewProvider, allDiffSummaries} from './codeReview/CodeReviewInfo';
 import {t, T} from './i18n';
 import {HideOperation} from './operations/HideOperation';
+import {useRunOperation} from './operationsState';
 import {type Dag, dagWithPreviews} from './previews';
-import {useRunOperation} from './serverAPIState';
 import {VSCodeButton} from '@vscode/webview-ui-toolkit/react';
 import {useAtomValue} from 'jotai';
 import {Icon} from 'shared/Icon';
-import {unwrap} from 'shared/utils';
+import {nullthrows} from 'shared/utils';
 
 export function isStackEligibleForCleanup(
   hash: Hash,
@@ -33,7 +33,7 @@ export function isStackEligibleForCleanup(
     .every(h => {
       const info = dag.get(h);
       // don't allow hiding a stack you're checked out on
-      if (info == null || info.isHead) {
+      if (info == null || info.isDot) {
         return false;
       }
       // allow clean up obsoleted commits regardless of review state
@@ -99,7 +99,7 @@ export function CleanupAllButton() {
         contextKey="cleanup-all"
         runOperation={() => {
           return cleanableStacks.map(hash => {
-            const info = unwrap(dag.get(hash));
+            const info = nullthrows(dag.get(hash));
             return new HideOperation(latestSuccessorUnlessExplicitlyObsolete(info));
           });
         }}

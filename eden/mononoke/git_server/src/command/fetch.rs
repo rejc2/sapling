@@ -10,10 +10,8 @@ use gix_hash::ObjectId;
 use gix_packetline::PacketLineRef;
 use gix_packetline::StreamingPeekableIter;
 use gix_transport::bstr::ByteSlice;
-use protocol::types::DeltaInclusion;
-use protocol::types::PackItemStreamRequest;
-use protocol::types::PackfileItemInclusion;
-use protocol::types::TagInclusion;
+use protocol::types::FetchRequest;
+use protocol::types::PackfileConcurrency;
 
 const DONE: &[u8] = b"done";
 const THIN_PACK: &[u8] = b"thin-pack";
@@ -41,62 +39,62 @@ const PACKFILE_URIS_SEPARATOR: &str = ",";
 pub struct FetchArgs {
     /// Indicates to the server the objects which the client wants to
     /// retrieve
-    wants: Vec<ObjectId>,
+    pub wants: Vec<ObjectId>,
     /// Indicates to the server the objects which the client already has
     /// locally
-    haves: Vec<ObjectId>,
+    pub haves: Vec<ObjectId>,
     /// Indicates to the server that negotiation should terminate (or
     /// not even begin if performing a clone) and that the server should
     /// use the information supplied in the request to construct the packfile
-    done: bool,
+    pub done: bool,
     /// Request that a thin pack be sent, which is a pack with deltas
     /// which reference base objects not contained within the pack (but
     /// are known to exist at the receiving end)
-    thin_pack: bool,
+    pub thin_pack: bool,
     /// Request that progress information that would normally be sent on
     /// side-band channel 2, during the packfile transfer, should not be sent
-    no_progress: bool,
+    pub no_progress: bool,
     /// Request that annotated tags should be sent if the objects they
     /// point to are being sent.
-    include_tag: bool,
+    pub include_tag: bool,
     /// Indicate that the client understands PACKv2 with delta referring
     /// to its base by position in pack rather than by an oid
-    ofs_delta: bool,
+    pub ofs_delta: bool,
     /// List of object Ids representing the edge of the shallow history present
     /// at the client, i.e. the set of commits that the client knows about but
     /// does not have any of their parents and their ancestors
-    shallow: Vec<ObjectId>,
+    pub shallow: Vec<ObjectId>,
     /// Requests that the fetch/clone should be shallow having a commit
     /// depth of "deepen" relative to the server
-    deepen: Option<u32>,
+    pub deepen: Option<u32>,
     /// Requests that the semantics of the "deepen" command be changed
     /// to indicate that the depth requested is relative to the client's
     /// current shallow boundary, instead of relative to the requested commits.
-    deepen_relative: bool,
+    pub deepen_relative: bool,
     /// Requests that the shallow clone/fetch should be cut at a specific time,
     /// instead of depth. The timestamp provided should be in the same format
     /// as is expected for git rev-list --max-age <timestamp>
-    deepen_since: Option<gix_date::Time>,
+    pub deepen_since: Option<gix_date::Time>,
     /// Requests that the shallow clone/fetch should be cut at a specific revision
     /// instead of a depth, i.e. the specified oid becomes the boundary at which the
     /// fetch or clone should stop at
-    deepen_not: Option<ObjectId>,
+    pub deepen_not: Option<ObjectId>,
     /// Request that various objects from the packfile be omitted using
     /// one of several filtering techniques
-    filter: Option<String>,
-    /// Indicates to the server that the client wants to retrieve a particular ref
-    /// by providing the full name of the ref on the server
-    want_ref: Option<String>,
+    pub filter: Option<String>,
+    /// Indicates to the server that the client wants to retrieve a particular set of
+    /// refs by providing the full name of the ref on the server
+    pub want_refs: Vec<String>,
     /// Instruct the server to send the whole response multiplexed, not just the
     /// packfile section
-    sideband_all: bool,
+    pub sideband_all: bool,
     /// Indicates to the server that the client is willing to receive URIs of any
     /// of the given protocols in place of objects in the sent packfile. Before
     /// performing the connectivity check, the client should download from all given URIs
-    packfile_uris: Vec<String>,
+    pub packfile_uris: Vec<String>,
     /// Indicates to the server that it should never send "ready", but should wait
     /// for the client to say "done" before sending the packfile
-    wait_for_done: bool,
+    pub wait_for_done: bool,
 }
 
 fn parse_oid(data: &[u8], oid_type: &[u8]) -> anyhow::Result<ObjectId> {
@@ -122,6 +120,19 @@ fn bytes_to_str<'a, 'b, 'c>(
 }
 
 impl FetchArgs {
+    /// Method determining if the fetch request is a shallow fetch request
+    pub fn is_shallow(&self) -> bool {
+        !self.shallow.is_empty()
+            || self.deepen.is_some()
+            || self.deepen_since.is_some()
+            || self.deepen_not.is_some()
+    }
+
+    /// Method determining if the fetch request is a filter fetch request
+    pub fn is_filter(&self) -> bool {
+        self.filter.is_some()
+    }
+
     fn validate(&self) -> anyhow::Result<()> {
         if self.deepen.is_some() && self.deepen_since.is_some() {
             anyhow::bail!(
@@ -171,7 +182,7 @@ impl FetchArgs {
                     fetch_args.filter = Some(filter_spec);
                 } else if let Some(want_ref) = data.strip_prefix(WANT_REF_PREFIX) {
                     let want_ref = bytes_to_str(want_ref, "want_ref", "want-ref")?.to_owned();
-                    fetch_args.want_ref = Some(want_ref);
+                    fetch_args.want_refs.push(want_ref);
                 } else if let Some(packfile_uris) = data.strip_prefix(PACKFILE_URIS_PREFIX) {
                     let packfile_uris =
                         bytes_to_str(packfile_uris, "packfile_uris", "packfile-uris")?;
@@ -207,13 +218,22 @@ impl FetchArgs {
         Ok(fetch_args)
     }
 
-    //NOTE: This request is only for full clone and will not work for incremental pulls
-    pub fn into_request(self) -> PackItemStreamRequest {
-        PackItemStreamRequest::full_repo(
-            DeltaInclusion::standard(),
-            TagInclusion::AsIs,
-            PackfileItemInclusion::FetchAndStore,
-        )
+    /// Convert the fetch command args into FetchRequest instance
+    pub fn into_request(self, concurrency: PackfileConcurrency) -> FetchRequest {
+        FetchRequest {
+            heads: self.wants,
+            bases: self.haves,
+            include_out_of_pack_deltas: self.thin_pack,
+            include_annotated_tags: self.include_tag,
+            offset_delta: self.ofs_delta,
+            shallow: self.shallow,
+            deepen: self.deepen,
+            deepen_since: self.deepen_since,
+            deepen_not: self.deepen_not,
+            deepen_relative: self.deepen_relative,
+            filter: self.filter,
+            concurrency,
+        }
     }
 }
 
@@ -238,6 +258,8 @@ mod tests {
         packetline_writer.write_all(b"sideband-all\n")?;
         packetline_writer.write_all(b"shallow 0000000000000000000000000000000000000000\n")?;
         packetline_writer.write_all(b"deepen 1\n")?;
+        packetline_writer.write_all(b"want-ref refs/heads/master\n")?;
+        packetline_writer.write_all(b"want-ref refs/heads/release\n")?;
         packetline_writer.write_all(b"have 0000000000000000000000000000000000000000\n")?;
         packetline_writer.write_all(b"want 0000000000000000000000000000000000000000\n")?;
         packetline_writer.write_all(b"have 1000000000000000000000000000000000000001\n")?;

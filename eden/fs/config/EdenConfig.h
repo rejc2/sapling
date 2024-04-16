@@ -260,6 +260,19 @@ class EdenConfig : private ConfigSettingManager {
       this};
 
   /**
+   * If Eden is using custom permission checking, the list of methods that any
+   * user can call.
+   */
+  ConfigSetting<std::vector<std::string>> thriftFunctionsAllowlist{
+      "thrift:functions-allowlist",
+      std::vector<std::string>{
+          "BaseService.getCounter",
+          "BaseService.getCounters",
+          "BaseService.getRegexCounters",
+          "BaseService.getSelectedCounters"},
+      this};
+
+  /**
    * The number of Thrift worker threads.
    */
   ConfigSetting<size_t> thriftNumWorkers{
@@ -442,6 +455,14 @@ class EdenConfig : private ConfigSettingManager {
   ConfigSetting<int32_t> fuseMaximumRequests{
       "fuse:max-concurrent-requests",
       1000,
+      this};
+
+  /**
+   * The number of FUSE dispatcher threads to spawn.
+   */
+  ConfigSetting<int32_t> fuseNumDispatcherThreads{
+      "fuse:num-dispatcher-threads",
+      16,
       this};
 
   /**
@@ -699,7 +720,7 @@ class EdenConfig : private ConfigSettingManager {
   ConfigSetting<bool> fetchHgAuxMetadata{"hg:fetch-aux-metadata", true, this};
 
   /**
-   * Which object ID format should the HgBackingStore use?
+   * Which object ID format should the SaplingBackingStore use?
    */
   ConfigSetting<HgObjectIdFormat> hgObjectIdFormat{
       "hg:object-id-format",
@@ -721,12 +742,12 @@ class EdenConfig : private ConfigSettingManager {
 
   /**
    * Controls the number of blob or prefetch import requests we batch in
-   * HgBackingStore
+   * SaplingBackingStore
    */
   ConfigSetting<uint32_t> importBatchSize{"hg:import-batch-size", 1, this};
 
   /**
-   * Controls the number of tree import requests we batch in HgBackingStore
+   * Controls the number of tree import requests we batch in SaplingBackingStore
    */
   ConfigSetting<uint32_t> importBatchSizeTree{
       "hg:import-batch-size-tree",
@@ -735,7 +756,7 @@ class EdenConfig : private ConfigSettingManager {
 
   /**
    * Controls the max number of blob metadata import requests we batch in
-   * HgBackingStore
+   * SaplingBackingStore
    */
   ConfigSetting<uint32_t> importBatchSizeBlobMeta{
       "hg:import-batch-size-blobmeta",
@@ -1020,6 +1041,39 @@ class EdenConfig : private ConfigSettingManager {
       false,
       this};
 
+  /**
+   * Controls if EdenFS runs a checkout operation on EdenServer's
+   * EdenCPUThreadPool or using the Thrift CPU workers.
+   *
+   * This is a temporary option to help us mitigate and understand S399431.
+   */
+  ConfigSetting<bool> runCheckoutOnEdenCPUThreadpool{
+      "experimental:run-checkout-on-eden-threadpool",
+      false,
+      this};
+
+  /**
+   * Controls if EdenFS runs a prefetch operation serially or not.
+   *
+   * This is a temporary option to help us mitigate and understand S399431.
+   */
+  ConfigSetting<bool> runSerialPrefetch{
+      "experimental:run-serial-prefetch",
+      false,
+      this};
+
+  /**
+   * Controls if batches are sent to Sapling with FetchMode::AllowRemote
+   * or batches are sent to Sapling with FetchMode::LocalOnly and then the
+   * failed requests are sent to Sapling again with FetchMode::RemoteOnly.
+   *
+   * This is a temporary option to test metrics on this new way of batching
+   */
+  ConfigSetting<bool> allowRemoteGetBatch{
+      "experimental:allow-remote-get-batch",
+      true,
+      this};
+
   // [blobcache]
 
   /**
@@ -1092,7 +1146,7 @@ class EdenConfig : private ConfigSettingManager {
    */
   ConfigSetting<bool> enableEdenMenu{
       "notifications:enable-eden-menu",
-      false,
+      true,
       this};
 
   /**
@@ -1100,7 +1154,7 @@ class EdenConfig : private ConfigSettingManager {
    */
   ConfigSetting<bool> enableNotifications{
       "notifications:enable-notifications",
-      false,
+      true,
       this};
 
   /**
@@ -1108,7 +1162,7 @@ class EdenConfig : private ConfigSettingManager {
    */
   ConfigSetting<bool> enableEdenDebugMenu{
       "notifications:enable-debug",
-      false,
+      true,
       this};
 
   // [log]

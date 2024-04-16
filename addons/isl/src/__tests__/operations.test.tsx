@@ -6,6 +6,7 @@
  */
 
 import App from '../App';
+import {tracker} from '../analytics';
 import {mostRecentSubscriptionIds} from '../serverAPIState';
 import {CommitTreeListTestUtils} from '../testQueries';
 import {
@@ -20,8 +21,7 @@ import {
   COMMIT,
   expectYouAreHerePointAt,
 } from '../testUtils';
-import {fireEvent, render, screen, within} from '@testing-library/react';
-import {act} from 'react-dom/test-utils';
+import {fireEvent, render, screen, within, act} from '@testing-library/react';
 import * as utils from 'shared/utils';
 
 const {clickGoto} = CommitTreeListTestUtils;
@@ -365,9 +365,10 @@ describe('operations', () => {
     });
 
     it('force clears optimistic state after fetching after an operation has finished', () => {
+      jest.spyOn(tracker, 'track').mockImplementation(() => null);
       const commitsBeforeOperations = {
         value: [
-          COMMIT('e', 'Commit E', 'd', {isHead: true}),
+          COMMIT('e', 'Commit E', 'd', {isDot: true}),
           COMMIT('d', 'Commit D', 'c'),
           COMMIT('c', 'Commit C', 'b'),
           COMMIT('b', 'Commit B', 'a'),
@@ -378,7 +379,7 @@ describe('operations', () => {
       const commitsAfterOperations = {
         value: [
           COMMIT('e2', 'Commit E', 'd2'),
-          COMMIT('d2', 'Commit D', 'c2', {isHead: true}), // goto
+          COMMIT('d2', 'Commit D', 'c2', {isDot: true}), // goto
           COMMIT('c2', 'Commit C', 'a'), // rebased
           COMMIT('b', 'Commit B', 'a'),
           COMMIT('a', 'Commit A', '1'),

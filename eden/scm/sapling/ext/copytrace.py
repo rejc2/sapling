@@ -71,10 +71,7 @@ The following are configs to tune the behavior of copy tracing algorithm:
 """
 
 import codecs
-import collections
-
 import os
-import time
 
 from sapling import (
     cmdutil,
@@ -103,16 +100,6 @@ configitem("copytrace", "enableamendcopytrace", default=True)
 configitem("copytrace", "amendcopytracecommitlimit", default=100)
 configitem("copytrace", "dagcopytrace", default=False)
 
-defaultdict = collections.defaultdict
-_copytracinghint: str = (
-    "hint: if this message is due to a moved file, you can "
-    + "ask mercurial to attempt to automatically resolve this "
-    + "change by re-running with the --config=experimental.copytrace=on flag, but "
-    + "this will significantly slow down the operation, so you "
-    + "will need to be patient.\n"
-    + "Source control team is working on fixing this problem.\n"
-)
-
 
 def uisetup(ui) -> None:
     extensions.wrapfunction(dispatch, "runcommand", _runcommand)
@@ -124,7 +111,6 @@ def extsetup(ui) -> None:
     # enabled copytracing
     filemerge._localchangedotherdeletedmsg = _(
         "local%(l)s changed %(fd)s which other%(o)s deleted%(fa)s\n"
-        + _copytracinghint
         + "use (c)hanged version, (d)elete, or leave (u)nresolved?"
         "$$ &Changed $$ &Delete $$ &Unresolved"
     )
@@ -235,7 +221,7 @@ def _amend(orig, ui, repo, old, extra, pats, opts):
 
     This function collects the copytrace information from the working copy and
     stores it against the amended commit in a separate dbm file. Later,
-    in _domergecopies, this information will be merged with the rebase
+    in _mergecopies, this information will be merged with the rebase
     copytrace data to incorporate renames and copies made during the amend.
     """
 
@@ -358,28 +344,8 @@ def _getamendcopies(repo, dest, ancestor):
             pass
 
 
-def _mergecopies(orig, repo, cdst, csrc, base):
-    start = time.time()
-    try:
-        return _domergecopies(orig, repo, cdst, csrc, base)
-    except Exception as e:
-        # make sure we don't break clients
-        repo.ui.log(
-            "copytrace",
-            "Copytrace failed: %s" % e,
-            reponame=_getreponame(repo, repo.ui),
-        )
-        return {}, {}, {}, {}, {}
-    finally:
-        repo.ui.log(
-            "copytracingduration",
-            "",
-            copytracingduration=time.time() - start,
-        )
-
-
 @util.timefunction("mergecopies")
-def _domergecopies(orig, repo, cdst, csrc, base):
+def _mergecopies(orig, repo, cdst, csrc, base):
     """Fast copytracing using filename heuristics
 
     Handle one case where we assume there are no merge commits in
@@ -444,17 +410,25 @@ def _domergecopies(orig, repo, cdst, csrc, base):
 
     copies = {}
 
-    ctx = csrc
     changedfiles = set()
     sourcecommitnum = 0
     sourcecommitlimit = repo.ui.configint("copytrace", "sourcecommitlimit")
     mdst = cdst.manifest()
-    while ctx != base:
-        if len(ctx.parents()) == 2:
+
+    if repo.ui.cmdname == "backout":
+        # for `backout` operation, `base` is the commit we want to backout and
+        # `csrc` is the parent of the `base` commit.
+        curr, target = base, csrc
+    else:
+        # for normal cases, `base` is the parent of `csrc`
+        curr, target = csrc, base
+
+    while curr != target:
+        if len(curr.parents()) == 2:
             # To keep things simple let's not handle merges
             return orig(repo, cdst, csrc, base)
-        changedfiles.update(ctx.files())
-        ctx = ctx.p1()
+        changedfiles.update(curr.files())
+        curr = curr.p1()
         sourcecommitnum += 1
         if sourcecommitnum > sourcecommitlimit:
             return orig(repo, cdst, csrc, base)

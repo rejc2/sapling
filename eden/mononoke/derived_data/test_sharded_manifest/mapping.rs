@@ -16,7 +16,7 @@ use derived_data_manager::dependencies;
 use derived_data_manager::BonsaiDerivable;
 use derived_data_manager::DerivableType;
 use derived_data_manager::DerivationContext;
-use derived_data_service_if::types as thrift;
+use derived_data_service_if as thrift;
 use mononoke_types::test_sharded_manifest::TestShardedManifestDirectory;
 use mononoke_types::BlobstoreBytes;
 use mononoke_types::BonsaiChangeset;
@@ -65,7 +65,7 @@ impl From<RootTestShardedManifestDirectory> for BlobstoreBytes {
 
 #[async_trait]
 impl BonsaiDerivable for RootTestShardedManifestDirectory {
-    const VARIANT: DerivableType = DerivableType::TestShardedManifest;
+    const VARIANT: DerivableType = DerivableType::TestShardedManifests;
 
     type Dependencies = dependencies![];
     type PredecessorDependencies = dependencies![RootTestManifestDirectory];

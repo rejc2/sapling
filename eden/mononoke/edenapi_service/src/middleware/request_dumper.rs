@@ -15,6 +15,7 @@ use fbinit::FacebookInit;
 use gotham::state::FromState;
 use gotham::state::State;
 use gotham_derive::StateData;
+use gotham_ext::middleware::request_context::RequestContext;
 use gotham_ext::middleware::Middleware;
 use gotham_ext::middleware::PostResponseCallbacks;
 use gotham_ext::state_ext::StateExt;
@@ -25,8 +26,6 @@ use lazy_static::lazy_static;
 use scuba_ext::MononokeScubaSampleBuilder;
 use slog::trace;
 use slog::warn;
-
-use crate::middleware::RequestContext;
 
 static MAX_BODY_LEN: usize = 16 * 1024; // 16 KB
 static MAX_BODY_LEN_DEBUG: usize = 4 * 1024; // 4 KB
@@ -238,7 +237,7 @@ impl Middleware for RequestDumperMiddleware {
                         return;
                     }
                     request_dumper.add_duration(dur_ms);
-                    let cri = rctx.ctx.metadata().client_request_info();
+                    let cri = rctx.ctx.client_request_info();
                     if let Some(cri) = cri {
                         request_dumper.add_client_correlator(cri.correlator.as_str());
                         request_dumper.add_client_entry_point(cri.entry_point.to_string().as_str());

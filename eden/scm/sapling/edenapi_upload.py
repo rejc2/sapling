@@ -7,7 +7,7 @@ from __future__ import absolute_import
 
 import bindings
 
-from . import error, mutation, node as nodemod
+from . import error, mutation, node as nodemod, util
 from .i18n import _, _n
 
 TOKEN_KEY = "token"
@@ -79,7 +79,8 @@ def _uploadfilenodes(repo, fctxs):
     dpack, _hpack = repo.fileslog.getmutablelocalpacks()
     try:
         with repo.ui.timesection("http.edenapi.upload_files"):
-            stream, _stats = repo.edenapi.uploadfiles(dpack, keys)
+            use_sha1 = util.istest() and "sha1-only" in repo.edenapi.capabilities()
+            stream, _stats = repo.edenapi.uploadfiles(dpack, keys, use_sha1)
             items = list(stream)
             repo.ui.status(
                 _n(
@@ -119,6 +120,9 @@ def _uploadtrees(repo, trees):
 
 def _uploadchangesets(repo, changesets, mutations):
     """Upload changesets"""
+    if not repo.ui.configbool("experimental", "upload-mutations", True):
+        mutations = []
+
     uploaded, failed = [], []
     if not changesets:
         return uploaded, failed

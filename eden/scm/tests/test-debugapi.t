@@ -1,5 +1,8 @@
 #debugruntest-compatible
 
+#require no-eden
+
+
   $ configure modern
   $ setconfig paths.default=test:e1 ui.ssh=false
 
@@ -33,7 +36,8 @@ Test APIs:
 
   $ hg debugapi -e capabilities
   ["segmented-changelog",
-   "commit-graph-segments"]
+   "commit-graph-segments",
+   "sha1-only"]
 
   $ hg debugapi -e bookmarks -i '["master", "foo"]'
   {"foo": None,

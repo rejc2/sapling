@@ -1,7 +1,8 @@
 #debugruntest-compatible
-  $ enable rebase copytrace
-  $ setconfig experimental.copytrace=off
-  $ setconfig copytrace.dagcopytrace=True
+
+#require no-eden
+
+  $ enable rebase
 
 Prepare a repo
 

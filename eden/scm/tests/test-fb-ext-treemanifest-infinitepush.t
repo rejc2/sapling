@@ -1,4 +1,8 @@
-#chg-compatible
+#debugruntest-compatible
+
+#require no-eden
+
+
   $ setconfig experimental.allowfilepeer=True
 
   $ . "$TESTDIR/library.sh"
@@ -28,8 +32,6 @@
 Push a non-tree scratch branch from one client
 
   $ hgcloneshallow ssh://user@dummy/master normal-client -q
-  fetching tree '' bc0c2c938b929f98b1c31a8c5994396ebb096bf0
-  1 trees fetched over * (glob)
   1 files fetched over 1 fetches - (1 misses, 0.00% hit ratio) over * (glob) (?)
   $ cd normal-client
   $ cat >> .hg/hgrc <<EOF
@@ -52,8 +54,6 @@ Push a non-tree scratch branch from one client
 
 Push a tree-only scratch branch from another client
   $ hgcloneshallow ssh://user@dummy/master client1 -q
-  fetching tree '' bc0c2c938b929f98b1c31a8c5994396ebb096bf0
-  1 trees fetched over * (glob)
   1 files fetched over 1 fetches - (1 misses, 0.00% hit ratio) over * (glob) (?)
   $ cd client1
   $ cat >> .hg/hgrc <<EOF
@@ -215,10 +215,13 @@ trees
   $ hg commit -Aqm 'add foo'
   $ hg up -q '.^'
   $ hg cloud backup
-  backing up stack rooted at 7e75be1136c3
-  commitcloud: backed up 1 commit
-  remote: pushing 1 commit:
-  remote:     7e75be1136c3  add foo
+  commitcloud: head '7e75be1136c3' hasn't been uploaded yet
+  edenapi: queue 1 commit for upload
+  edenapi: queue 1 file for upload
+  edenapi: uploaded 1 file
+  edenapi: queue 1 tree for upload
+  edenapi: uploaded 1 tree
+  edenapi: uploaded 1 changeset
   $ cd ..
 
 Verify its not on the server
@@ -282,37 +285,16 @@ treemanifest data for the public commits.
 # Merge the root into master and push the merge as a backup
   $ hg up -q f027ebc7ba78
   2 files fetched over 1 fetches - (2 misses, 0.00% hit ratio) over * (glob) (?)
-  fetching tree '' 92ea8e774335a78205d4837583cf4224b5fc5c33
-  1 trees fetched over 0.00s
-  fetching tree 'deep' 625f87a1c5508232a280ab87977d23ea83e7eb43
-  1 trees fetched over 0.00s
-  fetching tree 'deep/dir' 54ec22ee94a4ae5deef1a2a7246816c3a9fa9e1f
-  1 trees fetched over 0.00s
-  fetching tree 'deep/dir/for' c22f39d2a94ab151e73e7f76707b1c9d1a3f0284
-  1 trees fetched over 0.00s
-  fetching tree 'deep/dir/for/many' 3bdd1183f11c5d3f61d13adc341e803e86eb3398
-  1 trees fetched over 0.00s
-  fetching tree 'deep/dir/for/many/trees' bc0c2c938b929f98b1c31a8c5994396ebb096bf0
-  1 trees fetched over 0.00s
   $ hg merge d32fd17cb041
   1 files updated, 0 files merged, 0 files removed, 0 files unresolved
   (branch merge, don't forget to commit)
   $ hg commit -qm "merge"
   $ hg cloud backup
-  backing up stack rooted at d32fd17cb041
-  commitcloud: backed up 2 commits
-  remote: pushing 2 commits:
-  remote:     d32fd17cb041  add z
-  remote:     8b1db7b72253  merge
-
-# Check the bundle.  It should only have 2 trees (one from z and one for the merged
-# root directory)
-  $ hg debugbundle $TESTTMP/master/.hg/scratchbranches/filebundlestore/95/ac/95ac1702067611e314fd8e7d61ed1ff6d2485228
-  Stream params: {}
-  changegroup -- {version: 02}
-      d32fd17cb041b810cad28724776c6d51faad59dc
-      8b1db7b722533971a8133917e17a356a729cc281
-  b2x:treegroup2 -- {cache: False, category: manifests, version: 1}
-      2 data items, 2 history items
-      03e96018741b6da273fcfabe5defa390ba0da1ae 
-      ddb35f099a648a43a997aef53123bce309c794fd 
+  commitcloud: head '02c12aef64ff' hasn't been uploaded yet
+  commitcloud: head '8b1db7b72253' hasn't been uploaded yet
+  edenapi: queue 3 commits for upload
+  edenapi: queue 2 files for upload
+  edenapi: uploaded 2 files
+  edenapi: queue 4 trees for upload
+  edenapi: uploaded 4 trees
+  edenapi: uploaded 3 changesets

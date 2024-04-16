@@ -24,7 +24,7 @@ describe('Dag', () => {
     hash: '',
     parents: [],
     phase: DRAFT,
-    isHead: false,
+    isDot: false,
     author: '',
     date,
     description: '',
@@ -270,7 +270,7 @@ describe('Dag', () => {
         {...info, hash: 'abc'},
         {...info, hash: 'abd', bookmarks: ['foo', 'bar']},
         {...info, hash: 'acc', remoteBookmarks: ['remote/foo', 'remote/main']},
-        {...info, hash: 'add', isHead: true},
+        {...info, hash: 'add', isDot: true},
         {...info, hash: 'aee', remoteBookmarks: ['remote/bar'], bookmarks: ['baz']},
         {...info, hash: 'aff'},
       ].map(toInfo),
@@ -324,7 +324,7 @@ describe('Dag', () => {
 
     it('moves "." with edits', () => {
       const dag1 = dag.replaceWith(['add', 'abc'], (h, c) => {
-        return c?.set('isHead', h === 'abc');
+        return c?.set('isDot', h === 'abc');
       });
       expect(dag1.remove('abc').resolve('.')?.hash).toBe(undefined);
     });
@@ -352,7 +352,7 @@ describe('Dag', () => {
           {...info, hash: 'a1'},
           {...info, hash: 'a2', closestPredecessors: ['a1']},
           {...info, hash: 'a3', closestPredecessors: ['a2']},
-          {...info, hash: 'b'},
+          {...info, hash: 'b', closestPredecessors: ['b0']},
         ].map(toInfo),
       )
       .remove(['a', 'a3']);
@@ -366,6 +366,12 @@ describe('Dag', () => {
     it('successors()', () => {
       expect(dag.successors(['a', 'b']).toSortedArray()).toEqual(['a', 'a1', 'a2', 'b']);
       expect(dag.successors(['a1', 'a2']).toSortedArray()).toEqual(['a1', 'a2']);
+    });
+
+    it('predecessors()', () => {
+      expect(dag.predecessors(['a', 'b']).toSortedArray()).toEqual(['b']);
+      expect(dag.predecessors(['a2']).toSortedArray()).toEqual(['a1', 'a2']);
+      expect(dag.predecessors(['a3']).toSortedArray()).toEqual(['a1', 'a2']);
     });
 
     it('picks stack top when following a split', () => {
@@ -505,7 +511,7 @@ describe('Dag', () => {
         [
           {...info, hash: 'z', parents: [], phase: PUBLIC},
           {...info, hash: 'a', parents: [], phase: DRAFT},
-          {...info, hash: 'b', parents: ['a'], phase: DRAFT, date, successorInfo, isHead: true},
+          {...info, hash: 'b', parents: ['a'], phase: DRAFT, date, successorInfo, isDot: true},
           {...info, hash: 'c', parents: ['b'], phase: DRAFT, date, successorInfo},
           {...info, hash: 'd', parents: ['a'], phase: DRAFT, date, successorInfo},
           {...info, hash: 'e', parents: ['d'], phase: DRAFT, date, successorInfo},

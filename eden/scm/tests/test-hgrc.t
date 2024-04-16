@@ -1,5 +1,8 @@
 #debugruntest-compatible
 
+#require no-eden
+
+
   $ configure modernclient
 
 Use hgrc within $TESTTMP
@@ -67,6 +70,7 @@ make sure global options given on the cmdline take precedence
   ui.timeout=600
   ui.color=auto
   ui.paginate=true
+  ui.ignorerevnum=True
   ui.verbose=false
   ui.debug=false
   ui.quiet=true

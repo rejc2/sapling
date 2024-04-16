@@ -29,13 +29,16 @@ use commit_graph::CommitGraphRef;
 use commit_transformation::upload_commits;
 use context::CoreContext;
 use cross_repo_sync::create_commit_syncers;
+use cross_repo_sync::get_x_repo_submodule_metadata_file_prefx_from_config;
 use cross_repo_sync::rewrite_commit;
 use cross_repo_sync::update_mapping_with_version;
 use cross_repo_sync::CandidateSelectionHint;
 use cross_repo_sync::CommitSyncContext;
 use cross_repo_sync::CommitSyncOutcome;
 use cross_repo_sync::CommitSyncer;
+use cross_repo_sync::Large;
 use cross_repo_sync::SubmoduleDeps;
+use cross_repo_sync::SubmoduleExpansionData;
 use cross_repo_sync::Syncers;
 use futures::compat::Future01CompatExt;
 use futures::future::FutureExt;
@@ -61,6 +64,7 @@ use mononoke_types::ChangesetId;
 use mononoke_types::FileChange;
 use mononoke_types::NonRootMPath;
 use repo_blobstore::RepoBlobstoreRef;
+use repo_identity::RepoIdentityRef;
 use slog::info;
 use slog::warn;
 use sorted_vector_map::SortedVectorMap;
@@ -279,8 +283,27 @@ async fn create_rewritten_merge_commit(
         p2 => remapped_p2,
     };
 
+    let x_repo_submodule_metadata_file_prefix =
+        get_x_repo_submodule_metadata_file_prefx_from_config(
+            small_repo.repo_identity().id(),
+            &root_version,
+            syncers.small_to_large.live_commit_sync_config.clone(),
+        )
+        .await?;
+
     let submodule_deps = syncers.small_to_large.get_submodule_deps();
 
+    let large_repo_id = Large(large_repo.repo_identity().id());
+    let submodule_expansion_data = match submodule_deps {
+        SubmoduleDeps::ForSync(deps) => Some(SubmoduleExpansionData {
+            submodule_deps: deps,
+            x_repo_submodule_metadata_file_prefix: x_repo_submodule_metadata_file_prefix.as_str(),
+            large_repo_id,
+        }),
+        SubmoduleDeps::NotNeeded => None,
+    };
+
+    let source_repo = syncers.small_to_large.get_source_repo();
     let maybe_rewritten = rewrite_commit(
         &ctx,
         merge_bcs,
@@ -289,10 +312,10 @@ async fn create_rewritten_merge_commit(
             .small_to_large
             .get_mover_by_version(&version_p1)
             .await?,
-        syncers.small_to_large.get_source_repo(),
-        submodule_deps,
+        source_repo,
         Default::default(),
         Default::default(),
+        submodule_expansion_data,
     )
     .await?;
     let mut rewritten =
@@ -395,7 +418,7 @@ fn find_root(new_branch: &Vec<BonsaiChangeset>) -> Result<ChangesetId, Error> {
         }
     }
 
-    validate_roots(roots).map(|root| *root)
+    validate_roots(roots).copied()
 }
 
 async fn find_new_branch_oldest_first(

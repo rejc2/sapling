@@ -19,8 +19,9 @@ import {codeReviewProvider, allDiffSummaries} from './codeReview/CodeReviewInfo'
 import {SyncStatus, syncStatusAtom} from './codeReview/syncStatus';
 import {T, t} from './i18n';
 import {IconStack} from './icons/IconStack';
+import {useRunOperation} from './operationsState';
 import {dagWithPreviews} from './previews';
-import {useRunOperation, latestUncommittedChangesData} from './serverAPIState';
+import {latestUncommittedChangesData} from './serverAPIState';
 import {useConfirmUnsavedEditsBeforeSplit} from './stackEdit/ui/ConfirmUnsavedEditsBeforeSplit';
 import {StackEditIcon} from './stackEdit/ui/StackEditIcon';
 import {editingStackIntentionHashes, loadingStackState} from './stackEdit/ui/stackEditState';
@@ -268,7 +269,7 @@ function StackEditButton({info}: {info: DagCommitInfo}): React.ReactElement | nu
   const isError = isEditing && loadingState.state === 'hasError';
   const isLinear =
     dag.merge(set).size === 0 && dag.heads(set).size === 1 && dag.roots(set).size === 1;
-  const isDirty = stackCommits.some(c => c.isHead) && uncommitted.files.length > 0;
+  const isDirty = stackCommits.some(c => c.isDot) && uncommitted.files.length > 0;
   const hasPublic = stackCommits.some(c => c.phase === 'public');
   const disabled = isDirty || !isLinear || isLoading || isError || isPreview || hasPublic;
   const title = isError

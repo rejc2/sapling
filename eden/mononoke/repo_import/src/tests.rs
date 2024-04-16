@@ -110,9 +110,9 @@ mod tests {
                     .get_active_config()
                     .expect("No enabled derived data types config");
                 // Repo import has no need of these derived data types
-                config.types.remove(TreeHandle::NAME);
-                config.types.remove(MappedGitCommitId::NAME);
-                config.types.remove(RootGitDeltaManifestId::NAME);
+                config.types.remove(&TreeHandle::VARIANT);
+                config.types.remove(&MappedGitCommitId::VARIANT);
+                config.types.remove(&RootGitDeltaManifestId::VARIANT);
             })
             .with_id(RepositoryId::new(id))
             .build()
@@ -530,8 +530,7 @@ mod tests {
             map: hashmap! {
                 mp("dest_path_prefix/B") => mp("random_dir/B"),
             },
-            git_submodules_action: Default::default(),
-            submodule_dependencies: HashMap::new(),
+            submodule_config: Default::default(),
         }
     }
 
@@ -544,8 +543,7 @@ mod tests {
                 mp("dest_path_prefix/B") => mp("random_dir/B"),
                 mp("dest_path_prefix/C") => mp("random_dir/C"),
             },
-            git_submodules_action: Default::default(),
-            submodule_dependencies: HashMap::new(),
+            submodule_config: Default::default(),
         }
     }
 
@@ -555,8 +553,7 @@ mod tests {
             map: hashmap! {
                 mp("dest_path_prefix_2") => mp("dpp2"),
             },
-            git_submodules_action: Default::default(),
-            submodule_dependencies: HashMap::new(),
+            submodule_config: Default::default(),
         }
     }
 
@@ -809,7 +806,7 @@ mod tests {
         let blob_repo = repo.as_blob_repo();
 
         for derived_data_type in derived_data_types {
-            let derived_utils = derived_data_utils(ctx.fb, blob_repo, derived_data_type)?;
+            let derived_utils = derived_data_utils(ctx.fb, blob_repo, *derived_data_type)?;
             let pending = derived_utils
                 .pending(ctx.clone(), repo.repo_derived_data_arc(), cs_ids.to_vec())
                 .await?;

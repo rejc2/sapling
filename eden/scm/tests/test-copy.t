@@ -1,5 +1,8 @@
 #debugruntest-compatible
 
+#require no-eden
+
+
 # enable bundle2 in advance
   $ setconfig format.usegeneraldelta=yes
 
@@ -107,6 +110,7 @@ should fail - foo is not managed
   $ hg mv foo bar
   foo: not copying - file is not managed
   abort: no files to copy
+  (use '--amend --mark' if you want to amend the current commit)
   [255]
   $ hg st -A
   ? foo
@@ -229,5 +233,23 @@ mention --force:
   $ hg cp bar xyzzy
   xyzzy: not overwriting - file exists
   (hg copy --mark to record the copy)
+
+test amend current commit
+  $ hg go -Cq .
+  $ hg clean --files
+  $ mv foo foo2
+  $ hg rm foo
+  $ hg add foo2
+  $ hg ci -m 'mv foo foo2'
+  $ hg mv --mark foo foo2
+  foo: $ENOENT$
+  abort: no files to copy
+  (use '--amend --mark' if you want to amend the current commit)
+  [255]
+  $ hg mv --amend --mark foo foo2
+  $ hg st -C --change .
+  A foo2
+    foo
+  R foo
 
   $ cd ..

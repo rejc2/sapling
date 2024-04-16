@@ -1,4 +1,5 @@
-#require fsmonitor icasefs
+#debugruntest-compatible
+#require fsmonitor icasefs no-eden
 
 (Run this test using HGFSMONITOR_TESTS=1)
 

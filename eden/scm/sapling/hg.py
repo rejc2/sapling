@@ -29,6 +29,7 @@ from . import (
     error,
     exchange,
     extensions,
+    git,
     identity,
     localrepo,
     lock,
@@ -648,6 +649,7 @@ def clone(
                 # client?
                 if (
                     getattr(destrepo, "nullableedenapi", None)
+                    and ui.configbool("remotenames", "selectivepull")
                     and destrepo.name
                     and (
                         (
@@ -857,7 +859,10 @@ def clonepreclose(
 
 
 def _showstats(repo, stats: Iterable[object], quietempty: bool = False) -> None:
-    if edenfs.requirement in repo.requirements:
+    if (
+        edenfs.requirement in repo.requirements
+        or git.DOTGIT_REQUIREMENT in repo.requirements
+    ):
         return _eden_showstats(repo, stats, quietempty)
 
     if quietempty and not any(stats):

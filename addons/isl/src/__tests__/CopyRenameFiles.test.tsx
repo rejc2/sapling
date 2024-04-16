@@ -18,8 +18,7 @@ import {
   closeCommitInfoSidebar,
   simulateRepoConnected,
 } from '../testUtils';
-import {fireEvent, render, screen} from '@testing-library/react';
-import {act} from 'react-dom/test-utils';
+import {fireEvent, render, screen, act} from '@testing-library/react';
 
 describe('CommitTreeList', () => {
   beforeEach(() => {
@@ -37,7 +36,7 @@ describe('CommitTreeList', () => {
         value: [
           COMMIT('1', 'some public base', '0', {phase: 'public'}),
           COMMIT('a', 'My Commit', '1'),
-          COMMIT('b', 'Another Commit', 'a', {isHead: true}),
+          COMMIT('b', 'Another Commit', 'a', {isDot: true}),
         ],
       });
     });

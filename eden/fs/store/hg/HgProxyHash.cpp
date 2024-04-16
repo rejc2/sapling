@@ -10,11 +10,11 @@
 #include <fmt/core.h>
 #include <folly/logging/xlog.h>
 
+#include "eden/common/utils/Bug.h"
 #include "eden/common/utils/Throw.h"
 #include "eden/fs/store/LocalStore.h"
 #include "eden/fs/store/StoreResult.h"
 #include "eden/fs/telemetry/EdenStats.h"
-#include "eden/fs/utils/Bug.h"
 
 using folly::ByteRange;
 using folly::Endian;
@@ -92,7 +92,8 @@ ImmediateFuture<std::vector<HgProxyHash>> HgProxyHash::getBatch(
     byteRanges.emplace_back(blobHashes.at(index).getBytes());
   }
 
-  edenStats.increment(&HgBackingStoreStats::loadProxyHash, byteRanges.size());
+  edenStats.increment(
+      &SaplingBackingStoreStats::loadProxyHash, byteRanges.size());
   return store->getBatch(KeySpace::HgProxyHashFamily, byteRanges)
       .thenValue([results = std::move(results),
                   byteRanges, // can't move - see https://fburl.com/585912384
@@ -122,7 +123,7 @@ HgProxyHash HgProxyHash::load(
   if (auto embedded = tryParseEmbeddedProxyHash(edenObjectId)) {
     return *embedded;
   }
-  edenStats.increment(&HgBackingStoreStats::loadProxyHash);
+  edenStats.increment(&SaplingBackingStoreStats::loadProxyHash);
   // Read the path name and file rev hash
   auto infoResult = store->get(KeySpace::HgProxyHashFamily, edenObjectId);
   if (!infoResult.isValid()) {

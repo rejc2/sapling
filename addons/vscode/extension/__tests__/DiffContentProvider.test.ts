@@ -6,6 +6,8 @@
  */
 
 import type {Repository} from 'isl-server/src/Repository';
+import type {ServerPlatform} from 'isl-server/src/serverPlatform';
+import type {RepositoryContext} from 'isl-server/src/serverTypes';
 import type {CommitInfo} from 'isl/src/types';
 
 import {
@@ -13,9 +15,10 @@ import {
   encodeSaplingDiffUri,
   SaplingDiffContentProvider,
 } from '../DiffContentProvider';
+import {makeServerSideTracker} from 'isl-server/src/analytics/serverSideTracker';
 import {ComparisonType} from 'shared/Comparison';
 import {mockLogger} from 'shared/testUtils';
-import {unwrap} from 'shared/utils';
+import {nullthrows} from 'shared/utils';
 import * as vscode from 'vscode';
 
 const mockCancelToken = {} as vscode.CancellationToken;
@@ -48,7 +51,7 @@ function mockRepoAdded(): NonNullable<typeof activeRepo> {
   let savedOnChangeHeadCommit: (commit: CommitInfo) => unknown;
   activeRepo = {
     // eslint-disable-next-line require-await
-    cat: jest.fn(async (file: string, rev: string) => {
+    cat: jest.fn(async (_ctx: RepositoryContext, file: string, rev: string) => {
       if (rev === '.' && file === '/path/to/repo/file1.txt') {
         return FILE1_CONTENT_HEAD;
       }
@@ -68,21 +71,42 @@ function mockRepoAdded(): NonNullable<typeof activeRepo> {
     mockChangeHeadCommit(commit: CommitInfo) {
       savedOnChangeHeadCommit(commit);
     },
+    initialConnectionContext: {
+      cwd: '/path/to/repo',
+    },
   } as unknown as typeof activeRepo;
-  activeReposCallback?.([unwrap(activeRepo)]);
-  return unwrap(activeRepo);
+  activeReposCallback?.([nullthrows(activeRepo)]);
+  return nullthrows(activeRepo);
 }
 function mockNoActiveRepo() {
   activeRepo = undefined;
   activeReposCallback?.([]);
 }
 
+const mockTracker = makeServerSideTracker(
+  mockLogger,
+  {platformName: 'test'} as ServerPlatform,
+  '0.1',
+  jest.fn(),
+);
+
 describe('DiffContentProvider', () => {
+  let ctx: RepositoryContext;
+  beforeEach(() => {
+    ctx = {
+      cwd: 'cwd',
+      cmd: 'sl',
+      logger: mockLogger,
+      tracker: mockTracker,
+    };
+  });
+
   const encodedFile1 = encodeSaplingDiffUri(vscode.Uri.file('/path/to/repo/file1.txt'), {
     type: ComparisonType.UncommittedChanges,
   });
+
   it('provides file contents', async () => {
-    const provider = new SaplingDiffContentProvider(mockLogger);
+    const provider = new SaplingDiffContentProvider(ctx);
 
     const repo = mockRepoAdded();
 
@@ -90,12 +114,12 @@ describe('DiffContentProvider', () => {
 
     expect(content).toEqual(FILE1_CONTENT_HEAD);
     expect(repo.cat).toHaveBeenCalledTimes(1);
-    expect(repo.cat).toHaveBeenCalledWith('/path/to/repo/file1.txt', '.');
+    expect(repo.cat).toHaveBeenCalledWith({cwd: '/path/to/repo'}, '/path/to/repo/file1.txt', '.');
     provider.dispose();
   });
 
   it('caches file contents', async () => {
-    const provider = new SaplingDiffContentProvider(mockLogger);
+    const provider = new SaplingDiffContentProvider(ctx);
     const repo = mockRepoAdded();
     await provider.provideTextDocumentContent(encodedFile1, mockCancelToken);
     await provider.provideTextDocumentContent(encodedFile1, mockCancelToken);
@@ -106,7 +130,7 @@ describe('DiffContentProvider', () => {
   it('invalidates files when the repository head changes', async () => {
     const commit1 = {hash: '1'} as CommitInfo;
     const commit2 = {hash: '2'} as CommitInfo;
-    const provider = new SaplingDiffContentProvider(mockLogger);
+    const provider = new SaplingDiffContentProvider(ctx);
     const onChange = jest.fn();
     const onChangeDisposable = provider.onDidChange(onChange);
     const repo = mockRepoAdded();
@@ -127,7 +151,7 @@ describe('DiffContentProvider', () => {
   it('invalidates file content cache when the repository head changes', async () => {
     const commit1 = {hash: '1'} as CommitInfo;
     const commit2 = {hash: '2'} as CommitInfo;
-    const provider = new SaplingDiffContentProvider(mockLogger);
+    const provider = new SaplingDiffContentProvider(ctx);
     const repo = mockRepoAdded();
     repo.mockChangeHeadCommit(commit1);
 
@@ -143,7 +167,7 @@ describe('DiffContentProvider', () => {
 
   it('files opened before repo created provide content once repo is ready', async () => {
     mockNoActiveRepo();
-    const provider = new SaplingDiffContentProvider(mockLogger);
+    const provider = new SaplingDiffContentProvider(ctx);
     const onChange = jest.fn();
     const onChangeDisposable = provider.onDidChange(onChange);
 
@@ -176,7 +200,7 @@ describe('DiffContentProvider', () => {
     });
     const commit1 = {hash: '1'} as CommitInfo;
     const commit2 = {hash: '2'} as CommitInfo;
-    const provider = new SaplingDiffContentProvider(mockLogger);
+    const provider = new SaplingDiffContentProvider(ctx);
     const onChange = jest.fn();
     const onChangeDisposable = provider.onDidChange(onChange);
     const repo = mockRepoAdded();
@@ -210,7 +234,7 @@ describe('DiffContentProvider', () => {
       return {dispose: jest.fn()};
     });
     const commit2 = {hash: '2'} as CommitInfo;
-    const provider = new SaplingDiffContentProvider(mockLogger);
+    const provider = new SaplingDiffContentProvider(ctx);
     const repo = mockRepoAdded();
     await provider.provideTextDocumentContent(encodedFile1, mockCancelToken);
     expect(repo.cat).toHaveBeenCalledTimes(1);

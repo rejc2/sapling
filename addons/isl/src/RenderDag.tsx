@@ -8,10 +8,11 @@
 import type {Dag, DagCommitInfo} from './dag/dag';
 import type {ExtendedGraphRow} from './dag/render';
 import type {HashSet} from './dag/set';
+import type {ReactNode} from 'react';
 
 import {AnimatedReorderGroup} from './AnimatedReorderGroup';
 import {AvatarPattern} from './Avatar';
-import {InlineBadge} from './InlineBadge';
+import {YouAreHereLabel} from './YouAreHereLabel';
 import {LinkLine, NodeLine, PadLine} from './dag/render';
 import React from 'react';
 
@@ -61,6 +62,14 @@ type RenderFunctionProps = {
    * the static function.
    */
   renderGlyph?: (info: DagCommitInfo) => RenderGlyphResult;
+
+  /**
+   * Get extra props for the DivRow for the given commit.
+   * This can be used to tweak styles like selection background, border.
+   * This should be a static-ish function to avoid re-rendering. Inside the function,
+   * it can use hooks to fetch extra state.
+   */
+  useExtraCommitRowProps?: (info: DagCommitInfo) => React.HTMLAttributes<HTMLDivElement> | void;
 };
 
 /**
@@ -112,6 +121,7 @@ export function RenderDag(props: RenderDagProps) {
     renderCommit,
     renderCommitExtras,
     renderGlyph = defaultRenderGlyph,
+    useExtraCommitRowProps,
     className,
     ...restProps
   } = props;
@@ -130,6 +140,7 @@ export function RenderDag(props: RenderDagProps) {
         renderCommit={renderCommit}
         renderCommitExtras={renderCommitExtras}
         renderGlyph={renderGlyph}
+        useExtraCommitRowProps={useExtraCommitRowProps}
       />
     );
   });
@@ -160,7 +171,17 @@ function DivRow(
 }
 
 function DagRowInner(props: {row: ExtendedGraphRow; info: DagCommitInfo} & RenderFunctionProps) {
-  const {row, info, renderGlyph = defaultRenderGlyph, renderCommit, renderCommitExtras} = props;
+  const {
+    row,
+    info,
+    renderGlyph = defaultRenderGlyph,
+    renderCommit,
+    renderCommitExtras,
+    useExtraCommitRowProps,
+  } = props;
+
+  const {className = '', ...commitRowProps} = useExtraCommitRowProps?.(info) ?? {};
+
   // Layout per commit:
   //
   // Each (regular) commit is rendered in 2 rows:
@@ -251,7 +272,7 @@ function DagRowInner(props: {row: ExtendedGraphRow; info: DagCommitInfo} & Rende
             line={l}
             isHead={isHead}
             isRoot={isRoot}
-            aboveNodeColor={info.isHead ? YOU_ARE_HERE_COLOR : undefined}
+            aboveNodeColor={info.isDot ? YOU_ARE_HERE_COLOR : undefined}
             stretchY={isIrregular && l != NodeLine.Node}
             scaleY={isIrregular ? 0.5 : 1}
             glyph={glyph}
@@ -266,7 +287,7 @@ function DagRowInner(props: {row: ExtendedGraphRow; info: DagCommitInfo} & Rende
       className="render-dag-row-left-side-line pre-node-line grow"
       data-nodecolumn={row.nodeColumn}>
       {row.preNodeLine.map((l, i) => {
-        const c = i === row.nodeColumn ? (info.isHead ? YOU_ARE_HERE_COLOR : color) : undefined;
+        const c = i === row.nodeColumn ? (info.isDot ? YOU_ARE_HERE_COLOR : color) : undefined;
         return <PadTile key={i} line={l} scaleY={0.1} stretchY={true} color={c} />;
       })}
     </div>
@@ -329,7 +350,7 @@ function DagRowInner(props: {row: ExtendedGraphRow; info: DagCommitInfo} & Rende
   let row1: JSX.Element | null = null;
   let row2: JSX.Element | null = null;
   if (isIrregular) {
-    row0 = <DivRow left={nodeLinePart} />;
+    row0 = <DivRow className={className} {...commitRowProps} left={nodeLinePart} />;
     row1 = <DivRow left={postNodeLinePart} right={commitPart} />;
   } else {
     const left = (
@@ -341,9 +362,10 @@ function DagRowInner(props: {row: ExtendedGraphRow; info: DagCommitInfo} & Rende
     );
     row1 = (
       <DivRow
+        className={`render-dag-row-commit ${className ?? ''}`}
+        {...commitRowProps}
         left={left}
         right={commitPart}
-        className="render-dag-row-commit"
         data-commit-hash={info.hash}
       />
     );
@@ -385,7 +407,8 @@ const DagRow = React.memo(DagRowInner, (prevProps, nextProps) => {
     prevProps.row.valueOf() === nextProps.row.valueOf() &&
     prevProps.renderCommit === nextProps.renderCommit &&
     prevProps.renderCommitExtras === nextProps.renderCommitExtras &&
-    prevProps.renderGlyph === nextProps.renderGlyph
+    prevProps.renderGlyph === nextProps.renderGlyph &&
+    prevProps.useExtraCommitRowProps == nextProps.useExtraCommitRowProps
   );
 });
 
@@ -622,7 +645,7 @@ const YOU_ARE_HERE_COLOR = 'var(--button-primary-hover-background)';
 const DEFAULT_GLYPH_RADIUS = (defaultTileWidth * 7) / 20;
 
 function RegularGlyphInner({info}: {info: DagCommitInfo}) {
-  const stroke = info.isHead ? YOU_ARE_HERE_COLOR : 'var(--foreground)';
+  const stroke = info.isDot ? YOU_ARE_HERE_COLOR : 'var(--foreground)';
   const r = DEFAULT_GLYPH_RADIUS;
   const strokeWidth = defaultStrokeWidth * 0.9;
   const isObsoleted = info.successorInfo != null;
@@ -662,12 +685,19 @@ export const RegularGlyph = React.memo(RegularGlyphInner, (prevProps, nextProps)
   return nextInfo.equals(prevInfo);
 });
 
-export function YouAreHereGlyph({info}: {info: DagCommitInfo}) {
-  // Render info.description in a rounded blue box.
+/**
+ * The default "You are here" glyph - render as a blue bubble. Intended to be used in
+ * different `RenderDag` configurations.
+ *
+ * If you want to customize the rendering for the main graph, or introducing dependencies
+ * that seem "extra" (like code review states, operation-related progress state), consider
+ * passing the `renderGlyph` prop to `RenderDag` instead. See `CommitTreeList` for example.
+ */
+export function YouAreHereGlyph({info, children}: {info: DagCommitInfo; children?: ReactNode}) {
   return (
-    <div className="you-are-here-container" style={{marginLeft: -defaultStrokeWidth * 1.5}}>
-      <InlineBadge kind="primary">{info.description}</InlineBadge>
-    </div>
+    <YouAreHereLabel title={info.description} style={{marginLeft: -defaultStrokeWidth * 1.5}}>
+      {children}
+    </YouAreHereLabel>
   );
 }
 

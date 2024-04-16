@@ -105,18 +105,21 @@ def checkfeatures(features):
             feature = feature[3:]
 
         if feature not in checks:
-            result["missing"].append(feature)
+            if not negate:
+                result["missing"].append(feature)
             continue
 
-        check, desc = checks[feature]
-        available = _checkfeaturecache.get(feature)
-        try:
-            if available is None:
-                available = check()
-                _checkfeaturecache[feature] = available
-        except Exception:
-            result["error"].append("hghave check failed: %s" % feature)
-            continue
+        available, desc = checks[feature]
+        if callable(available):
+            check = available
+            available = _checkfeaturecache.get(feature)
+            try:
+                if available is None:
+                    available = check()
+                    _checkfeaturecache[feature] = available
+            except Exception:
+                result["error"].append("hghave check failed: %s" % feature)
+                continue
 
         if not negate and not available:
             result["skipped"].append("missing feature: %s" % desc)
@@ -280,6 +283,11 @@ def getgitversion():
     if not m:
         return (0, 0)
     return (int(m.group(1)), int(m.group(2)))
+
+
+@check("lldb", "lldb debugger from LLVM", exe=True)
+def has_lldb():
+    return matchoutput("lldb -P 2>&1", b"python")
 
 
 # https://github.com/git-lfs/lfs-test-server
@@ -518,11 +526,11 @@ def has_fsmonitor():
     return "HGFSMONITOR_TESTS" in os.environ
 
 
-@check("eden", "Eden HG extension")
+@check("eden", "Eden HG extension", exe=True)
 def has_eden():
-    return matchoutput(
-        "hg --debug --config extensions.eden= --version 2>&1",
-        re.compile(rb"^\s*eden\s+(in|ex)ternal\s*$", re.MULTILINE),
+    return os.environ.get("HGTEST_USE_EDEN", None) == "1" and matchoutput(
+        "eden version",
+        re.compile(rb"^Installed:\s.*\sRunning:\s.*", re.MULTILINE),
     )
 
 
@@ -559,3 +567,8 @@ def has_ipython():
     except Exception:
         return False
     return True
+
+
+@check("py3.10", "Python is 3.10")
+def has_python310():
+    return sys.version_info[:2] == (3, 10)

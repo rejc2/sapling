@@ -26,6 +26,7 @@
 #include <folly/futures/SharedPromise.h>
 
 #include "eden/common/utils/PathFuncs.h"
+#include "eden/common/utils/PathMap.h"
 #include "eden/fs/inodes/EdenMountHandle.h"
 #include "eden/fs/inodes/InodePtr.h"
 #include "eden/fs/inodes/overlay/OverlayChecker.h"
@@ -37,7 +38,6 @@
 #include "eden/fs/takeover/TakeoverHandler.h"
 #include "eden/fs/telemetry/EdenStats.h"
 #include "eden/fs/telemetry/IActivityRecorder.h"
-#include "eden/fs/utils/PathMap.h"
 
 DECLARE_bool(takeover);
 
@@ -64,7 +64,7 @@ class Dirstate;
 class EdenConfig;
 class EdenMount;
 class EdenServiceHandler;
-class HgQueuedBackingStore;
+class SaplingBackingStore;
 class IHiveLogger;
 class Journal;
 class LocalStore;
@@ -450,15 +450,15 @@ class EdenServer : private TakeoverHandler {
   std::unordered_set<std::shared_ptr<BackingStore>> getBackingStores();
 
   /**
-   * Look up all BackingStores which are HgQueuedBackingStore
+   * Look up all BackingStores which are SaplingBackingStore
    *
    * EdenServer maintains an internal cache of all known BackingStores,
    * so that multiple mount points that use the same repository can
    * share the same BackingStore object.
    *
    */
-  std::unordered_set<std::shared_ptr<HgQueuedBackingStore>>
-  getHgQueuedBackingStores();
+  std::unordered_set<std::shared_ptr<SaplingBackingStore>>
+  getSaplingBackingStores();
 
   /**
    * Schedule `fn` to run on the main server event base when the `timeout`
@@ -649,12 +649,12 @@ class EdenServer : private TakeoverHandler {
   void shutdownSubscribers();
 
   /**
-   * collect the values of the counter for each HgQueuedBackingStore
+   * collect the values of the counter for each SaplingBackingStore
    * accessed by calling the getCounterFromStore function on the
    * each store
    */
-  std::vector<size_t> collectHgQueuedBackingStoreCounters(
-      std::function<size_t(const HgQueuedBackingStore&)> getCounterFromStore);
+  std::vector<size_t> collectSaplingBackingStoreCounters(
+      std::function<size_t(const SaplingBackingStore&)> getCounterFromStore);
 
   /*
    * Member variables.

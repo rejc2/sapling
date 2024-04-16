@@ -17,7 +17,7 @@ import {locale, t} from './i18n';
 import crypto from 'crypto';
 import {onClientConnection} from 'isl-server/src';
 import {deserializeFromString, serializeToString} from 'isl/src/serialize';
-import {unwrap} from 'shared/utils';
+import {nullthrows} from 'shared/utils';
 import * as vscode from 'vscode';
 
 let islPanelOrView: vscode.WebviewPanel | vscode.WebviewView | undefined = undefined;
@@ -48,7 +48,7 @@ function createOrFocusISLWebview(
     platform,
     logger,
   );
-  return unwrap(islPanelOrView);
+  return nullthrows(islPanelOrView);
 }
 
 function getWebviewOptions(
@@ -302,7 +302,7 @@ function devModeHtmlForISLWebview(
 	<head>
 		<meta charset="UTF-8">
 		<meta name="viewport" content="width=device-width, initial-scale=1.0">
-		<base href="${baseUri}/">
+		<base href="${baseUri}">
 
     <!-- Hot reloading code from Vite. Normally, vite injects this into the HTML.
     But since we have to load this statically, we insert it manually here.
@@ -337,7 +337,7 @@ function htmlForISLWebview(
   logger: Logger,
 ) {
   if (IS_DEV_BUILD) {
-    if (!Internal?.supportsDevBuilds?.()) {
+    if (Internal?.supportsDevBuilds?.() === false) {
       throw new Error('Cannot use dev build with current VS Code version');
     }
     return devModeHtmlForISLWebview(kind, context, logger);
@@ -368,6 +368,7 @@ function htmlForISLWebview(
     `img-src ${webview.cspSource} https: data:`,
     `script-src ${webview.cspSource} 'nonce-${nonce}' 'wasm-unsafe-eval'`,
     `script-src-elem ${webview.cspSource} 'nonce-${nonce}'`,
+    `worker-src ${webview.cspSource} 'nonce-${nonce}' blob:`,
   ].join('; ');
 
   return `<!DOCTYPE html>

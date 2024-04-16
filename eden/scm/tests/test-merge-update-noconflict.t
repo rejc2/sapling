@@ -1,8 +1,12 @@
 #debugruntest-compatible
 
+#require no-eden
+
+
   $ eagerepo
   $ enable amend rebase
   $ setconfig commands.update.check=noconflict
+  $ setconfig checkout.use-rust=true
 
 Updating w/ noconflict prints the conflicting changes:
   $ newrepo
@@ -26,5 +30,5 @@ Updating w/ noconflict prints the conflicting changes:
    b
    y
    z
-  (commit, shelve, goto --clean to discard all your changes, or update --merge to merge them)
+  (commit, shelve, goto --clean to discard all your changes, or goto --merge to merge them)
   [255]

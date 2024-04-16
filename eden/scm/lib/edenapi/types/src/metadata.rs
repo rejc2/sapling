@@ -39,28 +39,6 @@ pub struct DirectoryMetadata {
     pub descendant_files_total_size: Option<u64>,
 }
 
-#[auto_wire]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "for-tests"), derive(Arbitrary))]
-pub struct DirectoryMetadataRequest {
-    #[id(0)]
-    pub with_fsnode_id: bool,
-    #[id(1)]
-    pub with_simple_format_sha1: bool,
-    #[id(2)]
-    pub with_simple_format_sha256: bool,
-    #[id(3)]
-    pub with_child_files_count: bool,
-    #[id(4)]
-    pub with_child_files_total_size: bool,
-    #[id(5)]
-    pub with_child_dirs_count: bool,
-    #[id(6)]
-    pub with_descendant_files_count: bool,
-    #[id(7)]
-    pub with_descendant_files_total_size: bool,
-}
-
 /// File entry metadata
 #[auto_wire]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -80,26 +58,6 @@ pub struct FileMetadata {
     pub content_sha256: Option<Sha256>,
     #[id(6)]
     pub content_seeded_blake3: Option<Blake3>,
-}
-
-#[auto_wire]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "for-tests"), derive(Arbitrary))]
-pub struct FileMetadataRequest {
-    #[id(0)]
-    pub with_revisionstore_flags: bool,
-    #[id(1)]
-    pub with_content_id: bool,
-    #[id(2)]
-    pub with_file_type: bool,
-    #[id(3)]
-    pub with_size: bool,
-    #[id(4)]
-    pub with_content_sha1: bool,
-    #[id(5)]
-    pub with_content_sha256: bool,
-    #[id(6)]
-    pub with_content_seeded_blake3: bool,
 }
 
 sized_hash!(Sha1, 20);

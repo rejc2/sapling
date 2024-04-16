@@ -21,7 +21,6 @@ use blobsync::copy_content;
 use bonsai_hg_mapping::BonsaiHgMappingRef;
 use bookmarks::BookmarksRef;
 use borrowed::borrowed;
-use changeset_fetcher::ChangesetFetcherArc;
 use changesets::ChangesetsRef;
 use commit_graph::CommitGraphRef;
 use context::CoreContext;
@@ -32,7 +31,7 @@ use futures::stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use manifest::get_implicit_deletes;
-use megarepo_configs::types::SourceMappingRules;
+use megarepo_configs::SourceMappingRules;
 use mononoke_types::path::MPath;
 use mononoke_types::BonsaiChangeset;
 use mononoke_types::BonsaiChangesetMut;
@@ -96,7 +95,6 @@ pub struct FileChangeFilter<'a> {
 pub trait Repo = RepoIdentityRef
     + RepoBlobstoreArc
     + ChangesetsRef
-    + ChangesetFetcherArc
     + BookmarksRef
     + BonsaiHgMappingRef
     + RepoDerivedDataRef

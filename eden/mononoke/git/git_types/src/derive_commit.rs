@@ -20,7 +20,7 @@ use derived_data_manager::dependencies;
 use derived_data_manager::BonsaiDerivable;
 use derived_data_manager::DerivableType;
 use derived_data_manager::DerivationContext;
-use derived_data_service_if::types as thrift;
+use derived_data_service_if as thrift;
 use filestore::hash_bytes;
 use filestore::Sha1IncrementalHasher;
 use gix_actor::Signature;
@@ -36,7 +36,7 @@ use crate::TreeHandle;
 
 fn get_signature(id_str: &str, time: &DateTime) -> Result<Signature> {
     let (name, email) = get_name_and_email(id_str)?;
-    let signature_time = gix_date::Time::new(time.timestamp_secs(), time.tz_offset_secs());
+    let signature_time = time.into_gix();
     Ok(Signature {
         name: name.into(),
         email: email.into(),
@@ -61,7 +61,7 @@ fn get_name_and_email<'a>(input: &'a str) -> Result<(&'a str, &'a str)> {
 
 #[async_trait]
 impl BonsaiDerivable for MappedGitCommitId {
-    const VARIANT: DerivableType = DerivableType::GitCommit;
+    const VARIANT: DerivableType = DerivableType::GitCommits;
 
     type Dependencies = dependencies![TreeHandle];
     type PredecessorDependencies = dependencies![];

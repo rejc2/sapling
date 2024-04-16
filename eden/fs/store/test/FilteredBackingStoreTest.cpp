@@ -15,6 +15,8 @@
 #include <folly/portability/GTest.h>
 #include <folly/test/TestUtils.h>
 
+#include "eden/common/telemetry/NullStructuredLogger.h"
+#include "eden/common/utils/FaultInjector.h"
 #include "eden/common/utils/PathFuncs.h"
 #include "eden/fs/config/ReloadableConfig.h"
 #include "eden/fs/model/TestOps.h"
@@ -22,17 +24,14 @@
 #include "eden/fs/store/FilteredBackingStore.h"
 #include "eden/fs/store/MemoryLocalStore.h"
 #include "eden/fs/store/filter/HgSparseFilter.h"
-#include "eden/fs/store/hg/HgBackingStoreOptions.h"
-#include "eden/fs/store/hg/HgQueuedBackingStore.h"
-#include "eden/fs/telemetry/NullStructuredLogger.h"
+#include "eden/fs/store/hg/SaplingBackingStore.h"
+#include "eden/fs/store/hg/SaplingBackingStoreOptions.h"
 #include "eden/fs/testharness/FakeFilter.h"
 #include "eden/fs/testharness/HgRepo.h"
 #include "eden/fs/testharness/TestUtil.h"
-#include "eden/fs/utils/FaultInjector.h"
 
-namespace {
+namespace facebook::eden {
 
-using namespace facebook::eden;
 using namespace std::literals::chrono_literals;
 using folly::io::Cursor;
 
@@ -82,7 +81,8 @@ struct TestRepo {
 class FakeSubstringFilteredBackingStoreTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    wrappedStore_ = std::make_shared<FakeBackingStore>();
+    wrappedStore_ = std::make_shared<FakeBackingStore>(
+        BackingStore::LocalStoreCachingPolicy::Anything);
     auto fakeFilter = std::make_unique<FakeSubstringFilter>();
     filteredStore_ = std::make_shared<FilteredBackingStore>(
         wrappedStore_, std::move(fakeFilter));
@@ -96,8 +96,26 @@ class FakeSubstringFilteredBackingStoreTest : public ::testing::Test {
   std::shared_ptr<FilteredBackingStore> filteredStore_;
 };
 
-struct HgFilteredBackingStoreTest : TestRepo, ::testing::Test {
-  HgFilteredBackingStoreTest() = default;
+class FakePrefixFilteredBackingStoreTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    wrappedStore_ = std::make_shared<FakeBackingStore>(
+        BackingStore::LocalStoreCachingPolicy::Anything);
+    auto fakeFilter = std::make_unique<FakePrefixFilter>();
+    filteredStore_ = std::make_shared<FilteredBackingStore>(
+        wrappedStore_, std::move(fakeFilter));
+  }
+
+  void TearDown() override {
+    filteredStore_.reset();
+  }
+
+  std::shared_ptr<FakeBackingStore> wrappedStore_;
+  std::shared_ptr<FilteredBackingStore> filteredStore_;
+};
+
+struct SaplingFilteredBackingStoreTest : TestRepo, ::testing::Test {
+  SaplingFilteredBackingStoreTest() = default;
 
   void SetUp() override {
     auto hgFilter = std::make_unique<HgSparseFilter>(repo.path().copy());
@@ -118,23 +136,21 @@ struct HgFilteredBackingStoreTest : TestRepo, ::testing::Test {
   std::shared_ptr<FilteredBackingStore> filteredStoreFFI_;
 
   FaultInjector faultInjector{/*enabled=*/false};
-  std::unique_ptr<HgBackingStore> backingStore{std::make_unique<HgBackingStore>(
-      repo.path(),
-      edenConfig,
-      localStore,
-      std::make_unique<HgBackingStoreOptions>(
-          /*ignoreFilteredPathsConfig=*/true),
-      stats.copy(),
-      &faultInjector)};
 
-  std::shared_ptr<HgQueuedBackingStore> wrappedStore_{
-      std::make_shared<HgQueuedBackingStore>(
+  std::unique_ptr<SaplingBackingStoreOptions> runtimeOptions =
+      std::make_unique<SaplingBackingStoreOptions>(
+          /*ignoreFilteredPathsConfig=*/false);
+
+  std::shared_ptr<SaplingBackingStore> wrappedStore_{
+      std::make_shared<SaplingBackingStore>(
+          repo.path(),
           localStore,
           stats.copy(),
-          std::move(backingStore),
           edenConfig,
+          std::move(runtimeOptions),
           std::make_shared<NullStructuredLogger>(),
-          std::make_unique<BackingStoreLogger>())};
+          std::make_unique<BackingStoreLogger>(),
+          &faultInjector)};
 };
 
 /**
@@ -771,9 +787,56 @@ TEST_F(FakeSubstringFilteredBackingStoreTest, testCompareTreeObjectsById) {
       ObjectComparison::Unknown);
 }
 
+TEST_F(FakePrefixFilteredBackingStoreTest, testCompareSimilarTreeObjectsById) {
+  // The code that this test is testing only works when the
+  // getFilterCoverageForPath check is immediately ready. See:
+  // https://fburl.com/code/0xze5u4c
+  //
+  // Therefore this test will not work if we are running in debug mode because
+  // we set detail::kImmediateFutureAlwaysDefer in debug mode.
+  if (detail::kImmediateFutureAlwaysDefer) {
+    return;
+  }
+
+  // These two trees have different filters, but the filters evaluate to the
+  // same filtering results. These two trees are also different objects
+  // altogether (i.e. they have different underlying ObjectIDs).
+  //
+  // These two trees should resolve to different objects, but a previous bug in
+  // comparison logic caused them to evaluate as identical.
+  auto substringFilter = std::make_unique<FakePrefixFilter>();
+  auto treeFOID =
+      FilteredObjectId{RelativePath{"bar"}, "foooo", makeTestHash("0000")};
+  auto treeFOIDFilter = treeFOID.filter();
+  auto similarFilter = treeFOIDFilter.subpiece(0, treeFOIDFilter.size() - 2);
+  // Ensure the two filters have the same coverage
+  EXPECT_EQ(
+      substringFilter->getFilterCoverageForPath(treeFOID.path(), similarFilter)
+          .get(),
+      substringFilter->getFilterCoverageForPath(treeFOID.path(), treeFOIDFilter)
+          .get());
+  // Ensure that the two objects are not identical
+  auto similarObject = makeTestHash("e1e10");
+  EXPECT_NE(
+      wrappedStore_->compareObjectsById(similarObject, treeFOID.object()),
+      ObjectComparison::Identical);
+  auto similarFOID = FilteredObjectId{
+      treeFOID.path(),
+      similarFilter,
+      similarObject,
+  };
+
+  // We expect a tree with the same filter coverage but different underlying
+  // objects to not be identical.
+  EXPECT_NE(
+      filteredStore_->compareObjectsById(
+          ObjectId{treeFOID.getValue()}, ObjectId{similarFOID.getValue()}),
+      ObjectComparison::Identical);
+}
+
 const auto kTestTimeout = 10s;
 
-TEST_F(HgFilteredBackingStoreTest, testMercurialFFI) {
+TEST_F(SaplingFilteredBackingStoreTest, testMercurialFFI) {
   // Set up one commit with a root tree
   auto filterRelPath = RelativePath{"filter"};
   auto rootFuture1 = filteredStoreFFI_->getRootTree(
@@ -812,7 +875,7 @@ TEST_F(HgFilteredBackingStoreTest, testMercurialFFI) {
   EXPECT_NE(helloFindRes, srcRes->cend());
 }
 
-TEST_F(HgFilteredBackingStoreTest, testMercurialFFINullFilter) {
+TEST_F(SaplingFilteredBackingStoreTest, testMercurialFFINullFilter) {
   // Set up one commit with a root tree
   auto rootFuture1 = filteredStoreFFI_->getRootTree(
       RootId{
@@ -848,7 +911,7 @@ TEST_F(HgFilteredBackingStoreTest, testMercurialFFINullFilter) {
   EXPECT_NE(helloFindRes, srcRes->cend());
 }
 
-TEST_F(HgFilteredBackingStoreTest, testMercurialFFIInvalidFOID) {
+TEST_F(SaplingFilteredBackingStoreTest, testMercurialFFIInvalidFOID) {
   // Set up one commit with a root tree
   auto filterRelPath = RelativePath{"filter"};
   auto rootFuture1 = filteredStoreFFI_->getRootTree(
@@ -890,4 +953,4 @@ TEST_F(HgFilteredBackingStoreTest, testMercurialFFIInvalidFOID) {
   EXPECT_NE(fooTxtFindRes, rootDirRes.tree->cend());
   EXPECT_NE(barTxtFindRes, rootDirRes.tree->cend());
 }
-} // namespace
+} // namespace facebook::eden

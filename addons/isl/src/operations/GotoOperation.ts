@@ -9,6 +9,8 @@ import type {Dag} from '../previews';
 import type {ExactRevset, SucceedableRevset} from '../types';
 
 import {latestSuccessor} from '../SuccessionTracker';
+import {YOU_ARE_HERE_VIRTUAL_COMMIT} from '../dag/virtualCommit';
+import {t} from '../i18n';
 import {CommitPreview} from '../previews';
 import {Operation} from './Operation';
 
@@ -22,6 +24,10 @@ export class GotoOperation extends Operation {
   getArgs() {
     const args = ['goto', '--rev', this.destination];
     return args;
+  }
+
+  getInitialInlineProgress(): [hash: string, message: string][] {
+    return [[YOU_ARE_HERE_VIRTUAL_COMMIT.hash, t('moving...')]];
   }
 
   optimisticDag(dag: Dag): Dag {
@@ -39,7 +45,7 @@ export class GotoOperation extends Operation {
       const previewType = isDest
         ? CommitPreview.GOTO_DESTINATION
         : CommitPreview.GOTO_PREVIOUS_LOCATION;
-      return c?.merge({isHead: isDest, previewType});
+      return c?.merge({isDot: isDest, previewType});
     });
   }
 }

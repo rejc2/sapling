@@ -6,6 +6,7 @@
  */
 
 import type {Repository} from './Repository';
+import type {RepositoryContext} from './serverTypes';
 import type {
   AbsolutePath,
   PlatformSpecificClientToServerMessages,
@@ -14,7 +15,7 @@ import type {
 
 import {spawn} from 'child_process';
 import pathModule from 'path';
-import {unwrap} from 'shared/utils';
+import {nullthrows} from 'shared/utils';
 
 /**
  * Platform-specific server-side API for each target: vscode extension host, electron standalone, browser, ...
@@ -26,6 +27,7 @@ export interface ServerPlatform {
   sessionId?: string;
   handleMessageFromClient(
     repo: Repository | undefined,
+    ctx: RepositoryContext | undefined,
     message: PlatformSpecificClientToServerMessages,
     postMessage: (message: ServerToClientMessage) => void,
     onDispose: (disapose: () => unknown) => void,
@@ -36,11 +38,15 @@ export const browserServerPlatform: ServerPlatform = {
   platformName: 'browser',
   handleMessageFromClient: (
     repo: Repository | undefined,
+    ctx: RepositoryContext | undefined,
     message: PlatformSpecificClientToServerMessages,
   ) => {
     switch (message.type) {
       case 'platform/openContainingFolder': {
-        const absPath: AbsolutePath = pathModule.join(unwrap(repo?.info.repoRoot), message.path);
+        const absPath: AbsolutePath = pathModule.join(
+          nullthrows(repo?.info.repoRoot),
+          message.path,
+        );
         let args: Array<string> = [];
         // use OS-builtin open command to open parent directory
         // (which may open different file extensions with different programs)
@@ -56,7 +62,7 @@ export const browserServerPlatform: ServerPlatform = {
             args = ['xdg-open', pathModule.dirname(absPath)];
             break;
         }
-        repo?.logger.log('open file', absPath);
+        repo?.initialConnectionContext.logger.log('open file', absPath);
         if (args.length > 0) {
           spawnInBackground(repo, args);
         }
@@ -64,8 +70,11 @@ export const browserServerPlatform: ServerPlatform = {
       }
       case 'platform/openFile': {
         (async () => {
-          const opener = await repo?.getConfig('isl.open-file-cmd');
-          const absPath: AbsolutePath = pathModule.join(unwrap(repo?.info.repoRoot), message.path);
+          if (repo == null || ctx == null) {
+            return;
+          }
+          const opener = await repo.getConfig(ctx, 'isl.open-file-cmd');
+          const absPath: AbsolutePath = pathModule.join(repo.info.repoRoot, message.path);
           let args: Array<string> = [];
           if (opener) {
             // opener should be either a JSON string (wrapped in quotes) or a JSON array of strings,
@@ -94,7 +103,7 @@ export const browserServerPlatform: ServerPlatform = {
                 break;
             }
           }
-          repo?.logger.log('open file', absPath);
+          repo.initialConnectionContext.logger.log('open file', absPath);
           if (args.length > 0) {
             spawnInBackground(repo, args);
           }
@@ -134,7 +143,7 @@ function spawnInBackground(repo: Repository | undefined, args: Array<string>) {
   });
   // Silent error. Don't crash the server process.
   proc.on('error', err => {
-    repo?.logger.log('failed to open', args, err);
+    repo?.initialConnectionContext.logger.log('failed to open', args, err);
   });
   proc.unref();
 }

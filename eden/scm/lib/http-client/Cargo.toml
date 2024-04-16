@@ -18,7 +18,7 @@ clientinfo = { version = "0.1.0", path = "../clientinfo" }
 curl = { version = "0.4.41", features = ["http2"] }
 curl-sys = "0.4.68"
 env_logger = "0.10"
-futures = { version = "0.3.28", features = ["async-await", "compat"] }
+futures = { version = "0.3.30", features = ["async-await", "compat"] }
 http = "0.2"
 lru-cache = "0.1.2"
 maplit = "1.0"
@@ -31,11 +31,11 @@ regex = "1.9.2"
 serde = { version = "1.0.185", features = ["derive", "rc"] }
 serde_cbor = "0.11"
 serde_json = { version = "1.0.100", features = ["float_roundtrip", "unbounded_depth"] }
-structopt = "0.3.23"
+structopt = "0.3.26"
 thiserror = "1.0.49"
-tokio = { version = "1.29.1", features = ["full", "test-util", "tracing"] }
+tokio = { version = "1.36.0", features = ["full", "test-util", "tracing"] }
 tokio-util = { version = "0.7.10", features = ["full"] }
-tracing = "0.1.40"
+tracing = { version = "0.1.40", features = ["attributes"] }
 url = "2.2.2"
 
 [dev-dependencies]

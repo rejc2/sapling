@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.1.47
+
+### Apr 11 2024
+
+- Allow deleting bookmarks via context menu
+- Allow scrolling the list of shelves
+
+## 0.1.46
+
+### Apr 5 2024
+
+- Fix GitHub integrations not working
+- Syntax highlighting runs in a WebWorker so it doesn't slow down the UI
+  - Clicking buttons in Interactive Split can be as much as 10x faster now
+
+## 0.1.45
+
+### Apr 4 2024
+
+- Render comments from GitHub
+  - Click the comment icon next to the PR Badge to see comments
+  - includes inline comments and suggested changes
+
+## 0.1.44
+
+### Mar 29 2024
+
+- Added Bookmarks manager
+  - If you have multiple remote bookmarks, you can control which remote bookmarks are visible
+
+## 0.1.43
+
+### Mar 26 2024
+
+- Fix VS Code diff views sometimes having an empty left side
+- Improved behavior of `goto` when downloading commits
+- Fixed focus mode not allowing drag and drop rebases outside your stack
+- Fixed focus mode showing more commits than intended
+
+## 0.1.42
+
+### Mar 13 2024
+
+- Add "Focus mode" to hide commits other than the current stack
+- Add "Apply" button to unshelve without deleting the shelved changes
+- Shift click to select ranges of commits now prefers selecting without including branching children
+- Remember the collapsed state of generated files
+- Show inline spinner next to "you are here" while goto is running
+- If commit / amend / amend message hit an error, restore your typed commit message so you can try again
+- Clear quick commit title after committing
+- Hide generated file content by default in the Split UI
+- Ensure commit titles don't shrink too much in compact mode
+- Prevent successions from persisting commit message edits to different diffs
+- Elided obsolete commits will now be shown if selected
+- Fix last run command showing '?' 5 seconds after exiting
+- Fix issues when viewing commits after writing a commit message
+- Fix "Fold down" button in "Edit Stack" not working
+
+## 0.1.41
+
+### Mar 4 2024
+
+- Fix UI not refreshing after finishing queued commands
+- Add option to use "unified" diff view mode for comparison view
+  - By default, it uses "split" diff view on wide screens, and "unified" on small screens
+- Improve behavior when reconnecting, so commands don't look like they're stuck running
+- Some rendering improvements to the comparison view
+
 ## 0.1.40
 
 ### Feb 26 2024

@@ -38,7 +38,7 @@ unodes mononoke_types_serialization //eden/mononoke/mononoke_types/serialization
     ).expect("Failed to write cratemap");
 
     let conf = {
-        let mut conf = Config::from_env(GenContext::Lib).expect("Failed to instantiate thrift_compiler::Config");
+        let mut conf = Config::from_env(GenContext::Types).expect("Failed to instantiate thrift_compiler::Config");
 
         let path_from_manifest_to_base: &Path = "../../../..".as_ref();
         let cargo_manifest_dir =
@@ -71,13 +71,9 @@ unodes mononoke_types_serialization //eden/mononoke/mononoke_types/serialization
             conf.options(options);
         }
 
-        let lib_include_srcs = vec![
-            
-        ];
         let types_include_srcs = vec![
             
         ];
-        conf.lib_include_srcs(lib_include_srcs);
         conf.types_include_srcs(types_include_srcs);
 
         conf

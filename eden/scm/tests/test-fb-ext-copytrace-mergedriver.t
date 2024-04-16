@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 #
 # This software may be used and distributed according to the terms of the
@@ -12,7 +15,7 @@
 
   $ newrepo
   $ enable copytrace amend
-  $ setconfig 'copytrace.draftusefullcopytrace=0' 'experimental.copytrace=off' 'experimental.mergedriver=python:$TESTTMP/m.py'
+  $ setconfig 'experimental.mergedriver=python:$TESTTMP/m.py'
 
   $ drawdag << 'EOS'
   > B C
@@ -52,9 +55,9 @@
    E |  1 +
    3 files changed, 3 insertions(+), 0 deletions(-)
 
-# Run again with heuristics copytrace disabled:
+# Run again with dagcopytrace disabled:
 
-  $ setconfig 'extensions.copytrace=!' 'experimental.copytrace=on'
+  $ setconfig copytrace.dagcopytrace=False
 
   $ hg up -q $C
   $ hg graft book-B

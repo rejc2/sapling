@@ -37,6 +37,7 @@ use crate::state_ext::StateExt;
 const ENCODED_CLIENT_IDENTITY: &str = "x-fb-validated-client-encoded-identity";
 const CLIENT_IP: &str = "tfb-orig-client-ip";
 const CLIENT_PORT: &str = "tfb-orig-client-port";
+const HEADER_REVPROXY_REGION: &str = "x-fb-revproxy-region";
 
 #[derive(StateData, Default)]
 pub struct MetadataState(Metadata);
@@ -84,6 +85,13 @@ impl MetadataMiddleware {
             TlsCertificateIdentities::Authenticated(idents) => Some(idents),
         }
     }
+
+    fn require_client_info(&self, state: &State) -> bool {
+        let is_health_check =
+            Uri::try_borrow_from(state).map_or(false, |uri| uri.path().ends_with("/health_check"));
+        let is_git_server = self.entry_point == ClientEntryPoint::MononokeGitServer;
+        !is_health_check && !is_git_server
+    }
 }
 
 fn request_ip_from_headers(headers: &HeaderMap) -> Option<IpAddr> {
@@ -98,6 +106,13 @@ fn request_port_from_headers(headers: &HeaderMap) -> Option<u16> {
     let header = header.to_str().ok()?;
     let ip = header.parse().ok()?;
     Some(ip)
+}
+
+fn revproxy_region_from_headers(headers: &HeaderMap) -> Option<String> {
+    let header = headers.get(HEADER_REVPROXY_REGION)?;
+    let header = header.to_str().ok()?;
+    let region = header.parse().ok()?;
+    Some(region)
 }
 
 fn request_identities_from_headers(headers: &HeaderMap) -> Option<MononokeIdentitySet> {
@@ -118,6 +133,10 @@ impl Middleware for MetadataMiddleware {
             metadata = metadata
                 .set_client_ip(request_ip_from_headers(headers))
                 .set_client_port(request_port_from_headers(headers));
+
+            if let Some(revproxy_region) = revproxy_region_from_headers(headers) {
+                metadata.add_revproxy_region(revproxy_region);
+            }
 
             let maybe_identities = {
                 let maybe_cat_idents =
@@ -162,9 +181,7 @@ impl Middleware for MetadataMiddleware {
                 .and_then(|h| h.to_str().ok())
                 .and_then(|ci| serde_json::from_str(ci).ok());
 
-            if client_info.is_none()
-                && matches!(Uri::try_borrow_from(state), Some(uri) if !uri.path().ends_with("/health_check"))
-            {
+            if client_info.is_none() && self.require_client_info(state) {
                 let msg = format!(
                     "Error: {} header not provided or wrong format (expected json).",
                     CLIENT_INFO_HEADER

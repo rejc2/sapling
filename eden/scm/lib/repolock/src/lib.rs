@@ -27,6 +27,7 @@ use configmodel::Config;
 use configmodel::ConfigExt;
 use fs2::FileExt;
 use parking_lot::Mutex;
+use progress_model::ProgressBar;
 use util::errors::IOContext;
 use util::lock::PathLock;
 
@@ -329,22 +330,37 @@ fn lock(
 ) -> Result<LockHandle, LockError> {
     let start = Instant::now();
 
+    let bar = ProgressBar::new_adhoc("waiting for lock", 0, "");
+
     loop {
         match try_lock(dir, name, contents) {
             Ok(h) => return Ok(h),
             Err(err) => match err {
-                LockError::Contended(_) => {
+                LockError::Contended(LockContendedError { ref contents, .. }) => {
                     // TODO: add user friendly debugging similar to Python locks.
                     let elapsed = start.elapsed();
 
-                    if elapsed >= config.warn_deadline {
-                        tracing::warn!(name, "lock contended");
-                    } else {
-                        tracing::info!(name, "lock contended");
-                    };
+                    // Only emit trace events at most once a second.
+                    if (elapsed.as_millis() % 1000) < config.backoff.as_millis() {
+                        let contents = util::utf8::escape_non_utf8(contents);
+                        if elapsed >= config.warn_deadline {
+                            tracing::warn!(name, contents, "lock contended");
+                        } else {
+                            tracing::info!(name, contents, "lock contended");
+                        };
+                    }
 
                     if elapsed >= config.deadline {
                         return Err(err);
+                    }
+
+                    if let Some(pid) = pid_from_lock_contents(contents) {
+                        bar.set_message(format!("{name} held by pid {pid}"));
+                    } else {
+                        bar.set_message(format!(
+                            "{name} held by {}",
+                            util::utf8::escape_non_utf8(contents)
+                        ));
                     }
 
                     sleep(config.backoff)
@@ -353,6 +369,14 @@ fn lock(
             },
         }
     }
+}
+
+fn pid_from_lock_contents(id: &[u8]) -> Option<u64> {
+    // Contents look like `hostame + ("/" + namespace)? + ":" + pid + ("/" + starttime)?`.
+    let id = std::str::from_utf8(id).ok()?;
+    let id = id.split_once(':').map(|s| s.1)?;
+    let id = id.split_once('/').map_or(id, |s| s.0);
+    id.parse().ok()
 }
 
 struct LockPaths {
@@ -840,5 +864,13 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_pid_from_lock_contents() {
+        assert_eq!(pid_from_lock_contents(b""), None);
+        assert_eq!(pid_from_lock_contents(b"123"), None);
+        assert_eq!(pid_from_lock_contents(b"host:123"), Some(123));
+        assert_eq!(pid_from_lock_contents(b"host/space:123/456"), Some(123));
     }
 }

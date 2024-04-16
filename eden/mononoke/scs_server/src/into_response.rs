@@ -108,8 +108,8 @@ impl IntoResponse<thrift::TreeEntry> for (String, TreeEntry) {
                 let summary = dir.summary();
                 let info = thrift::TreeInfo {
                     id: dir.id().as_ref().to_vec(),
-                    simple_format_sha1: summary.simple_format_sha1.as_ref().to_vec(),
-                    simple_format_sha256: summary.simple_format_sha256.as_ref().to_vec(),
+                    simple_format_sha1: Some(summary.simple_format_sha1.as_ref().to_vec()),
+                    simple_format_sha256: Some(summary.simple_format_sha256.as_ref().to_vec()),
                     child_files_count: summary.child_files_count as i64,
                     child_files_total_size: summary.child_files_total_size as i64,
                     child_dirs_count: summary.child_dirs_count as i64,
@@ -169,8 +169,8 @@ impl IntoResponse<thrift::TreeInfo> for (TreeId, TreeSummary) {
         let (id, summary) = self;
         thrift::TreeInfo {
             id: id.as_ref().to_vec(),
-            simple_format_sha1: summary.simple_format_sha1.as_ref().to_vec(),
-            simple_format_sha256: summary.simple_format_sha256.as_ref().to_vec(),
+            simple_format_sha1: Some(summary.simple_format_sha1.as_ref().to_vec()),
+            simple_format_sha256: Some(summary.simple_format_sha256.as_ref().to_vec()),
             child_files_count: summary.child_files_count as i64,
             child_files_total_size: summary.child_files_total_size as i64,
             child_dirs_count: summary.child_dirs_count as i64,
@@ -352,7 +352,18 @@ impl AsyncIntoResponseWith<thrift::CommitInfo> for ChangesetContext {
                 .collect())
         }
 
-        let (ids, message, date, author, parents, hg_extra, git_extra_headers, generation) = try_join!(
+        let (
+            ids,
+            message,
+            date,
+            author,
+            parents,
+            hg_extra,
+            git_extra_headers,
+            generation,
+            committer_date,
+            committer,
+        ) = try_join!(
             map_commit_identity(&self, identity_schemes),
             self.message(),
             self.author_date(),
@@ -361,6 +372,8 @@ impl AsyncIntoResponseWith<thrift::CommitInfo> for ChangesetContext {
             self.hg_extras(),
             self.git_extra_headers(),
             self.generation(),
+            self.committer_date(),
+            self.committer(),
         )?;
         Ok(thrift::CommitInfo {
             ids,
@@ -377,6 +390,8 @@ impl AsyncIntoResponseWith<thrift::CommitInfo> for ChangesetContext {
                     .collect()
             }),
             generation: generation.value() as i64,
+            committer_date: committer_date.map(|date| date.timestamp()),
+            committer,
             ..Default::default()
         })
     }

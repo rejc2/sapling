@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
 #inprocess-hg-incompatible
   $ setconfig format.use-segmented-changelog=true
   $ setconfig devel.segmented-changelog-rev-compat=true
@@ -563,6 +566,7 @@ Lower the warning threshold to simulate a large repo
   > EOF
 
 We should see a warning about no fsmonitor on supported platforms
+  $ setconfig checkout.use-rust=false
 
 #if linuxormacos no-fsmonitor
   $ hg clone a nofsmonitor

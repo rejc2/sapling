@@ -18,20 +18,19 @@ use blobrepo::BlobRepo;
 use blobstore::Loadable;
 use bookmarks::BookmarkKey;
 use bookmarks::BookmarkUpdateLogEntry;
+use bookmarks::BookmarkUpdateLogId;
 use bookmarks::BookmarksRef;
-use changeset_fetcher::ChangesetFetcherArc;
-use changeset_fetcher::ChangesetFetcherRef;
 use cloned::cloned;
 use commit_graph::CommitGraphArc;
 use commit_graph::CommitGraphRef;
 use context::CoreContext;
 use cross_repo_sync::get_commit_sync_outcome;
-use cross_repo_sync::types::Large;
-use cross_repo_sync::types::Small;
-use cross_repo_sync::types::Source;
-use cross_repo_sync::types::Target;
-use cross_repo_sync::validation::report_different;
+use cross_repo_sync::report_different;
 use cross_repo_sync::CommitSyncOutcome;
+use cross_repo_sync::Large;
+use cross_repo_sync::Small;
+use cross_repo_sync::Source;
+use cross_repo_sync::Target;
 use futures::future;
 use futures::future::try_join_all;
 use futures::stream;
@@ -84,7 +83,7 @@ define_stats! {
 #[derive(Clone, PartialEq, Eq)]
 pub struct EntryCommitId {
     /// A `BookmarkUpdateLogEntry` id, which introduced this commit
-    pub bookmarks_update_log_entry_id: i64,
+    pub bookmarks_update_log_entry_id: BookmarkUpdateLogId,
     /// An index of this commit in the "parent" `BookmarkUpdateLogEntry`
     commit_in_entry: i64,
     /// Total number of commits, introduced by the `BookmarkUpdateLogEntry`
@@ -400,8 +399,8 @@ impl ValidationHelper {
         paths_and_payloads: Vec<(NonRootMPath, &FilenodeDiffPayload)>,
     ) -> Result<Vec<NonRootMPath>, Error> {
         let maybe_p1 = repo
-            .changeset_fetcher()
-            .get_parents(ctx, cs_id.clone())
+            .commit_graph()
+            .changeset_parents(ctx, cs_id.clone())
             .await?
             .first()
             .cloned();
@@ -598,8 +597,8 @@ impl ValidationHelpers {
     ) -> Result<FullManifestDiff, Error> {
         let cs_root_mf_id_fut = fetch_root_mf_id(ctx, repo, cs_id.clone());
         let maybe_p1 = repo
-            .changeset_fetcher()
-            .get_parents(ctx, cs_id.clone())
+            .commit_graph()
+            .changeset_parents(ctx, cs_id.clone())
             .await?
             .first()
             .cloned();
@@ -778,7 +777,7 @@ pub async fn unfold_bookmarks_update_log_entry(
                     bookmarks_update_log_entry_id,
                     to_cs_id
                 );
-                // This might be slow. If too many bookmakrs are being created, it can be optimised
+                // This might be slow. If too many bookmarks are being created, it can be optimised
                 // or we could just check to_cs_id as a best effort.
                 validation_helpers
                     .large_repo
@@ -803,7 +802,7 @@ pub async fn unfold_bookmarks_update_log_entry(
                     from_cs_id,
                     to_cs_id
                 );
-                // This might be slow. If too many bookmakrs are being non-FF moved, it can be optimised
+                // This might be slow. If too many bookmarks are being non-FF moved, it can be optimised
                 // or we could just check to_cs_id as a best effort.
                 validation_helpers
                     .large_repo
@@ -976,10 +975,7 @@ pub async fn prepare_entry(
 
 /// Validate that parents of a changeset in a small repo are
 /// ancestors of it's equivalent in the large repo
-async fn validate_topological_order<
-    'a,
-    R: ChangesetFetcherArc + RepoIdentityRef + CommitGraphArc,
->(
+async fn validate_topological_order<'a, R: RepoIdentityRef + CommitGraphRef + CommitGraphArc>(
     ctx: &'a CoreContext,
     large_repo: &'a Large<R>,
     large_cs_id: Large<ChangesetId>,
@@ -997,8 +993,8 @@ async fn validate_topological_order<
 
     let small_parents = small_repo
         .0
-        .changeset_fetcher()
-        .get_parents(ctx, small_cs_id.0.clone())
+        .commit_graph()
+        .changeset_parents(ctx, small_cs_id.0.clone())
         .await?;
 
     let remapped_small_parents: Vec<(ChangesetId, ChangesetId)> =

@@ -15,6 +15,7 @@ rust_library(
         ":megarepo_error",
         "//common/rust/shed/fbinit:fbinit",
         "//configerator/configo/if:configo-rust",
+        "//configerator/configo/if:configo-rust-clients",
         "//configerator/configo/if:configo-rust-srclients",
     ],
 )
@@ -42,7 +43,6 @@ rust_library(
         "//configerator/structs/scm/mononoke/megarepo:megarepo_configs-rust",
         "//eden/mononoke/blobrepo:blobrepo",
         "//eden/mononoke/blobrepo:blobsync",
-        "//eden/mononoke/blobrepo:changeset_fetcher",
         "//eden/mononoke/blobrepo:repo_blobstore",
         "//eden/mononoke/blobrepo_utils:blobrepo_utils",
         "//eden/mononoke/bonsai_hg_mapping:bonsai_hg_mapping",

@@ -37,9 +37,10 @@ import {useGeneratedFileStatuses} from './GeneratedFile';
 import {Internal} from './Internal';
 import {DOCUMENTATION_DELAY, Tooltip} from './Tooltip';
 import {latestCommitMessageFields} from './codeReview/CodeReviewInfo';
+import {Badge} from './components/Badge';
 import {islDrawerState} from './drawerState';
 import {T, t} from './i18n';
-import {readAtom, writeAtom} from './jotaiUtils';
+import {localStorageBackedAtom, readAtom, writeAtom} from './jotaiUtils';
 import {AbortMergeOperation} from './operations/AbortMergeOperation';
 import {AddRemoveOperation} from './operations/AddRemoveOperation';
 import {getAmendOperation} from './operations/AmendOperation';
@@ -49,6 +50,7 @@ import {DiscardOperation, PartialDiscardOperation} from './operations/DiscardOpe
 import {PurgeOperation} from './operations/PurgeOperation';
 import {RevertOperation} from './operations/RevertOperation';
 import {getShelveOperation} from './operations/ShelveOperation';
+import {operationList, useRunOperation} from './operationsState';
 import {useUncommittedSelection} from './partialSelection';
 import platform from './platform';
 import {
@@ -57,15 +59,10 @@ import {
   useIsOperationRunningOrQueued,
 } from './previews';
 import {selectedCommits} from './selection';
-import {
-  latestHeadCommit,
-  operationList,
-  uncommittedChangesFetchError,
-  useRunOperation,
-} from './serverAPIState';
+import {latestHeadCommit, uncommittedChangesFetchError} from './serverAPIState';
 import {GeneratedStatus} from './types';
-import {VSCodeBadge, VSCodeButton, VSCodeTextField} from '@vscode/webview-ui-toolkit/react';
-import {useAtomValue} from 'jotai';
+import {VSCodeButton, VSCodeTextField} from '@vscode/webview-ui-toolkit/react';
+import {useAtom, useAtomValue} from 'jotai';
 import React, {useCallback, useMemo, useEffect, useRef, useState} from 'react';
 import {ComparisonType} from 'shared/Comparison';
 import {Icon} from 'shared/Icon';
@@ -344,6 +341,15 @@ export function ChangedFiles(props: {
   );
 }
 
+const generatedFilesInitiallyExpanded = localStorageBackedAtom<boolean>(
+  'isl.expand-generated-files',
+  false,
+);
+
+export const __TEST__ = {
+  generatedFilesInitiallyExpanded,
+};
+
 function LinearFileList(props: {
   files: Array<UIChangedFile>;
   displayType: ChangedFilesDisplayType;
@@ -355,6 +361,7 @@ function LinearFileList(props: {
   const {files, generatedStatuses, ...rest} = props;
 
   const groupedByGenerated = group(files, file => generatedStatuses[file.path]);
+  const [initiallyExpanded, setInitallyExpanded] = useAtom(generatedFilesInitiallyExpanded);
 
   function GeneratedFilesCollapsableSection(status: GeneratedStatus) {
     const group = groupedByGenerated[status] ?? [];
@@ -366,14 +373,15 @@ function LinearFileList(props: {
         title={
           <T
             replace={{
-              $count: <VSCodeBadge>{group.length}</VSCodeBadge>,
+              $count: <Badge>{group.length}</Badge>,
             }}>
             {status === GeneratedStatus.PartiallyGenerated
               ? 'Partially Generated Files $count'
               : 'Generated Files $count'}
           </T>
         }
-        startExpanded={status === GeneratedStatus.PartiallyGenerated}>
+        startExpanded={status === GeneratedStatus.PartiallyGenerated || initiallyExpanded}
+        onToggle={expanded => setInitallyExpanded(expanded)}>
         {group.map(file => (
           <File key={file.path} {...rest} file={file} generatedStatus={status} />
         ))}
@@ -432,7 +440,7 @@ export function UncommittedChanges({place}: {place: Place}) {
           const latestMessage = readAtom(latestCommitMessageFields(headCommit.hash));
           if (latestMessage) {
             writeAtom(editedCommitMessages(headCommit.hash), {
-              fields: {...latestMessage},
+              ...latestMessage,
             });
           }
         }
@@ -442,7 +450,7 @@ export function UncommittedChanges({place}: {place: Place}) {
       if (which === 'commit' && quickCommitTyped != null && quickCommitTyped != '') {
         writeAtom(editedCommitMessages('head'), value => ({
           ...value,
-          fields: {...value.fields, Title: quickCommitTyped},
+          Title: quickCommitTyped,
         }));
         // delete what was written in the quick commit form
         commitTitleRef.current != null && (commitTitleRef.current.value = '');
@@ -452,18 +460,20 @@ export function UncommittedChanges({place}: {place: Place}) {
   );
 
   const onConfirmQuickCommit = () => {
-    const title =
-      (commitTitleRef.current as HTMLInputElement | null)?.value ||
-      template?.fields.Title ||
-      temporaryCommitTitle();
+    const titleEl = commitTitleRef.current as HTMLInputElement | null;
+    const title = titleEl?.value || template?.Title || temporaryCommitTitle();
     // use the template, unless a specific quick title is given
-    const fields: CommitMessageFields = {...template?.fields, Title: title};
+    const fields: CommitMessageFields = {...template, Title: title};
     const message = commitMessageFieldsToString(schema, fields);
     const hash = headCommit?.hash ?? '.';
     const allFiles = uncommittedChanges.map(file => file.path);
     const operation = getCommitOperation(message, hash, selection.selection, allFiles);
     selection.discardPartialSelections();
     runOperation(operation);
+    if (titleEl) {
+      // clear out message now that we've used it
+      titleEl.value = '';
+    }
   };
 
   if (error) {

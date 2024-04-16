@@ -19,6 +19,8 @@
 #include <folly/logging/xlog.h>
 #include <folly/stop_watch.h>
 
+#include "eden/common/telemetry/NullStructuredLogger.h"
+#include "eden/common/utils/FaultInjector.h"
 #include "eden/fs/config/EdenConfig.h"
 #include "eden/fs/config/ReloadableConfig.h"
 #include "eden/fs/service/EdenInit.h"
@@ -26,8 +28,6 @@
 #include "eden/fs/store/KeySpace.h"
 #include "eden/fs/store/RocksDbLocalStore.h"
 #include "eden/fs/telemetry/EdenStats.h"
-#include "eden/fs/telemetry/NullStructuredLogger.h"
-#include "eden/fs/utils/FaultInjector.h"
 #include "eden/fs/utils/UserInfo.h"
 
 using namespace facebook::eden;

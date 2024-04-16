@@ -26,7 +26,7 @@ import fs from 'fs';
 import path from 'path';
 import {ComparisonType} from 'shared/Comparison';
 import {nextTick} from 'shared/testUtils';
-import {unwrap} from 'shared/utils';
+import {nullthrows} from 'shared/utils';
 
 afterEach(cleanup);
 
@@ -102,7 +102,7 @@ describe('ComparisonView', () => {
         value: [
           COMMIT('1', 'some public base', '0', {phase: 'public'}),
           COMMIT('a', 'My Commit', '1'),
-          COMMIT('b', 'Another Commit', 'a', {isHead: true}),
+          COMMIT('b', 'Another Commit', 'a', {isDot: true}),
         ],
       });
       simulateUncommittedChangedFiles({
@@ -214,7 +214,7 @@ describe('ComparisonView', () => {
     act(() => {
       simulateMessageFromServer({
         type: 'comparisonContextLines',
-        lines: ['line 1', 'line 2', 'line 3', 'line 4', 'line 5', 'line 6'],
+        lines: {value: ['line 1', 'line 2', 'line 3', 'line 4', 'line 5', 'line 6']},
         path: 'someFile.txt',
       });
     });
@@ -258,7 +258,7 @@ describe('ComparisonView', () => {
     act(() => {
       simulateMessageFromServer({
         type: 'comparisonContextLines',
-        lines: ['line 1', 'line 2', 'line 3', 'line 4', 'line 5', 'line 6'],
+        lines: {value: ['line 1', 'line 2', 'line 3', 'line 4', 'line 5', 'line 6']},
         path: 'someFile.txt',
       });
     });
@@ -278,7 +278,7 @@ describe('ComparisonView', () => {
           COMMIT('1', 'some public base', '0', {phase: 'public'}),
           COMMIT('a', 'My Commit', '1'),
           COMMIT('b', 'Another Commit', 'a'),
-          COMMIT('c', 'New commit!', 'b', {isHead: true}),
+          COMMIT('c', 'New commit!', 'b', {isDot: true}),
         ],
       });
     });
@@ -302,14 +302,16 @@ describe('ComparisonView', () => {
     act(() => {
       simulateMessageFromServer({
         type: 'comparisonContextLines',
-        lines: [
-          'different line 1',
-          'different line 2',
-          'different line 3',
-          'different line 4',
-          'different line 5',
-          'different line 6',
-        ],
+        lines: {
+          value: [
+            'different line 1',
+            'different line 2',
+            'different line 3',
+            'different line 4',
+            'different line 5',
+            'different line 6',
+          ],
+        },
         path: 'someFile.txt',
       });
     });
@@ -403,15 +405,17 @@ describe('ComparisonView', () => {
       await openUncommittedChangesComparison(DIFF_WITH_SYNTAX);
       await waitForSyntaxHighlightingToAppear(screen.getByTestId('comparison-view'));
 
-      expect(
-        within(screen.getByTestId('comparison-view')).queryAllByText('variable_in_context_line'),
-      ).toHaveLength(2);
-      expect(
-        within(screen.getByTestId('comparison-view')).getByText('variable_in_before'),
-      ).toBeInTheDocument();
-      expect(
-        within(screen.getByTestId('comparison-view')).getByText('variable_in_after'),
-      ).toBeInTheDocument();
+      await waitFor(() => {
+        expect(
+          within(screen.getByTestId('comparison-view')).queryAllByText('variable_in_context_line'),
+        ).toHaveLength(2);
+        expect(
+          within(screen.getByTestId('comparison-view')).getByText('variable_in_before'),
+        ).toBeInTheDocument();
+        expect(
+          within(screen.getByTestId('comparison-view')).getByText('variable_in_after'),
+        ).toBeInTheDocument();
+      });
       unmountNow();
     });
 
@@ -435,7 +439,7 @@ describe('ComparisonView', () => {
       act(() => {
         simulateMessageFromServer({
           type: 'comparisonContextLines',
-          lines: ['const loaded_additional_context_variable = 5;'],
+          lines: {value: ['const loaded_additional_context_variable = 5;']},
           path: 'someFile.js',
         });
       });
@@ -591,10 +595,10 @@ function waitForSyntaxHighlightingToAppear(inside: HTMLElement): Promise<void> {
 
 function mockFetchToSupportSyntaxHighlighting(): jest.SpyInstance {
   return jest.spyOn(global, 'fetch').mockImplementation(
-    jest.fn(async url => {
-      if (url.includes('generated/textmate')) {
-        const match = /.*generated\/textmate\/(.*)$/.exec(url);
-        const filename = unwrap(match)[1];
+    jest.fn(async (url: URL) => {
+      if (url.pathname.includes('generated/textmate')) {
+        const match = /.*generated\/textmate\/(.*)$/.exec(url.pathname);
+        const filename = nullthrows(match)[1];
         const toPublicDir = (filename: string) =>
           path.normalize(path.join(__dirname, '../../public/generated/textmate', filename));
         if (filename === 'onig.wasm') {

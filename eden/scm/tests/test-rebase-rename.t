@@ -1,6 +1,10 @@
 #debugruntest-compatible
 
+#require no-eden
+
+
   $ enable rebase
+  $ setconfig experimental.copytrace=on
   $ readconfig <<EOF
   > [alias]
   > tlog  = log --template "{node|short} '{desc}' {branches}\n"

@@ -10,14 +10,14 @@
 #include <fb303/BaseService.h>
 #include <optional>
 #include "eden/common/os/ProcessId.h"
+#include "eden/common/telemetry/TraceBus.h"
 #include "eden/common/utils/PathFuncs.h"
+#include "eden/common/utils/RefPtr.h"
 #include "eden/fs/eden-config.h"
 #include "eden/fs/inodes/EdenMountHandle.h"
 #include "eden/fs/inodes/InodePtrFwd.h"
 #include "eden/fs/service/gen-cpp2/StreamingEdenService.h"
 #include "eden/fs/telemetry/ActivityBuffer.h"
-#include "eden/fs/telemetry/TraceBus.h"
-#include "eden/fs/utils/RefPtr.h"
 
 namespace folly {
 template <typename T>
@@ -124,6 +124,10 @@ class EdenServiceHandler : virtual public StreamingEdenServiceSvIf,
       std::unique_ptr<std::string> mountPoint,
       std::unique_ptr<WorkingDirectoryParents> parents,
       std::unique_ptr<ResetParentCommitsParams> params) override;
+
+  void getCurrentSnapshotInfo(
+      GetCurrentSnapshotInfoResponse& out,
+      std::unique_ptr<GetCurrentSnapshotInfoRequest> params) override;
 
   folly::SemiFuture<folly::Unit> semifuture_synchronizeWorkingCopy(
       std::unique_ptr<std::string> mountPoint,

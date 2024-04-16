@@ -1,4 +1,5 @@
-#require fsmonitor
+#debugruntest-compatible
+#require fsmonitor no-eden
 
   $ configure modernclient
   $ setconfig fsmonitor.warn-fresh-instance=true

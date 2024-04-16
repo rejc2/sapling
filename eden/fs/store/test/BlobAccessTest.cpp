@@ -8,6 +8,7 @@
 #include "eden/fs/store/BlobAccess.h"
 #include <folly/portability/GTest.h>
 #include <chrono>
+#include "eden/common/telemetry/NullStructuredLogger.h"
 #include "eden/common/utils/ProcessInfoCache.h"
 #include "eden/fs/config/EdenConfig.h"
 #include "eden/fs/config/ReloadableConfig.h"
@@ -16,7 +17,6 @@
 #include "eden/fs/store/StoreResult.h"
 #include "eden/fs/store/TreeCache.h"
 #include "eden/fs/telemetry/EdenStats.h"
-#include "eden/fs/telemetry/NullStructuredLogger.h"
 #include "eden/fs/testharness/FakeBackingStore.h"
 #include "eden/fs/testharness/LoggingFetchContext.h"
 
@@ -81,7 +81,8 @@ class NullLocalStore final : public LocalStore {
 struct BlobAccessTest : ::testing::Test {
   BlobAccessTest()
       : localStore{std::make_shared<NullLocalStore>()},
-        backingStore{std::make_shared<FakeBackingStore>()},
+        backingStore{std::make_shared<FakeBackingStore>(
+            BackingStore::LocalStoreCachingPolicy::NoCaching)},
         blobCache{BlobCache::create(10, 0, makeRefPtr<EdenStats>())} {
     std::shared_ptr<EdenConfig> rawEdenConfig{
         EdenConfig::createTestEdenConfig()};
@@ -96,6 +97,7 @@ struct BlobAccessTest : ::testing::Test {
     localStore->open();
     objectStore = ObjectStore::create(
         backingStore,
+        localStore,
         treeCache,
         makeRefPtr<EdenStats>(),
         std::make_shared<ProcessInfoCache>(),

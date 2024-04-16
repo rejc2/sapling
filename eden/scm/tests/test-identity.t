@@ -1,5 +1,8 @@
 #debugruntest-compatible
 
+#require no-eden
+
+
   $ configure modernclient
   $ setconfig clone.use-rust=true
 
@@ -60,7 +63,7 @@ Clone can create a ".sl" repo.
   $ cd cloned
 Status works in ".sl" repo
   $ LOG=configloader::hg=info hg status -A
-   INFO configloader::hg: loading config repo_path=$TESTTMP/cloned
+   INFO configloader::hg: loading config repo_path=* (glob)
   C foo
   $ cd ..
 
@@ -93,3 +96,14 @@ Test we prefer ".sl" over ".hg"
   $ mkdir .hg
   $ hg root --dotdir
   $TESTTMP/repo2/.sl
+
+Can choose flavor of dot dir using REPO_IDENTITY override:
+  $ SL_IDENTITY=sl SL_REPO_IDENTITY=hg hg version -q
+  Sapling 4.4.2_dev
+  $ SL_IDENTITY=sl SL_REPO_IDENTITY=hg newrepo
+  $ ls .hg/requires
+  .hg/requires
+Works from within a repo of the opposite flavor:
+  $ SL_REPO_IDENTITY=sl hg init foo
+  $ ls foo/.sl/requires
+  foo/.sl/requires

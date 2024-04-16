@@ -20,7 +20,7 @@ import {arrayFromHashes, HashSet} from './set';
 import {List, Record, Map as ImMap, Set as ImSet} from 'immutable';
 import {LRU, cachedMethod} from 'shared/LRU';
 import {SelfUpdate} from 'shared/immutableExt';
-import {group, notEmpty, splitOnce, unwrap} from 'shared/utils';
+import {group, notEmpty, splitOnce, nullthrows} from 'shared/utils';
 
 /**
  * Main commit graph type used for preview calculation and queries.
@@ -232,7 +232,8 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
         i.phase === 'public' &&
         i.remoteBookmarks.length === 0 &&
         i.bookmarks.length === 0 &&
-        !i.isHead,
+        (i.stableCommitMetadata == null || i.stableCommitMetadata.length === 0) &&
+        !i.isDot,
       all,
     );
     const toHidePublic = unamedPublic.subtract(this.parents(draft));
@@ -242,25 +243,27 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
 
   // Sort
 
-  // sortAsc all commits, with the default compare function.
+  /**
+   * sortAsc all commits, with the default compare function.
+   * Return `[map, array]`. The array is the sorted hashes.
+   * The map provides look-up from hash to array index. `map.get(h)` is `array.indexOf(h)`.
+   */
   defaultSortAscIndex = cachedMethod(this.defaultSortAscIndexImpl, {
     cache: defaultSortAscIndexCache,
   });
-  private defaultSortAscIndexImpl(): ReadonlyMap<Hash, number> {
-    return new Map(
-      this.commitDag
-        .sortAsc(this.all(), {compare: sortAscCompare, gap: false})
-        .map((h, i) => [h, i]),
-    );
+  private defaultSortAscIndexImpl(): [ReadonlyMap<Hash, number>, ReadonlyArray<Hash>] {
+    const sorted = this.commitDag.sortAsc(this.all(), {compare: sortAscCompare, gap: false});
+    const index = new Map(sorted.map((h, i) => [h, i]));
+    return [index, sorted];
   }
 
   sortAsc(set: SetLike, props?: SortProps<DagCommitInfo>): Array<Hash> {
     if (props?.compare == null) {
       // If no custom compare function, use the sortAsc index to answer subset
       // sortAsc, which can be slow to calculate otherwise.
-      const index = this.defaultSortAscIndex();
+      const [index, sorted] = this.defaultSortAscIndex();
       if (set === undefined) {
-        return [...index.keys()];
+        return [...sorted];
       }
       const hashes = arrayFromHashes(set === undefined ? this.all() : set);
       return hashes.sort((a, b) => {
@@ -369,7 +372,7 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
       const pureHash = isSucc ? h.substring(REBASE_SUCC_PREFIX.length) : h;
       const isPred = !isSucc && duplicated.contains(h);
       const isRoot = srcRoots.contains(pureHash);
-      const info = unwrap(isSucc ? this.get(pureHash) : c);
+      const info = nullthrows(isSucc ? this.get(pureHash) : c);
       return info.withMutations(mut => {
         // Reset the seqNumber so the rebase preview tends to show as right-most branches.
         let newInfo = mut.set('seqNumber', undefined);
@@ -438,6 +441,11 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
   /** All visible successors recursively, including `set`. */
   successors(set: SetLike): HashSet {
     return this.mutationDag.range(set, this);
+  }
+
+  /** All visible predecessors of commits in `set`, including `set`. */
+  predecessors(set: SetLike): HashSet {
+    return this.present(this.mutationDag.ancestors(set));
   }
 
   /**
@@ -565,7 +573,7 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
     // Render row by row. The main complexity is to figure out the "ancestors",
     // especially when the provided `set` is a subset of the dag.
     for (const hash of sorted) {
-      const info = unwrap(this.get(hash));
+      const info = nullthrows(this.get(hash));
       const parents: ReadonlyArray<Hash> = info?.parents ?? [];
       // directParents: solid edges
       // indirectParents: dashed edges
@@ -627,11 +635,17 @@ export class Dag extends SelfUpdate<CommitDagRecord> {
           [hash, title, author, date.valueOf() < 1000 ? '' : date.toISOString()]
             .join(' ')
             .trimEnd() + '\n';
-        const glyph = info?.isHead ? '@' : info?.successorInfo == null ? 'o' : 'x';
+        const glyph = info?.isDot ? '@' : info?.successorInfo == null ? 'o' : 'x';
         renderedRows.push(renderer.nextRow(info.hash, typedParents, message, glyph));
       }
     }
     return renderedRows.join('').trimEnd();
+  }
+
+  /** Provided extra fileds for debugging use-case. For now, this includes an ASCII graph. */
+  getDebugState(): {rendered: Array<string>} {
+    const rendered = this.renderAscii().split('\n');
+    return {rendered};
   }
 }
 
@@ -657,8 +671,8 @@ function infoToNameMapEntries(info: DagCommitInfo): Array<NameMapEntry> {
   //         of access to the code review abstraction.
   // - partial hash (handled by dag.resolve())
   const result: Array<NameMapEntry> = [];
-  const {hash, isHead, bookmarks, remoteBookmarks} = info;
-  if (isHead) {
+  const {hash, isDot, bookmarks, remoteBookmarks} = info;
+  if (isDot) {
     result.push(['.', HashPriRecord({hash, priority: 1})]);
   }
   bookmarks.forEach(b => result.push([b, HashPriRecord({hash, priority: 10})]));

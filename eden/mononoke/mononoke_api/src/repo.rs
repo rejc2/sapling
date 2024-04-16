@@ -53,22 +53,20 @@ use bulk_derivation::BulkDerivation;
 use bytes::Bytes;
 use cacheblob::InProcessLease;
 use cacheblob::LeaseOps;
-use changeset_fetcher::ChangesetFetcher;
-use changeset_fetcher::ChangesetFetcherArc;
-use changeset_fetcher::ChangesetFetcherRef;
 use changeset_info::ChangesetInfo;
 use changesets::Changesets;
 use changesets::ChangesetsArc;
 use changesets::ChangesetsRef;
+use commit_cloud::CommitCloud;
 use commit_graph::CommitGraph;
 use commit_graph::CommitGraphRef;
 use context::CoreContext;
-use cross_repo_sync::types::Target;
 use cross_repo_sync::CandidateSelectionHint;
 use cross_repo_sync::CommitSyncContext;
 use cross_repo_sync::CommitSyncRepos;
 use cross_repo_sync::CommitSyncer;
 use cross_repo_sync::SubmoduleDeps;
+use cross_repo_sync::Target;
 use derived_data_manager::BonsaiDerivable;
 use derived_data_manager::DerivableType;
 use ephemeral_blobstore::ArcRepoEphemeralStore;
@@ -85,7 +83,6 @@ use filestore::FetchKey;
 use filestore::FilestoreConfig;
 use filestore::FilestoreConfigRef;
 pub use filestore::StoreRequest;
-use futures::compat::Stream01CompatExt;
 use futures::stream;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
@@ -145,7 +142,6 @@ use repo_permission_checker::RepoPermissionChecker;
 use repo_sparse_profiles::ArcRepoSparseProfiles;
 use repo_sparse_profiles::RepoSparseProfiles;
 use repo_sparse_profiles::RepoSparseProfilesArc;
-use revset::AncestorsNodeStream;
 use segmented_changelog::CloneData;
 use segmented_changelog::DisabledSegmentedChangelog;
 use segmented_changelog::Location;
@@ -221,7 +217,6 @@ pub struct Repo {
         dyn BonsaiHgMapping,
         dyn BookmarkUpdateLog,
         dyn Bookmarks,
-        dyn ChangesetFetcher,
         dyn Changesets,
         dyn Phases,
         dyn PushrebaseMutationMapping,
@@ -240,6 +235,7 @@ pub struct Repo {
         CommitGraph,
         dyn GitSymbolicRefs,
         dyn Filenodes,
+        CommitCloud
     )]
     pub inner: InnerRepo,
 
@@ -390,11 +386,21 @@ pub async fn open_synced_commit_mapping(
 }
 
 /// Defines behavuiour of xrepo_commit_lookup when there's no mapping for queries commit just yet.
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
 pub enum XRepoLookupSyncBehaviour {
     // Initiates sync and returns the sync result
     SyncIfAbsent,
     // Returns None
     NeverSync,
+}
+
+/// Defines behavuiour of xrepo_commit_lookup when there's no exact mapping but only working copy equivalence
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+pub enum XRepoLookupExactBehaviour {
+    // Returns result only when there's exact mapping
+    OnlyExactMapping,
+    // Returns result also when there's working copy equivalent match
+    WorkingCopyEquivalence,
 }
 
 impl Repo {
@@ -707,12 +713,10 @@ impl Repo {
         // This is a generation number beyond which we don't need to traverse
         let min_gen_num = self.fetch_gen_num(ctx, &ancestor).await?;
 
-        let mut ancestors = AncestorsNodeStream::new(
-            ctx.clone(),
-            &self.blob_repo().changeset_fetcher_arc(),
-            descendant,
-        )
-        .compat();
+        let mut ancestors = self
+            .commit_graph()
+            .ancestors_difference_stream(ctx, vec![descendant], vec![])
+            .await?;
 
         let mut traversed = 0;
         while let Some(cs_id) = ancestors.next().await {
@@ -722,11 +726,7 @@ impl Repo {
             }
 
             let cs_id = cs_id?;
-            let parents = self
-                .blob_repo()
-                .changeset_fetcher()
-                .get_parents(ctx, cs_id)
-                .await?;
+            let parents = self.commit_graph().changeset_parents(ctx, cs_id).await?;
 
             if parents.contains(&ancestor) {
                 return Ok(Some(cs_id));
@@ -746,10 +746,7 @@ impl Repo {
         ctx: &CoreContext,
         cs_id: &ChangesetId,
     ) -> Result<Generation, Error> {
-        self.blob_repo()
-            .changeset_fetcher()
-            .get_generation_number(ctx, *cs_id)
-            .await
+        self.commit_graph().changeset_generation(ctx, *cs_id).await
     }
 }
 
@@ -902,21 +899,21 @@ impl RepoContext {
         self.blob_repo()
             .repo_derived_data()
             .config()
-            .is_enabled(ChangesetInfo::NAME)
+            .is_enabled(ChangesetInfo::VARIANT)
     }
 
     pub fn derive_gitcommit_enabled(&self) -> bool {
         self.blob_repo()
             .repo_derived_data()
             .config()
-            .is_enabled(MappedGitCommitId::NAME)
+            .is_enabled(MappedGitCommitId::VARIANT)
     }
 
     pub fn derive_hgchangesets_enabled(&self) -> bool {
         self.blob_repo()
             .repo_derived_data()
             .config()
-            .is_enabled(MappedHgChangesetId::NAME)
+            .is_enabled(MappedHgChangesetId::VARIANT)
     }
 
     /// Load bubble from id
@@ -964,6 +961,10 @@ impl RepoContext {
             .await?
             .exists(&self.ctx, changeset_id)
             .await?)
+    }
+
+    pub fn commit_graph(&self) -> &CommitGraph {
+        self.repo.commit_graph()
     }
 
     /// Look up a changeset specifier to find the canonical bonsai changeset
@@ -1102,7 +1103,6 @@ impl RepoContext {
         let repo = self.clone();
 
         Ok(self
-            .repo()
             .commit_graph()
             .ancestors_difference_stream(&self.ctx, includes, excludes)
             .await?
@@ -1606,12 +1606,17 @@ impl RepoContext {
 
     /// Get the equivalent changeset from another repo - it may sync it if needed (depending on
     /// `sync_behaviour` arg).
+    ///
+    /// Setting exact to true will return result only if there's exact match for the requested
+    /// commit - rather than commit with equivalent working copy (which happens in case the source
+    /// commit rewrites to nothing in target repo).
     pub async fn xrepo_commit_lookup(
         &self,
         other: &Self,
         specifier: impl Into<ChangesetSpecifier>,
         maybe_candidate_selection_hint_args: Option<CandidateSelectionHintArgs>,
         sync_behaviour: XRepoLookupSyncBehaviour,
+        exact: XRepoLookupExactBehaviour,
     ) -> Result<Option<ChangesetContext>, MononokeError> {
         let common_config = self
             .live_commit_sync_config()
@@ -1649,33 +1654,30 @@ impl RepoContext {
             self.repo.x_repo_sync_lease().clone(),
         );
 
-        let maybe_cs_id = match sync_behaviour {
-            XRepoLookupSyncBehaviour::NeverSync => {
-                // We are not using the candidate_selection_hint here as  it's also not used by the
-                // sync_commit to resolve the result to return. (It's used when remapping parents).
-                use cross_repo_sync::CommitSyncOutcome::*;
-                commit_syncer
-                    .get_commit_sync_outcome(&self.ctx, changeset)
-                    .await?
-                    .and_then(|outcome| match outcome {
-                        NotSyncCandidate(_) => None,
-                        RewrittenAs(cs_id, _) | EquivalentWorkingCopyAncestor(cs_id, _) => {
-                            Some(cs_id)
-                        }
-                    })
-            }
-            XRepoLookupSyncBehaviour::SyncIfAbsent => {
-                commit_syncer
-                    .sync_commit(
-                        &self.ctx,
-                        changeset,
-                        candidate_selection_hint,
-                        CommitSyncContext::ScsXrepoLookup,
-                        false,
-                    )
-                    .await?
-            }
-        };
+        if sync_behaviour == XRepoLookupSyncBehaviour::SyncIfAbsent {
+            let _ = commit_syncer
+                .sync_commit(
+                    &self.ctx,
+                    changeset,
+                    candidate_selection_hint,
+                    CommitSyncContext::ScsXrepoLookup,
+                    false,
+                )
+                .await?;
+        }
+        use cross_repo_sync::CommitSyncOutcome::*;
+        let maybe_cs_id = commit_syncer
+            .get_commit_sync_outcome(&self.ctx, changeset)
+            .await?
+            .and_then(|outcome| match outcome {
+                NotSyncCandidate(_) => None,
+                EquivalentWorkingCopyAncestor(_cs_id, _)
+                    if exact == XRepoLookupExactBehaviour::OnlyExactMapping =>
+                {
+                    None
+                }
+                EquivalentWorkingCopyAncestor(cs_id, _) | RewrittenAs(cs_id, _) => Some(cs_id),
+            });
         Ok(maybe_cs_id.map(|cs_id| ChangesetContext::new(other.clone(), cs_id)))
     }
 
@@ -1735,8 +1737,7 @@ impl RepoContext {
 
         let ancestors = match use_commit_graph {
             true => {
-                self.repo()
-                    .commit_graph()
+                self.commit_graph()
                     .locations_to_changeset_ids(
                         self.ctx(),
                         location.descendant,
@@ -1775,7 +1776,6 @@ impl RepoContext {
 
         match use_commit_graph {
             true => Ok(self
-                .repo()
                 .commit_graph()
                 .changeset_ids_to_locations(self.ctx(), master_heads, cs_ids)
                 .await

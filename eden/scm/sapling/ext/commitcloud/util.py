@@ -83,3 +83,25 @@ def getcommandandoptions(command):
     cmd = commands.table[command][0]
     opts = dict(opt[1:3] for opt in commands.table[command][1])
     return cmd, opts
+
+
+class scratchbranchmatcher:
+    def __init__(self, ui):
+        scratchbranchpat = ui.config("infinitepush", "branchpattern")
+        if scratchbranchpat:
+            _, _, matchfn = util.stringmatcher(scratchbranchpat)
+        else:
+            matchfn = lambda x: False
+        self._matchfn = matchfn
+
+    def match(self, bookmark):
+        return self._matchfn(bookmark)
+
+
+def supported(repo):
+    """test if a repo support commit cloud"""
+    if "git" in repo.storerequirements:
+        return False
+    if not repo.ui.paths.get("default"):
+        return False
+    return True

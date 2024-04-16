@@ -1,4 +1,4 @@
-#require no-fsmonitor
+#require no-fsmonitor no-eden
 #debugruntest-compatible
 
 setup
@@ -17,8 +17,6 @@ command, exit codes, and duration
   $ echo a > a
   $ hg add a
   $ hg blackbox --pattern '{"legacy_log":{"service":["or","command","command_finish"]}}'
-  [legacy][command] up -q tip
-  [legacy][command_finish] up -q tip exited 0 after 0.00 seconds
   [legacy][command] add a
   [legacy][command_finish] add a exited 0 after 0.00 seconds
   [legacy][command] blackbox --pattern '{"legacy_log":{"service":["or","command","command_finish"]}}'
@@ -47,6 +45,7 @@ FIXME: (recursive) alias expansion is not logged
   [legacy][command_finish] so-confusing exited 0 after 0.00 seconds
   [legacy][connectionpool]
   [legacy][command_info]
+  [legacy][metrics] {'metrics': {'scmstore': {'tree': * (glob) (?)
   [commmand_finish] exited 0 in 0 ms, max RSS: 0 bytes
   [tracing] (binary data of * bytes) (glob)
   [command] [*, "blackbox"] started by uid 0 as pid 0 with nice 0 (glob)
@@ -86,8 +85,6 @@ clone, commit, pull
   [legacy][command_finish] pull -q -B head1 exited 0 after 0.00 seconds
   [legacy][command] pull -q -B head2
   [legacy][command_finish] pull -q -B head2 exited 0 after 0.00 seconds
-  [legacy][command] up -q tip
-  [legacy][command_finish] up -q tip exited 0 after 0.00 seconds
   [legacy][command] pull
   [legacy][command_finish] pull exited 0 after 0.00 seconds
   [legacy][command] blackbox --pattern '{"legacy_log":{"service":["or","command","command_finish","command_alias"]}}'

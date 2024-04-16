@@ -18,14 +18,14 @@ atomic-counter = "1.0"
 blobstore = { version = "0.1.0", path = "../../blobstore" }
 borrowed = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 bounded_traversal = { version = "0.1.0", path = "../../common/bounded_traversal" }
-bytes = { version = "1.1", features = ["serde"] }
-changeset_fetcher = { version = "0.1.0", path = "../../blobrepo/changeset_fetcher" }
+bytes = { version = "1.6.0", features = ["serde"] }
 cloned = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
+commit_graph = { version = "0.1.0", path = "../../repo_attributes/commit_graph/commit_graph" }
 context = { version = "0.1.0", path = "../../server/context" }
 derived_data = { version = "0.1.0", path = ".." }
 derived_data_manager = { version = "0.1.0", path = "../manager" }
 derived_data_service_if = { version = "0.1.0", path = "../remote/if" }
-futures = { version = "0.3.28", features = ["async-await", "compat"] }
+futures = { version = "0.3.30", features = ["async-await", "compat"] }
 itertools = "0.11.0"
 manifest = { version = "0.1.0", path = "../../manifest" }
 maplit = "1.0"
@@ -34,7 +34,7 @@ multimap = "0.8.1"
 repo_blobstore = { version = "0.1.0", path = "../../blobrepo/repo_blobstore" }
 repo_derived_data = { version = "0.1.0", path = "../../repo_attributes/repo_derived_data" }
 slog = { version = "2.7", features = ["max_level_trace", "nested-values"] }
-tokio = { version = "1.29.1", features = ["full", "test-util", "tracing"] }
+tokio = { version = "1.36.0", features = ["full", "test-util", "tracing"] }
 unodes = { version = "0.1.0", path = "../unodes" }
 
 [dev-dependencies]

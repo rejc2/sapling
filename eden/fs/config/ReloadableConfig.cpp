@@ -7,9 +7,9 @@
 
 #include "eden/fs/config/ReloadableConfig.h"
 
+#include "eden/common/utils/Bug.h"
+#include "eden/common/utils/EnumValue.h"
 #include "eden/fs/config/EdenConfig.h"
-#include "eden/fs/utils/Bug.h"
-#include "eden/fs/utils/EnumValue.h"
 
 #include <folly/logging/xlog.h>
 

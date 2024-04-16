@@ -8,28 +8,28 @@
 import type {Dag} from './dag/dag';
 import type {CommitTreeWithPreviews} from './getCommitTree';
 import type {Operation} from './operations/Operation';
-import type {OperationInfo, OperationList} from './serverAPIState';
+import type {OperationInfo, OperationList} from './operationsState';
 import type {ChangedFile, CommitInfo, Hash, MergeConflicts, UncommittedChanges} from './types';
 
 import {latestSuccessorsMapAtom} from './SuccessionTracker';
 import {getTracker} from './analytics/globalTracker';
+import {focusMode} from './atoms/FocusModeState';
+import {YOU_ARE_HERE_VIRTUAL_COMMIT} from './dag/virtualCommit';
 import {getCommitTree, walkTreePostorder} from './getCommitTree';
 import {getOpName} from './operations/Operation';
+import {operationBeingPreviewed, queuedOperations, operationList} from './operationsState';
 import {
   latestUncommittedChanges,
   latestCommits,
   latestDag,
-  operationBeingPreviewed,
   latestHeadCommit,
-  queuedOperations,
-  operationList,
   mergeConflicts,
   latestUncommittedChangesData,
   latestCommitsData,
 } from './serverAPIState';
 import {atom, useAtom, useAtomValue} from 'jotai';
 import {useEffect} from 'react';
-import {notEmpty, unwrap} from 'shared/utils';
+import {notEmpty, nullthrows} from 'shared/utils';
 
 export enum CommitPreview {
   REBASE_ROOT = 'rebase-root',
@@ -252,6 +252,25 @@ export const dagWithPreviews = atom(get => {
   const history = list.operationHistory;
   const currentPreview = get(operationBeingPreviewed);
   let dag = originalDag;
+
+  const focus = get(focusMode);
+  if (focus) {
+    const current = dag.resolve('.');
+    if (current) {
+      const currentStack = dag.descendants(
+        dag.ancestors(dag.draft(current.hash), {within: dag.draft()}),
+      );
+      const related = dag.descendants(
+        dag.successors(currentStack).union(dag.predecessors(currentStack)),
+      );
+      const toKeep = currentStack
+        .union(YOU_ARE_HERE_VIRTUAL_COMMIT.hash) // ensure we always show "You Are Here"
+        .union(related);
+      const toRemove = dag.draft().subtract(toKeep);
+      dag = dag.remove(toRemove);
+    }
+  }
+
   for (const op of optimisticOperations({history, queued, currentOperation})) {
     dag = op.optimisticDag(dag);
   }
@@ -268,7 +287,7 @@ export const treeWithPreviews = atom(get => {
 
   let headCommit = get(latestHeadCommit);
   // The headCommit might be changed by dag previews. Double check.
-  if (headCommit && !dag.get(headCommit.hash)?.isHead) {
+  if (headCommit && !dag.get(headCommit.hash)?.isDot) {
     headCommit = dag.resolve('.');
   }
   // Open-code latestCommitTreeMap to pick up tree changes done by `dag`.
@@ -404,7 +423,7 @@ export function useMarkOperationsCompleted(): void {
             if (optimisticApplier == null || operation.exitCode !== 0) {
               files = true;
             } else if (
-              uncommittedChanges.fetchStartTimestamp > unwrap(operation.endTime).valueOf()
+              uncommittedChanges.fetchStartTimestamp > nullthrows(operation.endTime).valueOf()
             ) {
               getTracker()?.track('OptimisticFilesStateForceResolved', {extras: {}});
               files = true;
@@ -424,7 +443,7 @@ export function useMarkOperationsCompleted(): void {
               conflicts = true;
             } else if (
               (mergeConflictsContext.conflicts?.fetchStartTimestamp ?? 0) >
-              unwrap(operation.endTime).valueOf()
+              nullthrows(operation.endTime).valueOf()
             ) {
               getTracker()?.track('OptimisticConflictsStateForceResolved', {
                 extras: {operation: getOpName(operation.operation)},

@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
   $ setconfig experimental.allowfilepeer=True
 
   $ configure modern
@@ -29,6 +32,7 @@ Make the first clone of the server
   $ hg cloud join -w w1
   commitcloud: this repository is now connected to the 'user/test/w1' workspace for the 'server' repo
   commitcloud: synchronizing 'server' with 'user/test/w1'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -43,12 +47,15 @@ Make the second clone of the server
   $ hg cloud join -w w2
   commitcloud: this repository is now connected to the 'user/test/w2' workspace for the 'server' repo
   commitcloud: synchronizing 'server' with 'user/test/w2'
-  backing up stack rooted at 90a3dff49daa
+  commitcloud: head '67590a46a20b' hasn't been uploaded yet
+  edenapi: queue 2 commits for upload
+  edenapi: queue 2 files for upload
+  edenapi: uploaded 2 files
+  edenapi: queue 2 trees for upload
+  edenapi: uploaded 2 trees
+  edenapi: uploaded 2 changesets
   commitcloud: commits synchronized
   finished in * (glob)
-  remote: pushing 2 commits:
-  remote:     90a3dff49daa  A (W2)
-  remote:     67590a46a20b  B (W2)
 
   $ cd ..
 
@@ -70,6 +77,7 @@ Make a commit in the first client, and sync it
 Rename to the existing workspace should fail 
   $ hg cloud rename -d w2
   commitcloud: synchronizing 'server' with 'user/test/w1'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   commitcloud: rename the 'user/test/w1' workspace to 'user/test/w2' for the repo 'server'
@@ -81,6 +89,7 @@ Rename to a new name should work
 Smartlog and status should stay the same
   $ hg cloud rename -d w3
   commitcloud: synchronizing 'server' with 'user/test/w1'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   commitcloud: rename the 'user/test/w1' workspace to 'user/test/w3' for the repo 'server'
@@ -95,6 +104,7 @@ Smartlog and status should stay the same
   
   $ hg cloud sync --debug
   commitcloud: synchronizing 'server' with 'user/test/w3'
+  commitcloud: nothing to upload
   commitcloud local service: get_references for current version 2
   commitcloud: commits synchronized
   finished in * (glob)
@@ -111,6 +121,7 @@ Move to the second client
   $ cd client2
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/w2'
+  commitcloud: nothing to upload
   abort: 'get_references' failed, the workspace has been renamed or client has an invalid state
   [255]
   $ hg cloud list
@@ -142,6 +153,7 @@ Move to the second client
   working directory now at d20a80d4def3
   commitcloud: this repository is now connected to the 'user/test/w4' workspace for the 'server' repo
   commitcloud: synchronizing 'server' with 'user/test/w4'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -158,6 +170,7 @@ Move to the second client
   [255]
   $ hg cloud rename --rehost
   commitcloud: synchronizing 'server' with 'user/test/w4'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   commitcloud: rename the 'user/test/w4' workspace to 'user/test/testhost' for the repo 'server'
@@ -172,16 +185,15 @@ Back to client1
   0 files updated, 0 files merged, 2 files removed, 0 files unresolved
   $ hg cloud switch -w testhost # switch to a renamed workspace should work
   commitcloud: synchronizing 'server' with 'user/test/w3'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   commitcloud: now this repository will be switched from the 'user/test/w3' to the 'user/test/testhost' workspace
   commitcloud: this repository is now connected to the 'user/test/testhost' workspace for the 'server' repo
   commitcloud: synchronizing 'server' with 'user/test/testhost'
+  commitcloud: nothing to upload
   pulling 67590a46a20b from ssh://user@dummy/server
   searching for changes
-  adding changesets
-  adding manifests
-  adding file changes
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -208,6 +220,7 @@ Try to rename a workspace after leave
   $ hg cloud join -w testhost
   commitcloud: this repository is now connected to the 'user/test/testhost' workspace for the 'server' repo
   commitcloud: synchronizing 'server' with 'user/test/testhost'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -266,6 +279,7 @@ Test reclaim workspace
 Check that sync is ok after the reclaim
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/jdoe@example.com/testhost'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -304,5 +318,6 @@ Try to reclaim after cloud leave
   $ hg cloud join
   commitcloud: this repository is now connected to the 'user/janedoe@example.com/default' workspace for the 'server' repo
   commitcloud: synchronizing 'server' with 'user/janedoe@example.com/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)

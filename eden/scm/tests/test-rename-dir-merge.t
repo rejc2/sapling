@@ -1,6 +1,10 @@
 #debugruntest-compatible
+
+#require no-eden
+
 #inprocess-hg-incompatible
   $ setconfig experimental.allowfilepeer=True
+  $ setconfig experimental.copytrace=on
 
   $ hg init t
   $ cd t

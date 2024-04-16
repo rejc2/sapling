@@ -1,8 +1,12 @@
 #debugruntest-compatible
+
+#require no-eden
+
   $ setconfig experimental.allowfilepeer=True
 
   $ configure modern
   $ setconfig infinitepush.branchpattern=re:scratch/.+
+  $ setconfig checkout.use-rust=false
 
   $ showgraph() {
   >    hg log -G -T "{desc}: {phase} {bookmarks} {remotenames}" -r "all()"
@@ -69,6 +73,7 @@ Pull the other bookmark so we have a subscription.
   $ cd $TESTTMP/client1
   $ hg pull -B other
   pulling from ssh://user@dummy/server
+  searching for changes
   $ hg book --list-subs
      remote/master             9da34b1aa207
      remote/other              4c8ee072cf16
@@ -252,6 +257,7 @@ Sync in the fourth repo
   $ cd $TESTTMP/client4
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * sec (glob)
 
@@ -268,6 +274,7 @@ Sync in the second repo with one of the deleted bookmarks protected
   $ setconfig remotenames.selectivepulldefault="master, other"
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in 0.00 sec
   $ showgraph

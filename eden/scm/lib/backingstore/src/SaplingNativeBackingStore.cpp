@@ -78,15 +78,10 @@ folly::Try<std::shared_ptr<Tree>> SaplingNativeBackingStore::getTree(
 }
 
 void SaplingNativeBackingStore::getTreeBatch(
-    NodeIdRange requests,
-    bool local,
+    SaplingRequestRange requests,
+    sapling::FetchMode fetch_mode,
     folly::FunctionRef<void(size_t, folly::Try<std::shared_ptr<Tree>>)>
         resolve) {
-  FetchMode fetch_mode = FetchMode::AllowRemote;
-  if (local) {
-    fetch_mode = FetchMode::LocalOnly;
-  }
-
   auto resolver = std::make_shared<GetTreeBatchResolver>(std::move(resolve));
   auto count = requests.size();
 
@@ -94,9 +89,10 @@ void SaplingNativeBackingStore::getTreeBatch(
 
   std::vector<Request> raw_requests;
   raw_requests.reserve(count);
-  for (auto& node : requests) {
+  for (auto& request : requests) {
     raw_requests.push_back(Request{
-        node.data(),
+        request.node.data(),
+        request.cause,
     });
   }
 
@@ -132,14 +128,10 @@ folly::Try<std::unique_ptr<folly::IOBuf>> SaplingNativeBackingStore::getBlob(
 }
 
 void SaplingNativeBackingStore::getBlobBatch(
-    NodeIdRange requests,
-    bool local,
+    SaplingRequestRange requests,
+    sapling::FetchMode fetch_mode,
     folly::FunctionRef<void(size_t, folly::Try<std::unique_ptr<folly::IOBuf>>)>
         resolve) {
-  FetchMode fetch_mode = FetchMode::AllowRemote;
-  if (local) {
-    fetch_mode = FetchMode::LocalOnly;
-  }
   auto resolver = std::make_shared<GetBlobBatchResolver>(std::move(resolve));
   auto count = requests.size();
 
@@ -147,9 +139,10 @@ void SaplingNativeBackingStore::getBlobBatch(
 
   std::vector<Request> raw_requests;
   raw_requests.reserve(count);
-  for (auto& node : requests) {
+  for (auto& request : requests) {
     raw_requests.push_back(Request{
-        node.data(),
+        request.node.data(),
+        request.cause,
     });
   }
 
@@ -166,8 +159,8 @@ SaplingNativeBackingStore::getBlobMetadata(NodeId node, bool local) {
   if (local) {
     fetch_mode = FetchMode::LocalOnly;
   }
-  XLOG(DBG7) << "Importing blob metadata"
-             << " node=" << folly::hexlify(node) << " from hgcache";
+  XLOG(DBG7) << "Importing blob metadata" << " node=" << folly::hexlify(node)
+             << " from hgcache";
   return folly::makeTryWith([&] {
     auto metadata = sapling_backingstore_get_file_aux(
         *store_.get(),
@@ -181,14 +174,10 @@ SaplingNativeBackingStore::getBlobMetadata(NodeId node, bool local) {
 }
 
 void SaplingNativeBackingStore::getBlobMetadataBatch(
-    NodeIdRange requests,
-    bool local,
+    SaplingRequestRange requests,
+    sapling::FetchMode fetch_mode,
     folly::FunctionRef<void(size_t, folly::Try<std::shared_ptr<FileAuxData>>)>
         resolve) {
-  FetchMode fetch_mode = FetchMode::AllowRemote;
-  if (local) {
-    fetch_mode = FetchMode::LocalOnly;
-  }
   auto resolver = std::make_shared<GetFileAuxBatchResolver>(std::move(resolve));
   auto count = requests.size();
 
@@ -196,9 +185,10 @@ void SaplingNativeBackingStore::getBlobMetadataBatch(
 
   std::vector<Request> raw_requests;
   raw_requests.reserve(count);
-  for (auto& node : requests) {
+  for (auto& request : requests) {
     raw_requests.push_back(Request{
-        node.data(),
+        request.node.data(),
+        request.cause,
     });
   }
 

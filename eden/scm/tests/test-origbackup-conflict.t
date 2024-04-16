@@ -1,6 +1,10 @@
 #debugruntest-compatible
 
+#require no-eden
+
+
   $ eagerepo
+  $ setconfig commands.update.check=none
 Set up repo
 
   $ setconfig ui.origbackuppath=.hg/origbackups merge.checkunknown=warn

@@ -1,7 +1,10 @@
 #debugruntest-compatible
 
+#require no-eden
+
+
   $ eagerepo
-  $ enable undo rebase 
+  $ enable journal undo rebase
 
   $ newrepo
   $ drawdag <<'EOS'

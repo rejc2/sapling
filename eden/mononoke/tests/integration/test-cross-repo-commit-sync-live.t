@@ -60,6 +60,10 @@ Before the change
   $ REPONAME=large-mon hgmn log -r master_bookmark -T "{files % '{file}\n'}"
   non_path_shifting/bar
   smallrepofolder/foo
+-- prepare for config change by making the state match both old and new config versions
+  $ hg cp -q smallrepofolder smallrepofolder_after
+  $ hg commit -m "prepare for config change"
+  $ REPONAME=large-mon hgmn push -q --to master_bookmark
 
 Make a config change
   $ update_commit_sync_map_first_option
@@ -95,8 +99,10 @@ After the change
       "non_path_shifting": "non_path_shifting"
     }
   } (no-eol)
-  $ log -r master_bookmark
+  $ log -r master_bookmark^::master_bookmark
   @  after config change [public;rev=4;*] default/master_bookmark (glob)
+  │
+  o  Changing synced mapping version to new_version for large-mon->small-mon sync [public;rev=3;*] (glob)
   │
   ~
 
@@ -109,9 +115,9 @@ After the change
   $ REPONAME=large-mon hgmn pull -q
   $ REPONAME=large-mon hgmn up -q master_bookmark
   $ log -r "master_bookmark^::master_bookmark"
-  @  after config change [public;rev=5;*] default/master_bookmark (glob)
+  @  after config change [public;rev=6;*] default/master_bookmark (glob)
   │
-  o  Changing synced mapping version to new_version for large-mon->small-mon sync [public;rev=4;*] (glob)
+  o  Changing synced mapping version to new_version for large-mon->small-mon sync [public;rev=5;*] (glob)
   │
   ~
   $ REPONAME=large-mon hgmn log -r master_bookmark -T "{files % '{file}\n'}"
@@ -126,3 +132,26 @@ After the change
       "non_path_shifting": "non_path_shifting"
     }
   } (no-eol)
+-- Verify the working copy state after the operation
+  $ with_stripped_logs verify_wc $(hg whereami)
+
+-- Show the list of files in the repo after the operation
+  $ hg files
+  non_path_shifting/bar
+  non_path_shifting/baz
+  smallrepofolder/file.txt
+  smallrepofolder/filetoremove
+  smallrepofolder/foo
+  smallrepofolder_after/boo
+  smallrepofolder_after/file.txt
+  smallrepofolder_after/filetoremove
+  smallrepofolder_after/foo
+  smallrepofolder_after/mapping.json
+
+-- Show the actual mapping version used for the operation
+  $ with_stripped_logs mononoke_admin_source_target 0 1 crossrepo map $(hg whereami)
+  using repo "large-mon" repoid RepositoryId(0)
+  using repo "small-mon" repoid RepositoryId(1)
+  changeset resolved as: ChangesetId(Blake2(*)) (glob)
+  RewrittenAs([(ChangesetId(Blake2(*)), CommitSyncConfigVersion("new_version"))]) (glob)
+

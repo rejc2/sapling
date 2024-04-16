@@ -13,18 +13,14 @@ import {useCommandEvent} from './ISLShortcuts';
 import {Kbd} from './Kbd';
 import {Tooltip} from './Tooltip';
 import {codeReviewProvider} from './codeReview/CodeReviewInfo';
+import {Badge} from './components/Badge';
+import {Divider} from './components/Divider';
 import {T} from './i18n';
 import {lazyAtom, writeAtom} from './jotaiUtils';
 import {serverCwd} from './repositoryData';
 import {repositoryInfo} from './serverAPIState';
 import {registerCleanup, registerDisposable} from './utils';
-import {
-  VSCodeBadge,
-  VSCodeButton,
-  VSCodeDivider,
-  VSCodeRadio,
-  VSCodeRadioGroup,
-} from '@vscode/webview-ui-toolkit/react';
+import {VSCodeButton, VSCodeRadio, VSCodeRadioGroup} from '@vscode/webview-ui-toolkit/react';
 import {useAtomValue} from 'jotai';
 import {Icon} from 'shared/Icon';
 import {KeyCode, Modifier} from 'shared/KeyboardShortcuts';
@@ -97,7 +93,7 @@ function CwdDetails({dismiss}: {dismiss: () => unknown}) {
       {provider != null ? (
         <DropdownField title={<T>Code Review Provider</T>}>
           <span>
-            <VSCodeBadge>{provider?.name}</VSCodeBadge> <provider.RepoInfo />
+            <Badge>{provider?.name}</Badge> <provider.RepoInfo />
           </span>
         </DropdownField>
       ) : null}
@@ -147,7 +143,7 @@ export function CwdSelections({dismiss, divider}: {dismiss: () => unknown; divid
           );
         })}
       </VSCodeRadioGroup>
-      {divider && <VSCodeDivider />}
+      {divider && <Divider />}
     </DropdownField>
   );
 }

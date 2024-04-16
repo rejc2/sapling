@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
 #inprocess-hg-incompatible
   $ setconfig experimental.allowfilepeer=True
 
@@ -31,6 +34,7 @@ Client 1
   $ hg cloud join
   commitcloud: this repository is now connected to the 'user/test/default' workspace for the 'server' repo
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   $ echo data > file
@@ -48,11 +52,10 @@ Client 1
   $ hg cloud join
   commitcloud: this repository is now connected to the 'user/test/default' workspace for the 'server' repo
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   pulling 00422fad0026 from ssh://user@dummy/server
   searching for changes
-  adding changesets
-  adding manifests
-  adding file changes
+  fetching revlog data for 1 commits
   commitcloud: commits synchronized
   finished in * (glob)
   $ tglogp
@@ -149,6 +152,7 @@ Rebasing the bookmark will make the draft commit disappear.
   
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   $ tglogp
@@ -178,6 +182,7 @@ Pull so that we have the public commit and sync again.
   adding file changes
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 

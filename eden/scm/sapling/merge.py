@@ -1853,15 +1853,7 @@ def _logupdatedistance(ui, repo, node):
         # doesn't play nicely with revsets later because it resolve to the tip
         # commit.
         node = repo[node].node()
-        revdistance = abs(repo["."].rev() - repo[node].rev())
-        if revdistance == 0:
-            distance = 0
-        elif revdistance >= 100000:
-            # Calculating real distance is too slow.
-            # Use an approximate.
-            distance = ((revdistance + 500) / 1000) * 1000
-        else:
-            distance = len(repo.revs("(%n %% .) + (. %% %n)", node, node))
+        distance = len(repo.revs("(%n %% .) + (. %% %n)", node, node))
         repo.ui.log("update_size", update_distance=distance)
     except Exception:
         # error may happen like: RepoLookupError: unknown revision '-1'
@@ -1908,7 +1900,8 @@ def _prefetchlazychildren(repo, node):
                 )
             else:
                 tracing.debug(
-                    "children of %s: %s" % (hex(node), [hex(n) for n in childrennodes]),
+                    "children of %s: [%s]"
+                    % (hex(node), ", ".join(map(hex, childrennodes))),
                     target="checkout::prefetch",
                 )
         else:
@@ -1942,7 +1935,10 @@ def goto(
             updatecheck = "none"
         assert updatecheck in ("none", "noconflict")
 
-    if edenfs.requirement in repo.requirements:
+    if (
+        edenfs.requirement in repo.requirements
+        or git.DOTGIT_REQUIREMENT in repo.requirements
+    ):
         from . import eden_update
 
         return eden_update.update(

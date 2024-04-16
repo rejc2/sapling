@@ -22,7 +22,7 @@ use futures_ext::future::FbFutureExt;
 use futures_stats::FutureStats;
 use futures_stats::TimedFutureExt;
 use identity::Identity;
-use land_service_if::types::*;
+use land_service_if::*;
 use mononoke_api::CoreContext;
 use mononoke_api::Mononoke;
 use mononoke_api::RepoContext;
@@ -254,6 +254,12 @@ async fn process_land_changesets_request(
             old_bookmark_value: outcome
                 .old_bookmark_value
                 .map(conversion_helpers::convert_changeset_id_to_vec_binary),
+            log_id: Some(
+                outcome
+                    .log_id
+                    .try_into()
+                    .expect("log id should be convertible to i64"),
+            ),
         },
     })
 }

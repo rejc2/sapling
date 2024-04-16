@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
   $ configure modernclient
 
 initial
@@ -71,7 +74,6 @@ pull and merge from test-a again
   pulling from test:test-a_server
   searching for changes
   $ hg merge --debug
-    searching for copies back to d1e159716d41
   resolving manifests
    branchmerge: True, force: False
    ancestor: 96b70246a118, local: 50c3a7e29886+, remote: 40d11a4173a8

@@ -1,6 +1,10 @@
 #debugruntest-compatible
 
+#require no-eden
+
+
   $ eagerepo
+  $ setconfig experimental.copytrace=on
 Turn on treestate
 
 
@@ -59,8 +63,8 @@ Basic update - local directory conflicts with remote file
   (commit, shelve, goto --clean to discard all your changes, or goto --merge to merge them)
   [255]
   $ hg up --clean file
-  (activating bookmark file)
   1 files updated, 0 files merged, 1 files removed, 0 files unresolved
+  (activating bookmark file)
 
 Repo state is ok
 
@@ -100,8 +104,8 @@ Basic clean update - local directory conflicts with changed remote file
   (commit, shelve, goto --clean to discard all your changes, or goto --merge to merge them)
   [255]
   $ hg up --clean file2
-  (activating bookmark file2)
   1 files updated, 0 files merged, 1 files removed, 0 files unresolved
+  (activating bookmark file2)
 
 Repo state is ok
 

@@ -22,10 +22,12 @@ import {FileHeader, IconType} from '../../ComparisonView/SplitDiffView/SplitDiff
 import {useTokenizedContentsOnceVisible} from '../../ComparisonView/SplitDiffView/syntaxHighlighting';
 import {Column, Row, ScrollX, ScrollY} from '../../ComponentUtils';
 import {EmptyState} from '../../EmptyState';
+import {useGeneratedFileStatuses} from '../../GeneratedFile';
 import {Subtle} from '../../Subtle';
 import {Tooltip} from '../../Tooltip';
 import {tracker} from '../../analytics';
 import {t, T} from '../../i18n';
+import {GeneratedStatus} from '../../types';
 import {isAbsent} from '../commitStackState';
 import {computeLinesForFileStackEditor} from './FileStackEditorLines';
 import {bumpStackEditMetric, SplitRangeRecord, useStackEditState} from './stackEditState';
@@ -37,7 +39,7 @@ import {useContextMenu} from 'shared/ContextMenu';
 import {Icon} from 'shared/Icon';
 import {type LineIdx, splitLines, diffBlocks} from 'shared/diff';
 import {useThrottledEffect} from 'shared/hooks';
-import {firstLine, unwrap} from 'shared/utils';
+import {firstLine, nullthrows} from 'shared/utils';
 
 import './SplitStackEditPanel.css';
 
@@ -69,14 +71,14 @@ export function SplitStackEditPanel() {
 
   // Prepare a "dense" subStack with an extra empty commit to move right.
   const emptyTitle = getEmptyCommitTitle(commitStack.get(endRev)?.text ?? '');
-  const fields: CommitMessageFields = {...messageTemplate?.fields, Title: emptyTitle};
+  const fields: CommitMessageFields = {...messageTemplate, Title: emptyTitle};
   const message = commitMessageFieldsToString(schema, fields);
   const subStack = commitStack
     .insertEmpty(endRev + 1, message, endRev)
     .denseSubStack(Range(startRev, endRev + 2).toList());
 
   const insertBlankCommit = (rev: Rev) => {
-    const fields: CommitMessageFields = {...messageTemplate?.fields, Title: t('New Commit')};
+    const fields: CommitMessageFields = {...messageTemplate, Title: t('New Commit')};
     const message = commitMessageFieldsToString(schema, fields);
 
     const newStack = stackEdit.commitStack.insertEmpty(startRev + rev, message);
@@ -104,7 +106,7 @@ export function SplitStackEditPanel() {
   return (
     <div className="interactive-split">
       <ScrollX maxSize="calc((100vw / var(--zoom)) - 50px)">
-        <Row style={{padding: '0 var(--pad)'}}>{columns}</Row>
+        <Row style={{padding: '0 var(--pad)', alignItems: 'flex-start'}}>{columns}</Row>
       </ScrollX>
     </div>
   );
@@ -157,13 +159,23 @@ function SplitColumn(props: SplitColumnProps) {
   // File stacks contain text (content-editable) files.
   // Note: subStack might contain files that are not editable
   // (ex. currently binary, but previously absent). Filter them out.
-  const editablePaths = new Set(subStack.getPaths(rev, {text: true}));
+  const editablePaths = subStack.getPaths(rev, {text: true});
+  const editablePathsSet = new Set(editablePaths);
+  const generatedStatuses = useGeneratedFileStatuses(editablePaths);
   const sortedFileStacks = subStack.fileStacks
     .flatMap((fileStack, fileIdx): Array<[RepoPath, FileStackState, Rev]> => {
       const path = subStack.getFileStackPath(fileIdx, 0) ?? '';
-      return editablePaths.has(path) ? [[path, fileStack, fileIdx]] : [];
+      return editablePathsSet.has(path) ? [[path, fileStack, fileIdx]] : [];
     })
-    .sortBy(t => t[0]);
+    .sort((a, b) => {
+      const [pathA] = a;
+      const [pathB] = b;
+
+      const statusA = generatedStatuses[pathA] ?? GeneratedStatus.Manual;
+      const statusB = generatedStatuses[pathB] ?? GeneratedStatus.Manual;
+
+      return statusA === statusB ? pathA.localeCompare(pathB) : statusA - statusB;
+    });
 
   // There might be non-text (ex. binary, or too large) files.
   const nonEditablePaths = subStack.getPaths(rev, {text: false}).sort();
@@ -185,6 +197,7 @@ function SplitColumn(props: SplitColumnProps) {
         fileRev={fileRev}
         collapsed={collapsedFiles.has(path)}
         toggleCollapsed={() => toggleCollapsed(path)}
+        generatedStatus={generatedStatuses[path]}
       />
     );
     const result = isModified ? [editor] : [];
@@ -284,14 +297,26 @@ type SplitEditorWithTitleProps = {
   fileRev?: Rev;
   collapsed: boolean;
   toggleCollapsed: () => unknown;
+  generatedStatus?: GeneratedStatus;
 };
 
 function SplitEditorWithTitle(props: SplitEditorWithTitleProps) {
   const stackEdit = useStackEditState();
 
   const {commitStack} = stackEdit;
-  const {subStack, path, fileStack, fileIdx, fileRev, collapsed, toggleCollapsed, rev} = props;
+  const {
+    subStack,
+    path,
+    fileStack,
+    fileIdx,
+    fileRev,
+    collapsed,
+    toggleCollapsed,
+    rev,
+    generatedStatus,
+  } = props;
   const file = subStack.getFile(rev, path);
+  const [showGeneratedFileAnyway, setShowGeneratedFileAnyway] = useState(false);
 
   const setSubStack = (newSubStack: CommitStackState) => {
     const [startRev, endRev] = findStartEndRevs(stackEdit);
@@ -391,14 +416,18 @@ function SplitEditorWithTitle(props: SplitEditorWithTitleProps) {
         <>
           <ModeChangeHints changedMeta={changedMeta} />
           {fileRev != null && fileStack != null ? (
-            <SplitFile
-              key={fileIdx}
-              rev={fileRev}
-              stack={fileStack}
-              setStack={setStack}
-              path={path}
-              copyFromText={copyFromText}
-            />
+            !showGeneratedFileAnyway && generatedStatus !== GeneratedStatus.Manual ? (
+              <Generated onShowAnyway={setShowGeneratedFileAnyway} />
+            ) : (
+              <SplitFile
+                key={fileIdx}
+                rev={fileRev}
+                stack={fileStack}
+                setStack={setStack}
+                path={path}
+                copyFromText={copyFromText}
+              />
+            )
           ) : (
             <NonEditable />
           )}
@@ -451,6 +480,19 @@ function NonEditable() {
   return (
     <div className="split-header-hint">
       <T>Binary or large file content is not editable.</T>
+    </div>
+  );
+}
+
+function Generated({onShowAnyway}: {onShowAnyway: (show: boolean) => void}) {
+  return (
+    <div className="split-header-hint">
+      <Column>
+        <T>This file is generated</T>
+        <VSCodeButton appearance="icon" onClick={() => onShowAnyway(true)}>
+          <T>Show anyway</T>
+        </VSCodeButton>
+      </Column>
     </div>
   );
 }
@@ -538,7 +580,7 @@ function StackRangeSelector() {
   const selectEnd = orderedDrag.end ?? selectStart;
 
   const commits = mutableRevs.map(rev => {
-    const commit = unwrap(commitStack.get(rev));
+    const commit = nullthrows(commitStack.get(rev));
     return (
       <div
         onPointerDown={() => {
@@ -546,7 +588,7 @@ function StackRangeSelector() {
         }}
         onPointerEnter={() => {
           if (dragSelection?.isDragging === true) {
-            setDragSelection(old => ({...unwrap(old), end: rev, endKey: commit.key}));
+            setDragSelection(old => ({...nullthrows(old), end: rev, endKey: commit.key}));
           }
         }}
         key={rev}
@@ -741,7 +783,7 @@ export function SplitFile(props: SplitFileProps) {
       for (const div of divs) {
         const child = div.lastChild;
         if (child && selection.containsNode(child, true)) {
-          selIds.push(unwrap(div.dataset.selId));
+          selIds.push(nullthrows(div.dataset.selId));
         }
       }
 

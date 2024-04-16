@@ -12,7 +12,7 @@ clidispatch = { version = "0.1.0", path = "../../lib/clidispatch" }
 commands = { version = "0.1.0", path = "../../lib/commands", default-features = false }
 configparser = { package = "configloader", version = "0.1.0", path = "../../lib/config/loader" }
 pyblackbox = { path = "../../saplingnative/bindings/modules/pyblackbox" }
-tracing = "0.1.40"
+tracing = { version = "0.1.40", features = ["attributes"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 dirs = { version = "2.0", optional = true }
@@ -36,7 +36,7 @@ buildinfo = []
 default = []
 eden = ["clidispatch/eden", "commands/eden"]
 fb = ["commands/fb"]
-sl_only = ["clidispatch/sl_only"]
+sl_oss = ["clidispatch/sl_oss", "commands/sl_oss"]
 with_chg = ["dirs", "identity"]
 
 [profile.release]

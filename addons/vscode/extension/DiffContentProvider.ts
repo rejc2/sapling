@@ -6,7 +6,7 @@
  */
 
 import type {Repository} from 'isl-server/src/Repository';
-import type {Logger} from 'isl-server/src/logger';
+import type {RepositoryContext} from 'isl-server/src/serverTypes';
 import type {Disposable} from 'isl/src/types';
 import type {Comparison} from 'shared/Comparison';
 
@@ -47,7 +47,7 @@ export class SaplingDiffContentProvider implements vscode.TextDocumentContentPro
    */
   private fileContentsByEncodedUri = new LRU<string, string>(20);
 
-  constructor(private logger: Logger) {
+  constructor(private ctx: RepositoryContext) {
     let subscriptions: Array<Disposable> = [];
     repositoryCache.onChangeActiveRepos(activeRepos => {
       const knownRoots = activeRepos.map(repo => repo.info.repoRoot);
@@ -87,7 +87,7 @@ export class SaplingDiffContentProvider implements vscode.TextDocumentContentPro
           this.fileContentsByEncodedUri.clear();
           const uris = this.activeUrisByRepo.get(repo);
           if (uris) {
-            this.logger.info(
+            this.ctx.logger.info(
               `head commit changed for ${repo.info.repoRoot}, invalidating ${uris.size} diff view contents`,
             );
             for (const uri of uris.values()) {
@@ -142,7 +142,7 @@ export class SaplingDiffContentProvider implements vscode.TextDocumentContentPro
     activeUrisSet.add(encodedUriString);
     this.activeUrisByRepo.set(repo ?? 'unknown', activeUrisSet);
 
-    this.logger.info('repo for path:', repo?.info.repoRoot);
+    this.ctx.logger.info('repo for path:', repo?.info.repoRoot);
     if (repo == null) {
       return null;
     }
@@ -155,9 +155,12 @@ export class SaplingDiffContentProvider implements vscode.TextDocumentContentPro
 
     const revset = revsetForComparison(data.comparison);
 
+    // Ensure we use a ctx appropriate for this repo. `this.ctx` may be an unrelated cwd.
+    const ctx = repo?.initialConnectionContext;
+
     // fall back to fetching from the repo
     const fetchedFileContent = await repo
-      .cat(fsPath, revset)
+      .cat(ctx, fsPath, revset)
       // An error during `cat` usually means the right side of the comparison was added since the left,
       // so `cat` claims `no such file` at that revset.
       // TODO: it would be more accurate to check that the error is due to this, and return null if not.
@@ -174,10 +177,10 @@ export class SaplingDiffContentProvider implements vscode.TextDocumentContentPro
   }
 }
 
-export function registerSaplingDiffContentProvider(logger: Logger): vscode.Disposable {
+export function registerSaplingDiffContentProvider(ctx: RepositoryContext): vscode.Disposable {
   return vscode.workspace.registerTextDocumentContentProvider(
     SAPLING_DIFF_PROVIDER_SCHEME,
-    new SaplingDiffContentProvider(logger),
+    new SaplingDiffContentProvider(ctx),
   );
 }
 

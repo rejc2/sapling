@@ -46,16 +46,16 @@ cpp_library(
     deps = [
         ":nfs_utils",
         ":nfsd_rpc",
+        "//eden/common/telemetry:structured_logger",
         "//eden/common/utils:system_error",
         "//eden/common/utils:throw",
+        "//eden/common/utils:utils",
         "//eden/fs/privhelper:interface",
         "//eden/fs/store:context",
         "//eden/fs/telemetry:fs_event_logger",
         "//eden/fs/telemetry:log_info",
-        "//eden/fs/telemetry:structured_logger",
         "//eden/fs/utils:clock",
         "//eden/fs/utils:static_assert",
-        "//eden/fs/utils:utils",
         "//folly:utility",
         "//folly/executors:serial_executor",
         "//folly/futures:core",
@@ -63,11 +63,11 @@ cpp_library(
     ],
     exported_deps = [
         ":dispatcher",
+        "//eden/common/telemetry:telemetry",
         "//eden/common/utils:case_sensitivity",
         "//eden/fs/inodes:fs_channel",
         "//eden/fs/inodes:request_context",
         "//eden/fs/nfs/rpc:server",
-        "//eden/fs/telemetry:telemetry",
         "//eden/fs/utils:process_access_log",
     ],
 )
@@ -108,17 +108,17 @@ cpp_library(
     srcs = ["NfsDispatcher.cpp"],
     headers = ["NfsDispatcher.h"],
     deps = [
-        "//eden/fs/telemetry:telemetry",
+        "//eden/fs/telemetry:stats",
     ],
     exported_deps = [
         ":dirlist",
         "//eden/common/utils:file_utils",
         "//eden/common/utils:immediate_future",
         "//eden/common/utils:path",
+        "//eden/common/utils:ref_ptr",
         "//eden/fs/inodes:inode_metadata",
         "//eden/fs/inodes:inode_number",
         "//eden/fs/store:context",
-        "//eden/fs/utils:ref_ptr",
     ],
 )
 
@@ -139,7 +139,7 @@ cpp_library(
     exported_deps = [
         ":nfsd_rpc",
         "//eden/common/utils:throw",
-        "//eden/fs/utils:utils",
+        "//eden/common/utils:utils",
         "//folly:try",
         "//folly:utility",
         "//folly/portability:sys_stat",

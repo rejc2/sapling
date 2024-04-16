@@ -340,18 +340,6 @@ py_class!(pub class client |py| {
         self.inner(py).as_ref().lookup_filenodes_and_trees(py, filenodes.0, trees.0)
     }
 
-    /// Upload file contents only
-    def uploadfileblobs(
-        &self,
-        store: PyObject,
-        keys: Vec<(
-            PyPathBuf,   /* path */
-            Serde<HgId>, /* hgid */
-        )>,
-    ) -> PyResult<(TStream<anyhow::Result<Serde<UploadToken>>>, PyFuture)> {
-        self.inner(py).as_ref().uploadfileblobs_py(py, store, keys)
-    }
-
     /// Upload file contents and hg filenodes
     def uploadfiles(
         &self,
@@ -362,8 +350,9 @@ py_class!(pub class client |py| {
             Serde<HgId>,   /* p1 */
             Serde<HgId>,   /* p2 */
         )>,
+        use_sha1: bool,
     ) -> PyResult<(TStream<anyhow::Result<Serde<UploadToken>>>, PyFuture)> {
-        self.inner(py).as_ref().uploadfiles_py(py, store, keys)
+        self.inner(py).as_ref().uploadfiles_py(py, store, keys, use_sha1)
     }
 
     /// Upload trees

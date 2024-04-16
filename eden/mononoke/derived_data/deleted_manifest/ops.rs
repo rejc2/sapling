@@ -12,8 +12,8 @@ use anyhow::Error;
 use blobstore::Blobstore;
 use blobstore::Loadable;
 use bounded_traversal::bounded_traversal_stream;
-use changeset_fetcher::ChangesetFetcherRef;
 use cloned::cloned;
+use commit_graph::CommitGraphRef;
 use context::CoreContext;
 use futures::future;
 use futures::pin_mut;
@@ -49,7 +49,7 @@ pub enum PathState {
 }
 
 pub trait Repo =
-    RepoDerivedDataRef + RepoBlobstoreArc + ChangesetFetcherRef + Clone + Copy + Send + Sync;
+    RepoDerivedDataRef + RepoBlobstoreArc + CommitGraphRef + Clone + Copy + Send + Sync;
 
 #[async_trait::async_trait]
 pub trait DeletedManifestOps: RootDeletedManifestIdCommon {
@@ -77,7 +77,7 @@ pub trait DeletedManifestOps: RootDeletedManifestIdCommon {
             return Ok(Some(PathState::Exists(unode_entry)));
         }
 
-        let use_deleted_manifest = repo.repo_derived_data().config().is_enabled(Self::NAME);
+        let use_deleted_manifest = repo.repo_derived_data().config().is_enabled(Self::VARIANT);
         if !use_deleted_manifest {
             return Ok(None);
         }
@@ -152,8 +152,8 @@ pub trait DeletedManifestOps: RootDeletedManifestIdCommon {
                 // to get last change before deletion we have to look at the liknode
                 // parents for the deleted path
                 let parents = &repo
-                    .changeset_fetcher()
-                    .get_parents(&ctx, linknode.clone())
+                    .commit_graph()
+                    .changeset_parents(&ctx, *linknode)
                     .await?;
 
                 // checking parent unodes

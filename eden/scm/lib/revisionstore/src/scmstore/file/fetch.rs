@@ -21,6 +21,7 @@ use edenapi_types::FileResponse;
 use edenapi_types::FileSpec;
 use futures::StreamExt;
 use futures::TryFutureExt;
+use minibytes::Bytes;
 use progress_model::AggregatingProgressBar;
 use tracing::debug;
 use tracing::field;
@@ -73,9 +74,6 @@ pub struct FetchState {
     /// A table tracking if discovered LFS pointers were found in the local-only or cache / shared store.
     pointer_origin: HashMap<Sha256, StoreType>,
 
-    /// A table tracking if each key is local-only or cache/shared so that computed aux data can be written to the appropriate store
-    key_origin: HashMap<Key, StoreType>,
-
     /// Tracks remote fetches which match a specific regex
     fetch_logger: Option<Arc<FetchLogger>>,
 
@@ -89,6 +87,8 @@ pub struct FetchState {
     compute_aux_data: bool,
 
     lfs_enabled: bool,
+
+    fetch_mode: FetchMode,
 }
 
 impl FetchState {
@@ -98,22 +98,22 @@ impl FetchState {
         file_store: &FileStore,
         found_tx: Sender<Result<(Key, StoreFile), KeyFetchError>>,
         lfs_enabled: bool,
-        mode: FetchMode,
+        fetch_mode: FetchMode,
     ) -> Self {
         FetchState {
-            common: CommonFetchState::new(keys, attrs, found_tx, mode),
+            common: CommonFetchState::new(keys, attrs, found_tx, fetch_mode),
             errors: FetchErrors::new(),
             metrics: FileStoreFetchMetrics::default(),
 
             lfs_pointers: HashMap::new(),
-            key_origin: HashMap::new(),
             pointer_origin: HashMap::new(),
 
             fetch_logger: file_store.fetch_logger.clone(),
             extstored_policy: file_store.extstored_policy,
-            compute_aux_data: true,
+            compute_aux_data: file_store.compute_aux_data,
             lfs_progress: file_store.lfs_progress.clone(),
             lfs_enabled,
+            fetch_mode,
         }
     }
 
@@ -194,10 +194,7 @@ impl FetchState {
         self.lfs_pointers.insert(key, (ptr, write));
     }
 
-    fn found_attributes(&mut self, key: Key, sf: StoreFile, typ: Option<StoreType>) {
-        self.key_origin
-            .insert(key.clone(), typ.unwrap_or(StoreType::Shared));
-
+    fn found_attributes(&mut self, key: Key, sf: StoreFile, _typ: Option<StoreType>) {
         if self.common.found(key.clone(), sf) {
             self.mark_complete(&key);
         }
@@ -236,7 +233,10 @@ impl FetchState {
                             // pointer store if it isn't already present. This
                             // should only happen when the Python LFS extension
                             // is in play.
-                            if let Ok(None) = lfs_store.fetch_available(&key.clone().into()) {
+                            if let Ok(None) = lfs_store.fetch_available(
+                                &key.clone().into(),
+                                self.fetch_mode.ignore_result(),
+                            ) {
                                 if let Err(err) = lfs_store.add_pointer(ptr) {
                                     self.errors.keyed_error(key, err);
                                 }
@@ -289,7 +289,19 @@ impl FetchState {
 
         self.metrics.indexedlog.store(typ).fetch(pending.len());
         for key in pending.into_iter() {
-            let res = store.get_raw_entry(&key.hgid);
+            let res = if self.fetch_mode.ignore_result() {
+                store.contains(&key.hgid).map(|contains| {
+                    if contains {
+                        // Insert a stub entry if caller is ignoring the results.
+                        Some(Entry::new(key.clone(), Bytes::new(), Metadata::default()))
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                store.get_raw_entry(&key.hgid)
+            };
+
             match res {
                 Ok(Some(entry)) => {
                     self.metrics.indexedlog.store(typ).hit(1);
@@ -361,7 +373,18 @@ impl FetchState {
         self.metrics.aux.store(typ).fetch(pending.len());
 
         for key in pending.into_iter() {
-            let res = store.get(key.hgid);
+            let res = if self.fetch_mode.ignore_result() {
+                store.contains(key.hgid).map(|contains| {
+                    if contains {
+                        // Insert a stub entry if caller is ignoring the results.
+                        Some(FileAuxData::default())
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                store.get(key.hgid)
+            };
             match res {
                 Ok(Some(aux)) => {
                     self.metrics.aux.store(typ).hit(1);
@@ -436,7 +459,7 @@ impl FetchState {
             let key = store_key.clone().maybe_into_key().expect(
                 "no Key present in StoreKey, even though this should be guaranteed by pending_all",
             );
-            match store.fetch_available(&store_key) {
+            match store.fetch_available(&store_key, self.fetch_mode.ignore_result()) {
                 Ok(Some(entry)) => {
                     // TODO(meyer): Make found behavior w/r/t LFS pointers and content consistent
                     self.metrics.lfs.store(typ).hit(1);
@@ -929,12 +952,13 @@ impl FetchState {
 
     // TODO(meyer): Improve how local caching works. At the very least do this in the background.
     // TODO(meyer): Log errors here instead of just ignoring.
-    pub(crate) fn derive_computable(
-        &mut self,
-        aux_cache: Option<&AuxStore>,
-        aux_local: Option<&AuxStore>,
-    ) {
+    pub(crate) fn derive_computable(&mut self, aux_cache: Option<&AuxStore>) {
         if !self.compute_aux_data {
+            return;
+        }
+
+        // When ignoring results, we don't reliably have file content, so don't derive.
+        if self.fetch_mode.ignore_result() {
             return;
         }
 
@@ -960,20 +984,11 @@ impl FetchState {
                         if new.attrs().has(self.common.request_attrs) {
                             tracing::debug!("marking complete");
 
-                            match self.key_origin.get(&key).unwrap_or(&StoreType::Shared) {
-                                StoreType::Shared => {
-                                    if let Some(aux_cache) = aux_cache {
-                                        if let Some(aux_data) = new.aux_data {
-                                            let _ = aux_cache.put(key.hgid, &aux_data);
-                                        }
-                                    }
-                                }
-                                StoreType::Local => {
-                                    if let Some(aux_local) = aux_local {
-                                        if let Some(aux_data) = new.aux_data {
-                                            let _ = aux_local.put(key.hgid, &aux_data);
-                                        }
-                                    }
+                            self.metrics.aux.store(StoreType::Shared).computed(1);
+
+                            if let Some(aux_cache) = aux_cache {
+                                if let Some(aux_data) = new.aux_data {
+                                    let _ = aux_cache.put(key.hgid, &aux_data);
                                 }
                             }
 
@@ -982,7 +997,11 @@ impl FetchState {
                             self.common.pending.remove(&key);
                             self.common.found.remove(&key);
                             let new = new.mask(self.common.request_attrs);
-                            let _ = self.common.found_tx.send(Ok((key.clone(), new)));
+
+                            if !self.fetch_mode.ignore_result() {
+                                let _ = self.common.found_tx.send(Ok((key.clone(), new)));
+                            }
+
                             if let Some((ptr, _)) = self.lfs_pointers.remove(&key) {
                                 self.pointer_origin.remove(&ptr.sha256());
                             }

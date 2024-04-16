@@ -41,6 +41,7 @@ use gotham::state::State;
 use gotham_derive::StateData;
 use gotham_derive::StaticResponseExtender;
 use gotham_ext::error::HttpError;
+use gotham_ext::middleware::request_context::RequestContext;
 use gotham_ext::response::TryIntoResponse;
 use hyper::Body;
 use mercurial_types::HgFileNodeId;
@@ -59,7 +60,6 @@ use super::HandlerInfo;
 use super::HandlerResult;
 use crate::context::ServerContext;
 use crate::errors::ErrorKind;
-use crate::middleware::RequestContext;
 use crate::utils::cbor_stream_filtered_errors;
 use crate::utils::get_repo;
 
@@ -109,11 +109,11 @@ impl EdenApiHandler for Files2Handler {
             move |FileSpec { key, attrs }| {
                 if attrs.content {
                     ctx.perf_counters()
-                        .add_to_counter(PerfCounterType::EdenapiFiles, 1);
+                        .increment_counter(PerfCounterType::EdenapiFiles);
                 }
                 if attrs.aux_data {
                     ctx.perf_counters()
-                        .add_to_counter(PerfCounterType::EdenapiFilesAuxData, 1);
+                        .increment_counter(PerfCounterType::EdenapiFilesAuxData);
                 }
                 fetch_file_response(repo.clone(), key, attrs)
             }
@@ -162,24 +162,36 @@ async fn fetch_file(
     let parents = ctx.hg_parents().into();
     let mut file = FileEntry::new(key.clone(), parents);
 
-    if attrs.content {
-        let (data, metadata) = ctx
-            .content()
-            .await
-            .with_context(|| ErrorKind::FileFetchFailed(key.clone()))?;
+    let fetch_content = async {
+        if attrs.content {
+            Ok(Some(ctx.content().await.with_context(|| {
+                ErrorKind::FileFetchFailed(key.clone())
+            })?))
+        } else {
+            anyhow::Ok(None)
+        }
+    };
 
+    let fetch_aux_data = async {
+        if attrs.aux_data {
+            Ok(Some(ctx.content_metadata().await.with_context(|| {
+                ErrorKind::FileAuxDataFetchFailed(key.clone())
+            })?))
+        } else {
+            anyhow::Ok(None)
+        }
+    };
+
+    let (content, aux_data) = futures::try_join!(fetch_content, fetch_aux_data)?;
+
+    if let Some((hg_file_blob, metadata)) = content {
         file = file.with_content(FileContent {
-            hg_file_blob: data,
+            hg_file_blob,
             metadata,
         });
     }
 
-    if attrs.aux_data {
-        let content_metadata = ctx
-            .content_metadata()
-            .await
-            .with_context(|| ErrorKind::FileFetchFailed(key.clone()))?;
-
+    if let Some(content_metadata) = aux_data {
         file = file.with_aux_data(FileAuxData {
             total_size: content_metadata.total_size,
             content_id: content_metadata.content_id.into(),

@@ -19,8 +19,7 @@ import {
   simulateMessageFromServer,
   suppressReactErrorBoundaryErrorMessages,
 } from '../testUtils';
-import {fireEvent, render, screen, within} from '@testing-library/react';
-import {act} from 'react-dom/test-utils';
+import {fireEvent, render, screen, within, act} from '@testing-library/react';
 
 describe('GitHubPRBadge', () => {
   beforeEach(() => {
@@ -32,7 +31,7 @@ describe('GitHubPRBadge', () => {
         value: [
           COMMIT('1', 'some public base', '0', {phase: 'public', diffId: '2'}),
           COMMIT('a', 'Commit A', '1', {diffId: '10'}),
-          COMMIT('b', 'Commit B', 'a', {isHead: true, diffId: '11'}),
+          COMMIT('b', 'Commit B', 'a', {isDot: true, diffId: '11'}),
           COMMIT('c', 'Commit C', '1'),
         ],
       });

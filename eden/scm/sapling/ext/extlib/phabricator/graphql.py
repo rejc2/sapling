@@ -42,9 +42,10 @@ class Client:
             if repodir is None:
                 repodir = repo.root
             ui = ui or repo.ui
-        else:
-            if ui is None:
-                raise error.ProgrammingError("either repo or ui needs to be provided")
+
+        if ui is None:
+            raise error.ProgrammingError("either repo or ui needs to be provided")
+
         if not repodir:
             repodir = pycompat.getcwd()
         self._mock = "HG_ARC_CONDUIT_MOCK" in encoding.environ
@@ -78,7 +79,7 @@ class Client:
 
             self._client = phabricator_graphql_client.PhabricatorGraphQLClient(
                 phabricator_graphql_client_urllib.PhabricatorGraphQLClientRequests(
-                    unix_socket_proxy=unix_socket_path,
+                    unix_socket_proxy=unix_socket_path, ui=ui
                 ),
                 app_id if unix_socket_path else None,
                 self._oauth,

@@ -3,6 +3,11 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2.
 
+#debugruntest-compatible
+
+#require no-eden
+
+
 # Empty update fails with a helpful error:
 
   $ setconfig devel.segmented-changelog-rev-compat=true
@@ -16,8 +21,8 @@
   > EOS
   $ hg up -q A
   $ hg up
-  abort: You must specify a destination to update to, for example "hg goto main".
   (If you're trying to move a bookmark forward, try "hg rebase -d <destination>".) (?)
+  abort: you must specify a destination to update to, for example "hg goto main".
   [255]
 
 # up -r works as intended:

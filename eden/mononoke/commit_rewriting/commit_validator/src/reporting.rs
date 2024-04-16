@@ -7,8 +7,9 @@
 
 use std::time::Duration;
 
-use cross_repo_sync::types::Large;
-use cross_repo_sync::types::Small;
+use bookmarks::BookmarkUpdateLogId;
+use cross_repo_sync::Large;
+use cross_repo_sync::Small;
 use mononoke_types::ChangesetId;
 use mononoke_types::RepositoryId;
 use scuba_ext::MononokeScubaSampleBuilder;
@@ -39,7 +40,7 @@ pub fn add_common_commit_syncing_fields(
 
 pub fn log_validation_result_to_scuba(
     mut scuba_sample: MononokeScubaSampleBuilder,
-    entry_id: i64,
+    entry_id: BookmarkUpdateLogId,
     large_cs_id: &Large<ChangesetId>,
     small_cs_id: &Small<ChangesetId>,
     error: Option<String>,
@@ -60,7 +61,7 @@ pub fn log_validation_result_to_scuba(
             PREPARATION_DURATION_MS,
             preparation_duration.as_millis() as u64,
         )
-        .add(ENTRY, entry_id);
+        .add(ENTRY, u64::from(entry_id));
     match error {
         Some(error) => {
             scuba_sample.add(ERROR, error).add(SUCCESS, 0);

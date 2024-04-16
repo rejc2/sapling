@@ -1,12 +1,8 @@
 #debugruntest-compatible
 
-#testcases copytrace no-copytrace
+#require no-eden
 
-#if copytrace
-  $ setconfig experimental.copytrace=on
-#else
-  $ setconfig experimental.copytrace=off
-#endif
+  $ setconfig copytrace.dagcopytrace=True
 
   $ configure modernclient
   $ newclientrepo
@@ -23,3 +19,30 @@
   $ hg status --change . --copies foo
   A foo
     bar
+
+test back out a commit before rename
+
+  $ newclientrepo
+  $ drawdag <<EOS
+  > C  # C/bar = foo\nbar\n (renamed from foo)
+  > |
+  > B  # B/foo = foo\nbar\n
+  > |
+  > A  # A/foo = foo\n
+  > EOS
+
+  $ hg go -q $C
+  $ hg backout $B
+  merging bar and foo to bar
+  0 files updated, 1 files merged, 1 files removed, 0 files unresolved
+  changeset be9f9340610a backs out changeset 786106f81394
+  $ hg st --change . 
+  M bar
+  R B
+  $ hg diff -r .^ -r . bar
+  diff -r 0e278d5079cc -r be9f9340610a bar
+  --- a/bar	Thu Jan 01 00:00:00 1970 +0000
+  +++ b/bar	Thu Jan 01 00:00:00 1970 +0000
+  @@ -1,2 +1,1 @@
+   foo
+  -bar

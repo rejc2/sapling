@@ -293,9 +293,10 @@ mod tests {
     use async_trait::async_trait;
     use bonsai_hg_mapping::BonsaiHgMapping;
     use bookmarks::Bookmarks;
-    use changeset_fetcher::ChangesetFetcher;
     use changesets::Changesets;
     use cloned::cloned;
+    use commit_graph::CommitGraph;
+    use commit_graph::CommitGraphRef;
     use fbinit::FacebookInit;
     use filenodes::FilenodeRange;
     use filenodes::FilenodeResult;
@@ -303,14 +304,12 @@ mod tests {
     use filestore::FilestoreConfig;
     use fixtures::Linear;
     use fixtures::TestRepoFixture;
-    use futures::compat::Stream01CompatExt;
     use manifest::ManifestOps;
     use mercurial_derivation::DeriveHgChangeset;
     use mononoke_types::FileType;
     use repo_blobstore::RepoBlobstore;
     use repo_derived_data::RepoDerivedData;
     use repo_derived_data::RepoDerivedDataRef;
-    use revset::AncestorsNodeStream;
     use slog::info;
     use test_repo_factory::TestRepoFactory;
     use tests_utils::resolve_cs_id;
@@ -331,7 +330,7 @@ mod tests {
         #[facet]
         filestore_config: FilestoreConfig,
         #[facet]
-        changeset_fetcher: dyn ChangesetFetcher,
+        commit_graph: CommitGraph,
         #[facet]
         changesets: dyn Changesets,
         #[facet]
@@ -557,15 +556,14 @@ mod tests {
     async fn verify_batch_and_sequential_derive(fb: FacebookInit) -> Result<()> {
         let ctx = CoreContext::test_mock(fb);
         let repo1: TestRepo = test_repo_factory::build_empty(ctx.fb).await?;
-        Linear::initrepo(fb, &repo1).await;
+        Linear::init_repo(fb, &repo1).await?;
         let repo2: TestRepo = test_repo_factory::build_empty(ctx.fb).await?;
-        Linear::initrepo(fb, &repo2).await;
+        Linear::init_repo(fb, &repo2).await?;
         let master_cs_id = resolve_cs_id(&ctx, &repo1, "master").await?;
-        let mut cs_ids =
-            AncestorsNodeStream::new(ctx.clone(), &repo1.changeset_fetcher, master_cs_id)
-                .compat()
-                .try_collect::<Vec<_>>()
-                .await?;
+        let mut cs_ids = repo1
+            .commit_graph()
+            .ancestors_difference(&ctx, vec![master_cs_id], vec![])
+            .await?;
         cs_ids.reverse();
 
         let manager1 = repo1.repo_derived_data().manager();
@@ -612,17 +610,16 @@ mod tests {
             })
             .build()
             .await?;
-        Linear::initrepo(fb, &repo).await;
+        Linear::init_repo(fb, &repo).await?;
         let commit8 =
             resolve_cs_id(&ctx, &repo, "a9473beb2eb03ddb1cccc3fbaeb8a4820f9cd157").await?;
         let commit8 = repo.derive_hg_changeset(&ctx, commit8).await?;
         *filenodes_cs_id.lock().unwrap() = Some(commit8);
         let master_cs_id = resolve_cs_id(&ctx, &repo, "master").await?;
-        let mut cs_ids =
-            AncestorsNodeStream::new(ctx.clone(), &repo.changeset_fetcher, master_cs_id)
-                .compat()
-                .try_collect::<Vec<_>>()
-                .await?;
+        let mut cs_ids = repo
+            .commit_graph()
+            .ancestors_difference(&ctx, vec![master_cs_id], vec![])
+            .await?;
         cs_ids.reverse();
 
         let manager = repo.repo_derived_data().manager();

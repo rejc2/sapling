@@ -1,5 +1,8 @@
 #debugruntest-compatible
 
+#require no-eden
+
+
 https://bz.mercurial-scm.org/522
 
 In the merge below, the file "foo" has the same contents in both
@@ -28,9 +31,6 @@ revision.
   $ hg ci -qAm 'add bar'
 
   $ hg merge --debug
-    searching for copies back to b515023e500e
-    unmatched files in local:
-     bar
   resolving manifests
    branchmerge: True, force: False
    ancestor: bbd179dfa0a7, local: 71766447bdbb+, remote: 9eaf049ccce4

@@ -30,6 +30,7 @@ use live_commit_sync_config::LiveCommitSyncConfig;
 use manifest::Entry;
 use manifest::ManifestOps;
 use mercurial_types::FileType;
+use metaconfig_types::CommitSyncConfigVersion;
 use metaconfig_types::DefaultSmallToLargeCommitSyncPathAction;
 use mononoke_types::fsnode::FsnodeEntry;
 use mononoke_types::typed_hash::FsnodeId;
@@ -46,10 +47,8 @@ use slog::error;
 use slog::info;
 use synced_commit_mapping::SyncedCommitMapping;
 
-use super::CommitSyncConfigVersion;
-use super::CommitSyncOutcome;
-use super::CommitSyncer;
-use super::Repo;
+use crate::commit_syncer::CommitSyncer;
+use crate::types::Repo;
 use crate::types::Source;
 use crate::types::Target;
 
@@ -313,7 +312,7 @@ impl fmt::Display for PrintableValidationOutput {
                     writeln!(
                         f,
                         "{:?} is present in {}, but not in {} (under {:?})",
-                        source_path, source_name, target_name, target_path,
+                        target_path, target_name, source_name, source_path,
                     )?;
                 }
                 (
@@ -323,7 +322,7 @@ impl fmt::Display for PrintableValidationOutput {
                     writeln!(
                         f,
                         "{:?} is present in {}, but not in {} (under {:?})",
-                        target_path, target_name, source_name, source_path,
+                        source_path, source_name, target_name, target_path,
                     )?;
                 }
                 (
@@ -1203,7 +1202,7 @@ async fn get_synced_commit<M: SyncedCommitMapping + Clone + 'static, R: Repo>(
     let sync_outcome = maybe_sync_outcome
         .ok_or_else(|| format_err!("No sync outcome for {} in {:?}", hash, commit_syncer))?;
 
-    use CommitSyncOutcome::*;
+    use crate::commit_sync_outcome::CommitSyncOutcome::*;
     match sync_outcome {
         NotSyncCandidate(_) => Err(format_err!("{} does not remap in small repo", hash)),
         RewrittenAs(cs_id, mapping_version)
@@ -1267,7 +1266,8 @@ async fn rename_and_remap_bookmarks<M: SyncedCommitMapping + Clone + 'static, R:
                 .get_commit_sync_outcome(&ctx, cs_id)
                 .map(move |maybe_sync_outcome| {
                     let maybe_sync_outcome = maybe_sync_outcome?;
-                    use CommitSyncOutcome::*;
+                    use crate::commit_sync_outcome::CommitSyncOutcome::*;
+
                     let maybe_remapped_cs_id = match maybe_sync_outcome {
                         Some(RewrittenAs(cs_id, _))
                         | Some(EquivalentWorkingCopyAncestor(cs_id, _)) => Some(cs_id),
@@ -1314,15 +1314,12 @@ mod test {
 
     use ascii::AsciiString;
     use bookmarks::BookmarkKey;
-    use changeset_fetcher::ChangesetFetcherArc;
     // To support async tests
     use cross_repo_sync_test_utils::get_live_commit_sync_config;
     use cross_repo_sync_test_utils::TestRepo;
     use fbinit::FacebookInit;
     use fixtures::Linear;
     use fixtures::TestRepoFixture;
-    use futures::compat::Future01CompatExt;
-    use futures_old::stream::Stream;
     use live_commit_sync_config::TestLiveCommitSyncConfig;
     use maplit::hashmap;
     use metaconfig_types::CommitSyncConfig;
@@ -1333,7 +1330,6 @@ mod test {
     use metaconfig_types::SmallRepoPermanentConfig;
     use mononoke_types::NonRootMPath;
     use mononoke_types::RepositoryId;
-    use revset::AncestorsNodeStream;
     use sql_construct::SqlConstruct;
     use synced_commit_mapping::SqlSyncedCommitMapping;
     use synced_commit_mapping::SyncedCommitMappingEntry;
@@ -1651,11 +1647,10 @@ mod test {
         let maybe_master_val = small_repo.bookmarks().get(ctx.clone(), &master).await?;
 
         let master_val = maybe_master_val.ok_or_else(|| Error::msg("master not found"))?;
-        let changesets =
-            AncestorsNodeStream::new(ctx.clone(), &small_repo.changeset_fetcher_arc(), master_val)
-                .collect()
-                .compat()
-                .await?;
+        let changesets = small_repo
+            .commit_graph()
+            .ancestors_difference(&ctx, vec![master_val], vec![])
+            .await?;
 
         let current_version = CommitSyncConfigVersion("noop".to_string());
 
@@ -1708,8 +1703,7 @@ mod test {
                 small_repo.repo_identity().id() => SmallRepoCommitSyncConfig {
                     default_action: DefaultSmallToLargeCommitSyncPathAction::Preserve,
                     map: hashmap! { },
-                    git_submodules_action: Default::default(),
-                    submodule_dependencies: HashMap::new(),
+                    submodule_config: Default::default(),
                 },
             },
             version_name: current_version.clone(),

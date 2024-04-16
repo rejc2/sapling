@@ -23,7 +23,9 @@
 #include <folly/test/TestUtils.h>
 #include <algorithm>
 
+#include "eden/common/telemetry/NullStructuredLogger.h"
 #include "eden/common/testharness/TempFile.h"
+#include "eden/common/utils/SpawnedProcess.h"
 #include "eden/fs/inodes/EdenMount.h"
 #include "eden/fs/inodes/FileInode.h"
 #include "eden/fs/inodes/OverlayFile.h"
@@ -32,13 +34,11 @@
 #include "eden/fs/model/TestOps.h"
 #include "eden/fs/service/PrettyPrinters.h"
 #include "eden/fs/telemetry/EdenStats.h"
-#include "eden/fs/telemetry/NullStructuredLogger.h"
 #include "eden/fs/testharness/FakeBackingStore.h"
 #include "eden/fs/testharness/FakeTreeBuilder.h"
 #include "eden/fs/testharness/TestChecks.h"
 #include "eden/fs/testharness/TestMount.h"
 #include "eden/fs/testharness/TestUtil.h"
-#include "eden/fs/utils/SpawnedProcess.h"
 
 using namespace folly::string_piece_literals;
 

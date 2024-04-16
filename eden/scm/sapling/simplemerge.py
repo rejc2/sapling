@@ -30,7 +30,7 @@ from typing import List, Optional, Tuple
 
 from bindings import clientinfo
 
-from . import error, mdiff, pycompat, util
+from . import error, match, mdiff, pycompat, util
 from .i18n import _
 from .pycompat import range
 
@@ -207,7 +207,7 @@ class CantShowWordConflicts(Exception):
     pass
 
 
-def automerge_wordmerge(base_lines, a_lines, b_lines) -> Optional[List[bytes]]:
+def automerge_wordmerge(m3, base_lines, a_lines, b_lines) -> Optional[List[bytes]]:
     """Try resolve conflicts using wordmerge.
     Return resolved lines, or None if merge failed.
     """
@@ -215,14 +215,36 @@ def automerge_wordmerge(base_lines, a_lines, b_lines) -> Optional[List[bytes]]:
     atext = b"".join(a_lines)
     btext = b"".join(b_lines)
     try:
-        m3 = Merge3Text(basetext, atext, btext, in_wordmerge=True)
-        text = b"".join(render_minimized(m3)[0])
+        m3_word = Merge3Text(basetext, atext, btext, in_wordmerge=True)
+        text = b"".join(render_minimized(m3_word)[0])
         return text.splitlines(True)
     except CantShowWordConflicts:
         return None
 
 
-def automerge_adjacent_changes(base_lines, a_lines, b_lines) -> Optional[List[bytes]]:
+def automerge_sort_inserts(m3, base_lines, a_lines, b_lines) -> Optional[List[bytes]]:
+    """This algorithm tries to resolve conflicts caused by insertions
+    on both sides (e.g.: import insertions)."""
+    if base_lines or not m3.file_type:
+        return None
+
+    key = f"import-pattern:{m3.file_type}"
+    pattern = m3.ui.config("automerge", key)
+    if not pattern:
+        return None
+    matchfn = util.cachedbytesmatcher(pattern.encode())
+    if all(matchfn(line) for line in a_lines) and all(
+        matchfn(line) for line in b_lines
+    ):
+        merged_lines = sorted(set(a_lines + b_lines))
+        return merged_lines
+
+    return None
+
+
+def automerge_adjacent_changes(
+    m3, base_lines, a_lines, b_lines
+) -> Optional[List[bytes]]:
     # require something to be changed
     if not base_lines:
         return None
@@ -278,11 +300,11 @@ def automerge_adjacent_changes(base_lines, a_lines, b_lines) -> Optional[List[by
     return merged_lines
 
 
-def automerge_subset_changes(base_lines, a_lines, b_lines) -> Optional[List[bytes]]:
+def automerge_subset_changes(m3, base_lines, a_lines, b_lines) -> Optional[List[bytes]]:
     if base_lines:
         return None
     if len(a_lines) > len(b_lines):
-        return automerge_subset_changes(base_lines, b_lines, a_lines)
+        return automerge_subset_changes(m3, base_lines, b_lines, a_lines)
     if is_sub_list(a_lines, b_lines):
         return b_lines
 
@@ -322,6 +344,10 @@ def is_sub_list(list1, list2):
 
 
 def unmatching_blocks(lines1, lines2):
+    """Produce unmatching blocks, in (a1, a2, b1, b2) format.
+
+    `lines1[a1:a2]` unmatches `lines2[b1:b2]`.
+    """
     text1 = b"".join(lines1)
     text2 = b"".join(lines2)
     blocks = mdiff.allblocks(text1, text2, lines1=lines1, lines2=lines2)
@@ -357,6 +383,7 @@ AUTOMERGE_ALGORITHMS = {
     "word-merge": automerge_wordmerge,
     "adjacent-changes": automerge_adjacent_changes,
     "subset-changes": automerge_subset_changes,
+    "sort-inserts": automerge_sort_inserts,
 }
 
 
@@ -367,7 +394,14 @@ class Merge3Text:
     incorporating the changes from both BASE->OTHER and BASE->THIS."""
 
     def __init__(
-        self, basetext, atext, btext, ui=None, in_wordmerge=False, premerge=False
+        self,
+        basetext,
+        atext,
+        btext,
+        ui=None,
+        in_wordmerge=False,
+        premerge=False,
+        file_path=None,
     ):
         self.in_wordmerge = in_wordmerge
 
@@ -377,6 +411,7 @@ class Merge3Text:
         self.automerge_mode = ""
         self.init_automerge_fields(ui)
         self.premerge = premerge
+        self.file_path = file_path
 
         if in_wordmerge and self.automerge_fns:
             raise error.Abort(
@@ -408,6 +443,16 @@ class Merge3Text:
                     _("unknown automerge algorithm '%s', availabe algorithms are %s")
                     % (name, list(AUTOMERGE_ALGORITHMS.keys()))
                 )
+
+    @util.propertycache
+    def file_type(self) -> Optional[str]:
+        if not self.file_path:
+            return None
+        for pat, typ in self.ui.configitems("filetype-patterns"):
+            mf = match.match("", "", [pat])
+            if mf(self.file_path):
+                return typ
+        return None
 
     def merge_groups(self):
         """Yield sequence of line groups.
@@ -453,7 +498,7 @@ class Merge3Text:
 
     def run_automerge(self, base_lines, a_lines, b_lines):
         for name, fn in self.automerge_fns.items():
-            merged_lines = fn(base_lines, a_lines, b_lines)
+            merged_lines = fn(self, base_lines, a_lines, b_lines)
             if merged_lines is not None:
                 return name, merged_lines
         return None
@@ -998,8 +1043,16 @@ def simplemerge(ui, localctx, basectx, otherctx, **opts):
 
     _automerge_metrics.set_commits(localctx, basectx, otherctx)
 
+    file_path = basectx.path()
     premerge = opts.get("premerge", False)
-    m3 = Merge3Text(basetext, localtext, othertext, ui=ui, premerge=premerge)
+    m3 = Merge3Text(
+        basetext,
+        localtext,
+        othertext,
+        ui=ui,
+        premerge=premerge,
+        file_path=file_path,
+    )
 
     conflictscount = 0
     if mode == "union":

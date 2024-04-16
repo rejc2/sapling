@@ -53,6 +53,7 @@ macro_rules! impl_commit_graph_tests {
             test_range_stream,
             test_common_base,
             test_slice_ancestors,
+            test_segmented_slice_ancestors,
             test_children,
             test_descendants,
             test_ancestors_difference_segments_1,
@@ -99,6 +100,17 @@ pub async fn test_storage_store_and_fetch(
     assert!(graph.exists(&ctx, name_cs_id("A")).await?);
 
     assert!(!graph.exists(&ctx, name_cs_id("nonexistent")).await?);
+    assert_eq!(
+        graph
+            .known_changesets(
+                &ctx,
+                vec![name_cs_id("A"), name_cs_id("B"), name_cs_id("nonexistent")]
+            )
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>(),
+        hashset! {name_cs_id("A"), name_cs_id("B")}
+    );
     assert_eq!(
         graph
             .changeset_generation(&ctx, name_cs_id("G"))
@@ -988,6 +1000,93 @@ pub async fn test_slice_ancestors(
         |_| async { Ok(set1.clone()) },
         1,
         vec![(5, vec!["P"]), (6, vec!["Q"])],
+    )
+    .await?;
+
+    Ok(())
+}
+
+pub async fn test_segmented_slice_ancestors(
+    ctx: CoreContext,
+    storage: Arc<dyn CommitGraphStorageTest>,
+) -> Result<()> {
+    let graph = from_dag(
+        &ctx,
+        r"
+         A-B-C-D-G-H---J-K
+            \   /   \ /
+             E-F     I
+
+         L-M-N-O-P-Q-R-S-T-U-V
+         ",
+        storage.clone(),
+    )
+    .await?;
+    storage.flush();
+
+    assert_segmented_slice_ancestors(
+        &graph,
+        &ctx,
+        vec!["H"],
+        vec![],
+        2,
+        vec![
+            vec![("B", "A")],
+            vec![("D", "C")],
+            vec![("F", "E")],
+            vec![("H", "G")],
+        ],
+        vec!["B", "D", "F"],
+    )
+    .await?;
+
+    assert_segmented_slice_ancestors(
+        &graph,
+        &ctx,
+        vec!["Q"],
+        vec![],
+        1,
+        vec![
+            vec![("L", "L")],
+            vec![("M", "M")],
+            vec![("N", "N")],
+            vec![("O", "O")],
+            vec![("P", "P")],
+            vec![("Q", "Q")],
+        ],
+        vec!["L", "M", "N", "O", "P"],
+    )
+    .await?;
+
+    assert_segmented_slice_ancestors(
+        &graph,
+        &ctx,
+        vec!["K", "V"],
+        vec![],
+        5,
+        vec![
+            vec![("P", "L")],
+            vec![("U", "Q")],
+            vec![("V", "V"), ("D", "A")],
+            vec![("F", "E"), ("I", "G")],
+            vec![("K", "J")],
+        ],
+        vec!["B", "D", "H", "I", "P", "U"],
+    )
+    .await?;
+
+    assert_segmented_slice_ancestors(
+        &graph,
+        &ctx,
+        vec!["K", "V"],
+        vec!["D", "N"],
+        5,
+        vec![
+            vec![("S", "O")],
+            vec![("V", "T"), ("F", "E")],
+            vec![("I", "G"), ("K", "J")],
+        ],
+        vec!["F", "S"],
     )
     .await?;
 

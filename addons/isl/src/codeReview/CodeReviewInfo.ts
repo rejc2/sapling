@@ -27,7 +27,7 @@ import {GithubUICodeReviewProvider} from './github/github';
 import {atom} from 'jotai';
 import {clearTrackedCache} from 'shared/LRU';
 import {debounce} from 'shared/debounce';
-import {firstLine, unwrap} from 'shared/utils';
+import {firstLine, nullthrows} from 'shared/utils';
 
 export const codeReviewProvider = atom<UICodeReviewProvider | null>(get => {
   const repoInfo = get(repositoryInfo);
@@ -88,7 +88,10 @@ registerDisposable(
 
       // merge old values with newly fetched ones
       return {
-        value: new Map([...unwrap(existing.value).entries(), ...event.summaries.value.entries()]),
+        value: new Map([
+          ...nullthrows(existing.value).entries(),
+          ...event.summaries.value.entries(),
+        ]),
       };
     });
   }),
@@ -124,7 +127,7 @@ export const latestCommitMessage = atomFamilyWeak((hash: Hash | 'head') =>
       const template = get(commitMessageTemplate);
       if (template) {
         const schema = get(commitMessageFieldsSchema);
-        const result = applyEditedFields(emptyCommitMessageFields(schema), template.fields);
+        const result = applyEditedFields(emptyCommitMessageFields(schema), template);
         const templateString = commitMessageFieldsToString(
           schema,
           result,

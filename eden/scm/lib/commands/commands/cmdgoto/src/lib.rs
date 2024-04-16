@@ -11,6 +11,7 @@ use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use checkout::BookmarkAction;
+use checkout::ReportMode;
 use clidispatch::abort;
 use clidispatch::fallback;
 use clidispatch::ReqCtx;
@@ -58,7 +59,7 @@ define_flags! {
         /// create new bookmark
         #[short('B')]
         #[argtype("VALUE")]
-        bookmark: String,
+        bookmark: Option<String>,
 
         #[args]
         args: Vec<String>,
@@ -66,23 +67,34 @@ define_flags! {
 }
 
 pub fn run(ctx: ReqCtx<GotoOpts>, repo: &mut Repo, wc: &mut WorkingCopy) -> Result<u8> {
-    // Missing features (in roughly priority order):
-    // - edenfs checkout support
-    // - progressfile and --continue
-    // - updatestate file maintaince
-    // - Activating/deactivating bookmarks
-    // - Checking unknown files (do we need this?)
-    //
-    // Features to deprecate/not support:
-    // - --merge, --inactive, --date, --check
-
     if !repo.config().get_or_default("checkout", "use-rust")? {
         fallback!("checkout.use-rust is False");
+    }
+
+    if repo.config().get("commands", "update.check").as_deref() == Some("none") {
+        // This is equivalent to --merge, which we don't support.
+        fallback!("commands.update.check=none");
+    }
+
+    if wc.parents()?.len() > 1 {
+        fallback!("multiple working copy parents");
+    }
+
+    if repo.storage_format().is_git() {
+        // We can't be sure if submodules are involved since ".submodules" may have been
+        // added in the checkout destination.
+        tracing::debug!(target: "checkout_info", checkout_detail="gitmodules");
+        fallback!("git format unsupported (submodules)");
     }
 
     if ctx.opts.merge || !ctx.opts.date.is_empty() {
         tracing::debug!(target: "checkout_info", checkout_detail="unsupported_args");
         fallback!("one or more unsupported options in Rust checkout");
+    }
+
+    if ctx.opts.bookmark.is_some() {
+        tracing::debug!(target: "checkout_info", checkout_detail="bookmark");
+        fallback!("--bookmark not supported");
     }
 
     if ctx.opts.clean && ctx.opts.r#continue {
@@ -99,7 +111,7 @@ pub fn run(ctx: ReqCtx<GotoOpts>, repo: &mut Repo, wc: &mut WorkingCopy) -> Resu
     }
 
     if ctx.opts.check as i32 + ctx.opts.clean as i32 + ctx.opts.merge as i32 > 1 {
-        abort!("can only specify one of --check, --clean, or --merge");
+        abort!("can only specify one of -C/--clean, -c/--check, or -m/--merge");
     }
 
     // Protect the various ".hg" state file checks.
@@ -108,24 +120,35 @@ pub fn run(ctx: ReqCtx<GotoOpts>, repo: &mut Repo, wc: &mut WorkingCopy) -> Resu
     // Clean up the "updatemergestate" file if we are done merging.
     // We do this before try_operation since that will error on "updatemergestate".
     // This should happen even without "--continue".
-    let cleaned_mergestate = maybe_clear_update_merge_state(&wc, ctx.opts.clean)?;
+    let mergestate = maybe_clear_update_merge_state(&wc, ctx.opts.clean)?;
 
     let updatestate_path = wc.dot_hg_path().join("updatestate");
 
     if ctx.opts.r#continue {
-        if cleaned_mergestate {
-            // User ran "sl goto --continue" after resolving all "--merge" conflicts.
-            return Ok(0);
-        }
-
-        let interrupted_dest = match fs::read_to_string(&updatestate_path) {
-            Ok(data) => data,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                bail!("not in an interrupted goto state")
+        match mergestate {
+            GotoMergeState::Resolved => {
+                // User ran "sl goto --continue" after resolving all "--merge" conflicts.
+                return Ok(0);
             }
-            Err(err) => return Err(err.into()),
-        };
-        dest.push(interrupted_dest);
+            GotoMergeState::Unresolved => {
+                // Still have unresolved files.
+                abort!(
+                    "{}\n{}",
+                    "outstanding merge conflicts",
+                    "(use '@prog@ resolve --list' to list, '@prog@ resolve --mark FILE' to mark resolved)"
+                );
+            }
+            GotoMergeState::NotMerging => {
+                let interrupted_dest = match fs::read_to_string(&updatestate_path) {
+                    Ok(data) => data,
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                        bail!("not in an interrupted goto state")
+                    }
+                    Err(err) => return Err(err.into()),
+                };
+                dest.push(interrupted_dest);
+            }
+        }
     }
 
     // We either consumed "updatestate" above, or are goto'ing someplace else,
@@ -177,7 +200,7 @@ pub fn run(ctx: ReqCtx<GotoOpts>, repo: &mut Repo, wc: &mut WorkingCopy) -> Resu
     };
 
     let _lock = repo.lock()?;
-    let update_result = checkout::checkout(
+    checkout::checkout(
         &ctx.core,
         repo,
         &wc,
@@ -188,36 +211,38 @@ pub fn run(ctx: ReqCtx<GotoOpts>, repo: &mut Repo, wc: &mut WorkingCopy) -> Resu
             BookmarkAction::SetActiveIfValid(dest)
         },
         checkout_mode,
+        ReportMode::Always,
     )?;
-
-    if !ctx.global_opts().quiet {
-        if let Some((updated, removed)) = update_result {
-            ctx.io().write(format!(
-                "{} files updated, 0 files merged, {} files removed, 0 files unresolved\n",
-                updated, removed
-            ))?;
-        } else {
-            ctx.io().write("update complete\n")?;
-        }
-    }
 
     Ok(0)
 }
 
+enum GotoMergeState {
+    NotMerging,
+    Resolved,
+    Unresolved,
+}
+
 // Clear us out of the "updatemergestate" state if there are no unresolved
-// files or user specified "--clean". Returns whether state was cleared.
-fn maybe_clear_update_merge_state(wc: &LockedWorkingCopy, clean: bool) -> Result<bool> {
+// files or user specified "--clean".
+fn maybe_clear_update_merge_state(wc: &LockedWorkingCopy, clean: bool) -> Result<GotoMergeState> {
     let ums_path = wc.dot_hg_path().join("updatemergestate");
 
     if !ums_path.try_exists().context("updatemergestate")? {
-        return Ok(false);
+        return Ok(GotoMergeState::NotMerging);
     }
 
-    if clean || !wc.read_merge_state()?.unwrap_or_default().is_unresolved() {
+    if clean {
         fs_err::remove_file(&ums_path)?;
-        Ok(true)
+        return Ok(GotoMergeState::NotMerging);
+    }
+
+    if wc.read_merge_state()?.unwrap_or_default().is_unresolved() {
+        Ok(GotoMergeState::Unresolved)
     } else {
-        Ok(false)
+        fs_err::remove_file(&ums_path)?;
+        wc.clear_merge_state()?;
+        Ok(GotoMergeState::Resolved)
     }
 }
 

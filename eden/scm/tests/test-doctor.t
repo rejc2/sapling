@@ -1,6 +1,6 @@
 #debugruntest-compatible
 #inprocess-hg-incompatible
-#require symlink
+#require symlink no-eden
 
   $ configure modern
   $ setconfig format.use-symlink-atomic-write=1
@@ -17,7 +17,8 @@ Test indexedlogdatapack
   $ setconfig remotefilelog.debug=false remotefilelog.write-hgcache-to-indexedlog=true remotefilelog.fetchpacks=true
   $ setconfig diff.git=true experimental.narrow-heads=true mutation.record=true mutation.enabled=true mutation.date="0 0" visibility.enabled=1
 
-  $ hgcloneshallow ssh://user@dummy/master shallow -q
+# prefer-edenapi-clonedata=false avoids metalog compaction that messes w/ metalog file layout
+  $ hgcloneshallow ssh://user@dummy/master shallow -q --config clone.prefer-edenapi-clonedata=false
   $ cd shallow
 
 Make some commits

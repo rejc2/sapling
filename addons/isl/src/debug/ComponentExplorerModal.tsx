@@ -8,27 +8,29 @@
 import type {StyleXVar} from '@stylexjs/stylex/lib/StyleXTypes';
 
 import {Banner, BannerKind} from '../Banner';
+import {TypeaheadResult} from '../CommitInfoView/types';
+import {Column} from '../ComponentUtils';
 import {ErrorNotice} from '../ErrorNotice';
 import {Link} from '../Link';
 import {Tooltip} from '../Tooltip';
-import {VSCodeCheckbox} from '../VSCodeCheckbox';
+import {Badge} from '../components/Badge';
+import {Button} from '../components/Button';
+import {Checkbox} from '../components/Checkbox';
+import {Divider} from '../components/Divider';
+import {Dropdown} from '../components/Dropdown';
 import {RadioGroup} from '../components/Radio';
 import {Tag} from '../components/Tag';
+import {TextArea} from '../components/TextArea';
+import {TextField} from '../components/TextField';
+import {Typeahead} from '../components/Typeahead';
 import {T} from '../i18n';
 import {layout} from '../stylexUtils';
 import {colors, font, radius, spacing} from '../tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
-import {
-  VSCodeBadge,
-  VSCodeButton,
-  VSCodeDivider,
-  VSCodeDropdown,
-  VSCodeOption,
-  VSCodeTextArea,
-  VSCodeTextField,
-} from '@vscode/webview-ui-toolkit/react';
 import {useState, type ReactNode} from 'react';
 import {Icon} from 'shared/Icon';
+
+/* eslint-disable no-console */
 
 const basicBgs = ['bg', 'subtleHoverDarken', 'hoverDarken'] as const;
 const pureColors = ['red', 'yellow', 'orange', 'green', 'blue', 'purple', 'grey'] as const;
@@ -39,6 +41,9 @@ const fontSizes = ['smaller', 'small', 'normal', 'big', 'bigger'] as const;
 
 export default function ComponentExplorer(_: {dismiss: (_: unknown) => unknown}) {
   const [radioChoice, setRadioChoice] = useState('radio');
+  const [checkbox1, setCheckbox1] = useState(false);
+  const [checkbox2, setCheckbox2] = useState(true);
+  const [dropdownChoice, setDropdownChoice] = useState('B');
   return (
     <div {...stylex.props(styles.container)}>
       <h2>
@@ -48,63 +53,100 @@ export default function ComponentExplorer(_: {dismiss: (_: unknown) => unknown})
         <GroupName>Colors</GroupName>
         <Row>
           {basicBgs.map(name => (
-            <Badge fg={colors.fg} bg={colors[name]} key={name}>
+            <ColorBadge fg={colors.fg} bg={colors[name]} key={name}>
               {name}
-            </Badge>
+            </ColorBadge>
           ))}
         </Row>
         <Row>
           {scmColors.map(name => (
-            <Badge fg={colors[name]} bg={colors.bg} key={name}>
+            <ColorBadge fg={colors[name]} bg={colors.bg} key={name}>
               <Icon icon="diff-modified" />
               {name}
-            </Badge>
+            </ColorBadge>
           ))}
         </Row>
         <Row>
           {pureColors.map(name => (
-            <Badge fg={colors[name]} bg={colors.bg} key={name}>
+            <ColorBadge fg={colors[name]} bg={colors.bg} key={name}>
               {name}
-            </Badge>
+            </ColorBadge>
           ))}
         </Row>
         <Row>
           {pureColors.map(name => (
-            <Badge fg={colors.fg} bg={colors[name]} key={name}>
+            <ColorBadge fg={colors.fg} bg={colors[name]} key={name}>
               {name}
-            </Badge>
+            </ColorBadge>
           ))}
         </Row>
         <Row>
-          <Badge fg={colors.errorFg} bg={colors.errorBg}>
+          <ColorBadge fg={colors.errorFg} bg={colors.errorBg}>
             Error
-          </Badge>
+          </ColorBadge>
           {signalColors.map(name => (
-            <Badge fg={colors.signalFg} bg={colors[name]} key={name}>
+            <ColorBadge fg={colors.signalFg} bg={colors[name]} key={name}>
               {name}
-            </Badge>
+            </ColorBadge>
           ))}
+        </Row>
+        <Row>
+          <span style={{border: '1px solid var(--focus-border)'}}>Focus border</span>
+          <span style={{border: '1px solid var(--contrast-border)'}}>Contrast Border</span>
+          <span style={{border: '1px solid var(--contrast-active-border)'}}>
+            Contrast Active Border
+          </span>
         </Row>
         <GroupName>Components</GroupName>
         <Row>
-          <VSCodeButton>Primary</VSCodeButton>
-          <VSCodeButton appearance="secondary">Secondary</VSCodeButton>
-          <VSCodeButton appearance="icon">Icon</VSCodeButton>
-          <VSCodeButton appearance="icon">
-            <Icon icon="rocket" slot="start" /> Icon
-          </VSCodeButton>
-          <VSCodeButton appearance="icon">
+          <Button primary>Primary</Button>
+          <Button disabled primary>
+            Primary
+          </Button>
+          <Button>Secondary</Button>
+          <Button disabled>Secondary</Button>
+          <Button icon>Icon</Button>
+          <Button icon>
             <Icon icon="rocket" />
-          </VSCodeButton>
-          <VSCodeDropdown>
-            <VSCodeOption>Dropdown</VSCodeOption>
-            <VSCodeOption>Option</VSCodeOption>
-          </VSCodeDropdown>
+            Icon
+          </Button>
+          <Button icon>
+            <Icon icon="rocket" />
+          </Button>
+          <Button icon disabled>
+            <Icon icon="rocket" /> Icon
+          </Button>
+          <Button>
+            <Icon icon="rocket" /> Secondary With Icon
+          </Button>
         </Row>
         <Row>
-          <VSCodeCheckbox>Checkbox</VSCodeCheckbox>
-          <VSCodeCheckbox checked>Checked</VSCodeCheckbox>
-          <VSCodeCheckbox disabled>Disabled</VSCodeCheckbox>
+          <Dropdown
+            options={['Dropdown', 'Option']}
+            onChange={e => console.log(e.currentTarget.value)}
+          />
+          <Dropdown
+            disabled
+            options={[
+              {value: 'none', name: 'Disabled Option', disabled: true},
+              {value: 'drop', name: 'Dropdown'},
+              {value: 'opt', name: 'Option'},
+            ]}
+            onChange={e => console.log(e.currentTarget.value)}
+          />
+          <Dropdown
+            value={dropdownChoice}
+            onChange={e => setDropdownChoice(e.currentTarget.value)}
+            options={['A', 'B', 'C']}
+          />
+        </Row>
+        <Row>
+          <Checkbox checked={checkbox1} onChange={setCheckbox1}>
+            Checkbox
+          </Checkbox>
+          <Checkbox checked={checkbox2} onChange={setCheckbox2}>
+            Checked
+          </Checkbox>
           <RadioGroup
             choices={[
               {title: 'Radio', value: 'radio'},
@@ -115,21 +157,29 @@ export default function ComponentExplorer(_: {dismiss: (_: unknown) => unknown})
           />
         </Row>
         <Row>
-          <VSCodeBadge>Badge</VSCodeBadge>
-          <VSCodeBadge>0</VSCodeBadge>
+          <Badge>Badge</Badge>
+          <Badge>0</Badge>
           <Tag>Tag</Tag>
           <Tag>0</Tag>
           <Link href={'#'}>Link</Link>
           <Icon icon="loading" />
           Loading
         </Row>
-        <VSCodeDivider />
+        <Divider />
         <Row>
-          <VSCodeTextArea placeholder="placeholder">Text area</VSCodeTextArea>
-          <VSCodeTextField placeholder="placeholder">Text Field</VSCodeTextField>
+          <TextArea placeholder="placeholder" onChange={e => console.log(e.currentTarget.value)}>
+            Text area
+          </TextArea>
+          <TextField placeholder="placeholder" onChange={e => console.log(e.currentTarget.value)}>
+            Text Field
+          </TextField>
           <Tooltip trigger="manual" shouldShow={true} title="Tooltip" placement="bottom">
             Thing
           </Tooltip>
+        </Row>
+        <Row>
+          <span>Typeahead:</span>
+          <ExampleTypeahead />
         </Row>
 
         <Row>
@@ -148,18 +198,18 @@ export default function ComponentExplorer(_: {dismiss: (_: unknown) => unknown})
         <GroupName>Spacing</GroupName>
         <Row>
           {paddings.map(size => (
-            <Badge style={styles.padding(size)} key={size}>
+            <ColorBadge style={styles.padding(size)} key={size}>
               {size}
-            </Badge>
+            </ColorBadge>
           ))}
         </Row>
         <Row>
           <div {...stylex.props(layout.flexCol)} style={{alignItems: 'flex-start'}}>
             {paddings.map(size => (
               <div {...stylex.props(layout.flexRow)} style={{gap: spacing[size]}}>
-                <Badge>A</Badge>
-                <Badge>B</Badge>
-                <Badge>{size}</Badge>
+                <ColorBadge>A</ColorBadge>
+                <ColorBadge>B</ColorBadge>
+                <ColorBadge>{size}</ColorBadge>
               </div>
             ))}
           </div>
@@ -167,9 +217,9 @@ export default function ComponentExplorer(_: {dismiss: (_: unknown) => unknown})
         <GroupName>Font</GroupName>
         <Row>
           {fontSizes.map(size => (
-            <Badge style={styles.font(size)} bg={colors.hoverDarken} key={size}>
+            <ColorBadge style={styles.font(size)} bg={colors.hoverDarken} key={size}>
               {size}
-            </Badge>
+            </ColorBadge>
           ))}
         </Row>
       </div>
@@ -204,7 +254,7 @@ const styles = stylex.create({
   }),
 });
 
-function Badge({
+function ColorBadge({
   children,
   bg,
   fg,
@@ -228,4 +278,42 @@ function Row({children, style}: {children: ReactNode; style?: stylex.StyleXStyle
 
 function GroupName({children}: {children: ReactNode}) {
   return <div {...stylex.props(styles.groupName)}>{children}</div>;
+}
+
+function ExampleTypeahead() {
+  const [value, setValue] = useState('');
+
+  const possibleValues = [
+    'apple',
+    'banana',
+    'cherry',
+    'date',
+    'elderberry',
+    'fig',
+    'grape',
+    'honeydew',
+    'jackfruit',
+    'kiwi',
+  ];
+  const fetchTokens = async (searchTerm: string) => {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    return {
+      values: possibleValues
+        .filter(v => v.includes(searchTerm))
+        .map(value => ({
+          label: value,
+          value,
+        })),
+      fetchStartTimestamp: Date.now(),
+    };
+  };
+  return (
+    <Typeahead
+      tokenString={value}
+      setTokenString={setValue}
+      fetchTokens={fetchTokens}
+      autoFocus={false}
+      maxTokens={3}
+    />
+  );
 }

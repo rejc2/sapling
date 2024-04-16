@@ -17,6 +17,7 @@ use byteorder::BigEndian;
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
 use configmodel::convert::ByteCount;
+use configmodel::Config;
 use edenapi_types::FileEntry;
 use edenapi_types::TreeEntry;
 use indexedlog::log::IndexOutput;
@@ -24,7 +25,6 @@ use lz4_pyframe::compress;
 use lz4_pyframe::decompress;
 use minibytes::Bytes;
 use once_cell::sync::OnceCell;
-use parking_lot::RwLock;
 use tracing::warn;
 use types::hgid::ReadHgIdExt;
 use types::HgId;
@@ -53,7 +53,7 @@ pub struct IndexedLogHgIdDataStoreConfig {
 }
 
 pub struct IndexedLogHgIdDataStore {
-    store: RwLock<Store>,
+    store: Store,
     extstored_policy: ExtStoredPolicy,
     missing: MissingInjection,
 }
@@ -131,7 +131,7 @@ impl Entry {
     }
 
     /// Read an entry from the IndexedLog and deserialize it.
-    pub(crate) fn from_log(id: &[u8], log: &RwLock<Store>) -> Result<Option<Self>> {
+    pub(crate) fn from_log(id: &[u8], log: &Store) -> Result<Option<Self>> {
         let locked_log = log.read();
         let mut log_entry = locked_log.lookup(0, id)?;
         let buf = match log_entry.next() {
@@ -145,7 +145,7 @@ impl Entry {
     }
 
     /// Write an entry to the IndexedLog. See [`from_log`] for the detail about the on-disk format.
-    pub fn write_to_log(self, log: &RwLock<Store>) -> Result<()> {
+    pub fn write_to_log(self, log: &Store) -> Result<()> {
         let mut buf = Vec::new();
         buf.write_all(self.key.hgid.as_ref())?;
         let path_slice = self.key.path.as_byte_slice();
@@ -205,12 +205,13 @@ impl Entry {
 impl IndexedLogHgIdDataStore {
     /// Create or open an `IndexedLogHgIdDataStore`.
     pub fn new(
+        config: &dyn Config,
         path: impl AsRef<Path>,
         extstored_policy: ExtStoredPolicy,
-        config: &IndexedLogHgIdDataStoreConfig,
+        log_config: &IndexedLogHgIdDataStoreConfig,
         store_type: StoreType,
     ) -> Result<Self> {
-        let open_options = IndexedLogHgIdDataStore::open_options(config);
+        let open_options = IndexedLogHgIdDataStore::open_options(config, log_config);
 
         let log = match store_type {
             StoreType::Local => open_options.local(&path),
@@ -218,18 +219,21 @@ impl IndexedLogHgIdDataStore {
         }?;
 
         Ok(IndexedLogHgIdDataStore {
-            store: RwLock::new(log),
+            store: log,
             extstored_policy,
             missing: MissingInjection::new_from_env("MISSING_FILES"),
         })
     }
 
-    fn open_options(config: &IndexedLogHgIdDataStoreConfig) -> StoreOpenOptions {
+    fn open_options(
+        config: &dyn Config,
+        log_config: &IndexedLogHgIdDataStoreConfig,
+    ) -> StoreOpenOptions {
         // If you update defaults/logic here, please update the "cache" help topic
         // calculations in help.py.
 
         // Default configuration: 4 x 2.5GB.
-        let mut open_options = StoreOpenOptions::new()
+        let mut open_options = StoreOpenOptions::new(config)
             .max_log_count(4)
             .max_bytes_per_log(2500 * 1000 * 1000)
             .auto_sync_threshold(50 * 1024 * 1024)
@@ -238,26 +242,32 @@ impl IndexedLogHgIdDataStore {
                 vec![IndexOutput::Reference(0..HgId::len() as u64)]
             });
 
-        if let Some(max_log_count) = config.max_log_count {
+        if let Some(max_log_count) = log_config.max_log_count {
             open_options = open_options.max_log_count(max_log_count);
         }
-        if let Some(max_bytes_per_log) = config.max_bytes_per_log {
+        if let Some(max_bytes_per_log) = log_config.max_bytes_per_log {
             open_options = open_options.max_bytes_per_log(max_bytes_per_log.value());
-        } else if let Some(max_bytes) = config.max_bytes {
+        } else if let Some(max_bytes) = log_config.max_bytes {
             let log_count: u64 = open_options.max_log_count.unwrap_or(1).max(1).into();
             open_options = open_options.max_bytes_per_log((max_bytes.value() / log_count).max(1));
         }
+
         open_options
     }
 
     pub fn repair(
+        config: &dyn Config,
         path: PathBuf,
-        config: &IndexedLogHgIdDataStoreConfig,
+        log_config: &IndexedLogHgIdDataStoreConfig,
         store_type: StoreType,
     ) -> Result<String> {
         match store_type {
-            StoreType::Local => IndexedLogHgIdDataStore::open_options(config).repair_local(path),
-            StoreType::Shared => IndexedLogHgIdDataStore::open_options(config).repair_shared(path),
+            StoreType::Local => {
+                IndexedLogHgIdDataStore::open_options(config, log_config).repair_local(path)
+            }
+            StoreType::Shared => {
+                IndexedLogHgIdDataStore::open_options(config, log_config).repair_shared(path)
+            }
         }
     }
 
@@ -266,10 +276,14 @@ impl IndexedLogHgIdDataStore {
         Ok(self.get_raw_entry(&key.hgid)?.map(|e| e.with_key(key)))
     }
 
-    // TODO(meyer): Make IndexedLogHgIdDataStore "directly" lockable so we can lock and do a batch of operations (RwLock Guard pattern)
     /// Attempt to read an Entry from IndexedLog, without overwriting the Key (return Key path may not match the request Key path)
     pub(crate) fn get_raw_entry(&self, id: &HgId) -> Result<Option<Entry>> {
         Entry::from_log(id.as_ref(), &self.store)
+    }
+
+    /// Return whether the store contains the given id.
+    pub(crate) fn contains(&self, id: &HgId) -> Result<bool> {
+        self.store.read().contains(0, id.as_ref())
     }
 
     /// Directly get the local content. Do not ask remote servers.
@@ -407,7 +421,7 @@ impl HgIdDataStore for IndexedLogHgIdDataStore {
 
 impl ToKeys for IndexedLogHgIdDataStore {
     fn to_keys(&self) -> Vec<Result<Key>> {
-        let log = &self.store.read();
+        let log = self.store.read();
         log.iter()
             .map(|entry| {
                 let bytes = log.slice_to_bytes(entry?);
@@ -420,6 +434,7 @@ impl ToKeys for IndexedLogHgIdDataStore {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use fs_err::remove_file;
@@ -442,6 +457,7 @@ mod tests {
             max_bytes: None,
         };
         let log = IndexedLogHgIdDataStore::new(
+            &BTreeMap::<&str, &str>::new(),
             &tempdir,
             ExtStoredPolicy::Use,
             &config,
@@ -460,6 +476,7 @@ mod tests {
             max_bytes: None,
         };
         let log = IndexedLogHgIdDataStore::new(
+            &BTreeMap::<&str, &str>::new(),
             &tempdir,
             ExtStoredPolicy::Use,
             &config,
@@ -487,6 +504,7 @@ mod tests {
             max_bytes: None,
         };
         let log = IndexedLogHgIdDataStore::new(
+            &BTreeMap::<&str, &str>::new(),
             &tempdir,
             ExtStoredPolicy::Use,
             &config,
@@ -510,6 +528,7 @@ mod tests {
             max_bytes: None,
         };
         let log = IndexedLogHgIdDataStore::new(
+            &BTreeMap::<&str, &str>::new(),
             &tempdir,
             ExtStoredPolicy::Use,
             &config,
@@ -529,6 +548,7 @@ mod tests {
             max_bytes: None,
         };
         let log = IndexedLogHgIdDataStore::new(
+            &BTreeMap::<&str, &str>::new(),
             &tempdir,
             ExtStoredPolicy::Use,
             &config,
@@ -549,6 +569,7 @@ mod tests {
             max_bytes: None,
         };
         let log = IndexedLogHgIdDataStore::new(
+            &BTreeMap::<&str, &str>::new(),
             &tempdir,
             ExtStoredPolicy::Use,
             &config,
@@ -575,6 +596,7 @@ mod tests {
             max_bytes: None,
         };
         let log = IndexedLogHgIdDataStore::new(
+            &BTreeMap::<&str, &str>::new(),
             &tempdir,
             ExtStoredPolicy::Use,
             &config,
@@ -603,6 +625,7 @@ mod tests {
             max_bytes: None,
         };
         let log = IndexedLogHgIdDataStore::new(
+            &BTreeMap::<&str, &str>::new(),
             &tempdir,
             ExtStoredPolicy::Use,
             &config,
@@ -633,6 +656,7 @@ mod tests {
             max_bytes: None,
         };
         let log = IndexedLogHgIdDataStore::new(
+            &BTreeMap::<&str, &str>::new(),
             &tempdir,
             ExtStoredPolicy::Use,
             &config,
@@ -662,6 +686,7 @@ mod tests {
             max_bytes: None,
         };
         let log = IndexedLogHgIdDataStore::new(
+            &BTreeMap::<&str, &str>::new(),
             &tempdir,
             ExtStoredPolicy::Ignore,
             &config,
@@ -697,6 +722,7 @@ mod tests {
             max_bytes: None,
         };
         let log = IndexedLogHgIdDataStore::new(
+            &BTreeMap::<&str, &str>::new(),
             &tempdir,
             ExtStoredPolicy::Use,
             &config,
@@ -740,6 +766,7 @@ mod tests {
             max_bytes: None,
         };
         let local = Arc::new(IndexedLogHgIdDataStore::new(
+            &BTreeMap::<&str, &str>::new(),
             &tmp,
             ExtStoredPolicy::Ignore,
             &config,
@@ -781,6 +808,7 @@ mod tests {
             max_bytes: None,
         };
         let local = Arc::new(IndexedLogHgIdDataStore::new(
+            &BTreeMap::<&str, &str>::new(),
             &tmp,
             ExtStoredPolicy::Ignore,
             &config,
@@ -817,6 +845,7 @@ mod tests {
             max_bytes: None,
         };
         let log = IndexedLogHgIdDataStore::new(
+            &BTreeMap::<&str, &str>::new(),
             &tempdir,
             ExtStoredPolicy::Use,
             &config,
@@ -878,6 +907,7 @@ mod tests {
             max_bytes: None,
         };
         let log = IndexedLogHgIdDataStore::new(
+            &BTreeMap::<&str, &str>::new(),
             &tempdir,
             ExtStoredPolicy::Ignore,
             &config,

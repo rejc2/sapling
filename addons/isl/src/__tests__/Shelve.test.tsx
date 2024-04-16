@@ -17,11 +17,10 @@ import {
   simulateRepoConnected,
   simulateMessageFromServer,
 } from '../testUtils';
-import {fireEvent, render, screen, waitFor, within} from '@testing-library/react';
+import {fireEvent, render, screen, waitFor, within, act} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {act} from 'react-dom/test-utils';
 import {ComparisonType} from 'shared/Comparison';
-import {unwrap} from 'shared/utils';
+import {nullthrows} from 'shared/utils';
 
 describe('Shelve', () => {
   beforeEach(() => {
@@ -39,7 +38,7 @@ describe('Shelve', () => {
         value: [
           COMMIT('1', 'some public base', '0', {phase: 'public'}),
           COMMIT('a', 'My Commit', '1'),
-          COMMIT('b', 'Another Commit', 'a', {isHead: true}),
+          COMMIT('b', 'Another Commit', 'a', {isDot: true}),
         ],
       });
 
@@ -99,7 +98,7 @@ describe('Shelve', () => {
 
       // uncheck one file
       fireEvent.click(
-        unwrap(
+        nullthrows(
           screen.getByTestId('changed-file-src/file2.js').querySelector('input[type=checkbox]'),
         ),
       );
@@ -228,6 +227,28 @@ describe('Shelve', () => {
           type: 'runOperation',
           operation: expect.objectContaining({
             args: ['unshelve', '--name', 'my shelve'],
+          }),
+        });
+      });
+
+      it('runs apply', () => {
+        fireEvent.click(screen.getByText('Apply'));
+
+        expectMessageSentToServer({
+          type: 'runOperation',
+          operation: expect.objectContaining({
+            args: ['unshelve', '--keep', '--name', 'my shelve'],
+          }),
+        });
+      });
+
+      it('runs delete', () => {
+        fireEvent.click(screen.getByTestId('delete-shelve-aaa'));
+
+        expectMessageSentToServer({
+          type: 'runOperation',
+          operation: expect.objectContaining({
+            args: ['shelve', '--delete', 'my shelve'],
           }),
         });
       });

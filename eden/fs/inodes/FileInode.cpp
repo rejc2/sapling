@@ -15,9 +15,14 @@
 #include <folly/io/async/EventBase.h>
 #include <folly/logging/xlog.h>
 
+#include "eden/common/utils/Bug.h"
+#include "eden/common/utils/DirType.h"
+#include "eden/common/utils/EnumValue.h"
 #include "eden/common/utils/FileUtils.h"
 #include "eden/common/utils/ImmediateFuture.h"
 #include "eden/common/utils/PathFuncs.h"
+#include "eden/common/utils/UnboundedQueueExecutor.h"
+#include "eden/common/utils/XAttr.h"
 #include "eden/fs/inodes/EdenMount.h"
 #include "eden/fs/inodes/InodeError.h"
 #include "eden/fs/inodes/InodeTable.h"
@@ -30,14 +35,9 @@
 #include "eden/fs/store/BlobAccess.h"
 #include "eden/fs/store/ObjectStore.h"
 #include "eden/fs/telemetry/IHiveLogger.h"
-#include "eden/fs/utils/Bug.h"
 #include "eden/fs/utils/Clock.h"
-#include "eden/fs/utils/DirType.h"
-#include "eden/fs/utils/EnumValue.h"
 #include "eden/fs/utils/FileHash.h"
 #include "eden/fs/utils/NotImplemented.h"
-#include "eden/fs/utils/UnboundedQueueExecutor.h"
-#include "eden/fs/utils/XAttr.h"
 
 using folly::StringPiece;
 using std::string;
@@ -581,7 +581,7 @@ FileInode::FileInode(
     const std::optional<InodeTimestamps>& initialTimestamps,
     const ObjectId* hash)
     : Base(ino, initialMode, initialTimestamps, std::move(parentInode), name),
-      state_(folly::in_place, hash) {}
+      state_(std::in_place, hash) {}
 
 // The FileInode is in MATERIALIZED_IN_OVERLAY state.
 FileInode::FileInode(
@@ -591,7 +591,7 @@ FileInode::FileInode(
     mode_t initialMode,
     const InodeTimestamps& initialTimestamps)
     : Base(ino, initialMode, initialTimestamps, std::move(parentInode), name),
-      state_(folly::in_place) {}
+      state_(std::in_place) {}
 
 ImmediateFuture<struct stat> FileInode::setattr(
     const DesiredMetadata& desired,

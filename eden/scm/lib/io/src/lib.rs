@@ -539,6 +539,12 @@ impl IO {
         // use inner.disable_progress to prevent double locking
         inner.disable_progress(true)?;
 
+        // Reproduce tweakdefault.py's logic to improve experience when people have PAGER=less set.
+        let pager_cmd = match pager_cmd.trim() {
+            "less" => "less -FRQX",
+            other => other,
+        };
+
         let is_shell = "|&;<>()$`\\\"' \t\n*?[#~=%"
             .chars()
             .any(|c| pager_cmd.contains(c));
@@ -916,7 +922,7 @@ fn write_term_progress(
 
 impl Drop for IOState {
     fn drop(&mut self) {
-        let _ = self.set_progress(&[]);
+        let _ = self.disable_progress(true);
         let _ = self.flush();
         // Drop the output and error. This sends EOF to pager.
         self.output = Box::<Vec<u8>>::default();

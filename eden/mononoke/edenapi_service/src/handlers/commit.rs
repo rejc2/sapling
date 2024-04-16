@@ -60,12 +60,14 @@ use gotham::state::State;
 use gotham_derive::StateData;
 use gotham_derive::StaticResponseExtender;
 use gotham_ext::error::HttpError;
+use gotham_ext::middleware::request_context::RequestContext;
 use gotham_ext::middleware::scuba::ScubaMiddlewareState;
 use gotham_ext::response::TryIntoResponse;
 use mercurial_types::HgChangesetId;
 use mercurial_types::HgNodeHash;
 use mononoke_api::CreateInfo;
 use mononoke_api::MononokeError;
+use mononoke_api::XRepoLookupExactBehaviour;
 use mononoke_api::XRepoLookupSyncBehaviour;
 use mononoke_api_hg::HgRepoContext;
 use mononoke_types::hash::GitSha1;
@@ -85,7 +87,6 @@ use super::HandlerResult;
 use crate::context::ServerContext;
 use crate::errors::ErrorKind;
 use crate::middleware::request_dumper::RequestDumper;
-use crate::middleware::RequestContext;
 use crate::utils::cbor_stream_filtered_errors;
 use crate::utils::custom_cbor_stream;
 use crate::utils::get_repo;
@@ -843,6 +844,7 @@ impl EdenApiHandler for CommitTranslateId {
                                     bs.clone(),
                                     None,
                                     XRepoLookupSyncBehaviour::SyncIfAbsent,
+                                    XRepoLookupExactBehaviour::WorkingCopyEquivalence,
                                 )
                                 .await,
                         )

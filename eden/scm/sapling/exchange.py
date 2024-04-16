@@ -1313,6 +1313,7 @@ class pulloperation:
         streamclonerequested=None,
         exactbyteclone=False,
         extras=None,
+        newpull=False,
     ):
         # repo we pull into
         self.repo = repo
@@ -1349,6 +1350,9 @@ class pulloperation:
         self.exactbyteclone = exactbyteclone
         # extra information
         self.extras = extras or {}
+
+        # Did we come from repo.pull()
+        self.newpull = newpull
 
     @util.propertycache
     def pulledsubset(self):
@@ -1488,9 +1492,7 @@ def pull(
         # etc).
         if not (cloned and pullop.exactbyteclone):
             _pulldiscovery(pullop)
-            if pullop.canusebundle2 and not _httpcommitgraphenabled(
-                repo, pullop.remote
-            ):
+            if pullop.canusebundle2 and not _httpcommitgraphenabled(pullop):
                 _pullbundle2(pullop)
             _pullchangeset(pullop)
             if pullop.extras.get("phases", True):
@@ -1513,11 +1515,17 @@ pulldiscoveryorder = []
 pulldiscoverymapping = {}
 
 
-def _httpcommitgraphenabled(repo, remote):
+def _httpcommitgraphenabled(pullop):
+    repo = pullop.repo
     if repo.nullableedenapi is None:
         return None
 
-    if remote.capable("commitgraph2") or repo.ui.configbool("pull", "httpcommitgraph2"):
+    if not pullop.newpull:
+        return None
+
+    if pullop.remote.capable("commitgraph2") or repo.ui.configbool(
+        "pull", "httpcommitgraph2"
+    ):
         return "v2"
 
 
@@ -1737,8 +1745,7 @@ def _pullchangeset(pullop):
         # issue1320, avoid a race if remote changed after discovery
         pullop.heads = pullop.rheads
 
-    repo = pullop.repo
-    version = _httpcommitgraphenabled(repo, pullop.remote)
+    version = _httpcommitgraphenabled(pullop)
     if version:
         return _pullcommitgraph(pullop, version=version)
 
@@ -1806,18 +1813,29 @@ def _pullcommitgraph(pullop, version):
         else:
             # also need fetch commit text (messages)
             # graphnodes: [(node, [parent])]
-            nodes = [n[0] for n in graphnodes]
+            repo.ui.status(_("fetching revlog data for %s commits\n") % len(graphnodes))
+            batchsize = 100000
+            nodebatches = [
+                [n[0] for n in graphnodes[start : start + batchsize]]
+                for start in range(0, len(graphnodes), batchsize)
+            ]
             # commitdata result: [{"hgid": node, "revlog_data": p1_p2_text}]
             prefix_len = len(nullid) * 2
             # node_text: {node: text}
             node_text = {
                 c["hgid"]: c["revlog_data"][prefix_len:]
+                for nodes in nodebatches
                 for c in repo.edenapi.commitdata(nodes)[0]
             }
             # input of addcommits: [(node, [parent], text)]
             commits.addcommits(
                 [(node, parents, node_text[node]) for node, parents in graphnodes]
             )
+
+        dirty = repo.changelog.dag.dirty()
+        tip = dirty.first()
+        if tip:
+            repo.svfs.write("tip", tip)
 
         pullop.cgresult = 2  # changed
         if repo.ui.configbool("pull", "httpmutation"):

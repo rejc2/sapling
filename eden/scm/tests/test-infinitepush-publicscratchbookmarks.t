@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
 #inprocess-hg-incompatible
   $ setconfig experimental.allowfilepeer=True
 
@@ -6,6 +9,7 @@
   $ enable infinitepush remotenames
   $ setconfig remotenames.hoist=default 'remotenames.autopullhoistpattern=re:.*'
   $ setconfig infinitepush.branchpattern="re:scratch/.+"
+  $ setconfig remotefilelog.http=false pull.httpbookmarks=false
   $ newrepo server
   $ echo base > base
   $ hg commit -Aqm base

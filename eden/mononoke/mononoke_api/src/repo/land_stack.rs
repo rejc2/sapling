@@ -15,9 +15,9 @@ pub use bookmarks_movement::PushrebaseOutcome;
 use bytes::Bytes;
 use cloned::cloned;
 use commit_graph::CommitGraphRef;
-use cross_repo_sync::types::Large;
-use cross_repo_sync::types::Small;
 use cross_repo_sync::CommitSyncOutcome;
+use cross_repo_sync::Large;
+use cross_repo_sync::Small;
 use futures::future;
 use futures::future::TryFutureExt;
 use futures::stream::StreamExt;
@@ -82,8 +82,9 @@ impl RepoContext {
             retry_num,
             rebased_changesets,
             pushrebase_distance,
+            log_id,
         }) = outcome;
-        redirector.backsync_latest(ctx).await?;
+        redirector.ensure_backsynced(ctx, log_id).await?;
 
         // Convert all fields from large to small repo
         let (Small(old_bookmark_value), head, rebased_changesets) = futures::try_join!(
@@ -98,6 +99,7 @@ impl RepoContext {
             retry_num,
             rebased_changesets,
             pushrebase_distance,
+            log_id,
         }))
     }
 

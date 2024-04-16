@@ -5,9 +5,8 @@
  * GNU General Public License version 2.
  */
 
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::bail;
@@ -57,13 +56,13 @@ use edenapi_types::TreeEntry;
 use edenapi_types::UploadHgChangeset;
 use edenapi_types::UploadToken;
 use futures::prelude::*;
-use futures::stream;
 use hgstore::split_hg_file_metadata;
 use progress_model::ProgressBar;
 use pyrevisionstore::as_legacystore;
 use revisionstore::HgIdMutableDeltaStore;
 use revisionstore::StoreKey;
 use revisionstore::StoreResult;
+use sha1::Digest;
 use types::HgId;
 
 use crate::pytypes::PyStats;
@@ -492,90 +491,6 @@ pub trait EdenApiPyExt: EdenApi {
         Ok(Serde(responses))
     }
 
-    fn uploadfileblobs_py(
-        &self,
-        py: Python,
-        store: PyObject,
-        keys: Vec<(PyPathBuf /* path */, Serde<HgId> /* hgid */)>,
-    ) -> PyResult<(TStream<anyhow::Result<Serde<UploadToken>>>, PyFuture)> {
-        let keys = to_keys(py, &keys)?;
-        let store = as_legacystore(py, store)?;
-        let downcast_error = "incorrect upload token, failed to downcast 'token.data.id' to 'AnyId::AnyFileContentId::ContentId' type";
-
-        // Preupload LFS blobs
-        store
-            .upload(
-                &keys
-                    .iter()
-                    .map(|key| StoreKey::hgid(key.clone()))
-                    .collect::<Vec<_>>(),
-            )
-            .map_pyerr(py)?;
-
-        let (content_ids, mut data): (Vec<_>, Vec<_>) = keys
-            .into_iter()
-            .map(|key| {
-                let content = store.get_file_content(&key).map_pyerr(py)?;
-                match content {
-                    Some(v) => {
-                        let content_id = calc_contentid(&v);
-                        Ok((content_id, (content_id, v)))
-                    }
-                    None => Err(format_err!(
-                        "failed to fetch file content for the key '{}'",
-                        key
-                    ))
-                    .map_pyerr(py),
-                }
-            })
-            // fail the entire operation if content is missing for some key because this is unexpected
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .unzip();
-
-        // Deduplicate upload data
-        let mut uniques = BTreeSet::new();
-        data.retain(|(content_id, _)| uniques.insert(*content_id));
-        let data = data
-            .into_iter()
-            .map(|(content_id, data)| (AnyFileContentId::ContentId(content_id), data))
-            .collect();
-
-        let (responses, stats) = py
-            .allow_threads(|| {
-                block_unless_interrupted(async move {
-                    let response = self.process_files_upload(data, None, None).await?;
-                    let file_content_tokens = response
-                        .entries
-                        .try_collect::<Vec<_>>()
-                        .await?
-                        .into_iter()
-                        .map(|token| {
-                            let content_id = match token.data.id {
-                                AnyId::AnyFileContentId(AnyFileContentId::ContentId(id)) => id,
-                                _ => bail!(EdenApiError::Other(format_err!(downcast_error))),
-                            };
-                            Ok((content_id, token))
-                        })
-                        .collect::<Result<BTreeMap<_, _>, _>>()?;
-                    let tokens = content_ids.into_iter().map(move |cid|
-                        Result::<_, EdenApiError>::Ok(
-                            file_content_tokens
-                            .get(&cid)
-                            .ok_or_else(|| EdenApiError::Other(format_err!("unexpected error: upload token is missing for ContentId({})", cid)))?.clone(),
-                        )
-                    );
-                    Ok::<_, EdenApiError>((stream::iter(tokens), response.stats))
-                })
-            })
-            .map_pyerr(py)?
-            .map_pyerr(py)?;
-
-        let responses_py = responses.map_ok(Serde).map_err(Into::into);
-        let stats_py = PyFuture::new(py, stats.map_ok(PyStats))?;
-        Ok((responses_py.into(), stats_py))
-    }
-
     fn uploadfiles_py(
         &self,
         py: Python,
@@ -586,9 +501,21 @@ pub trait EdenApiPyExt: EdenApi {
             Serde<HgId>, /* p1 */
             Serde<HgId>, /* p2 */
         )>,
+        use_sha1: bool,
     ) -> PyResult<(TStream<anyhow::Result<Serde<UploadToken>>>, PyFuture)> {
         let keys = to_keys_with_parents(py, &keys)?;
         let store = as_legacystore(py, store)?;
+
+        let file_content_id = |data: &[u8]| -> AnyFileContentId {
+            if use_sha1 {
+                let mut hasher = sha1::Sha1::new();
+                hasher.update(data);
+                let hash: [u8; 20] = hasher.finalize().into();
+                AnyFileContentId::Sha1(hash.into())
+            } else {
+                AnyFileContentId::ContentId(calc_contentid(data))
+            }
+        };
 
         // Preupload LFS blobs
         store
@@ -609,7 +536,7 @@ pub trait EdenApiPyExt: EdenApi {
                         let raw_content = raw_content.into();
                         let (raw_data, copy_from) =
                             split_hg_file_metadata(&raw_content).map_pyerr(py)?;
-                        let content_id = calc_contentid(&raw_data);
+                        let content_id = file_content_id(&raw_data);
                         Ok((
                             (content_id, raw_data),
                             (key.hgid, content_id, parents, copy_from),
@@ -628,12 +555,8 @@ pub trait EdenApiPyExt: EdenApi {
             .unzip();
 
         // Deduplicate upload data
-        let mut uniques = BTreeSet::new();
+        let mut uniques = HashSet::new();
         upload_data.retain(|(content_id, _)| uniques.insert(*content_id));
-        let upload_data = upload_data
-            .into_iter()
-            .map(|(content_id, data)| (AnyFileContentId::ContentId(content_id), data))
-            .collect();
 
         let (responses, stats) = py
             .allow_threads(|| {
@@ -649,12 +572,12 @@ pub trait EdenApiPyExt: EdenApi {
                         .into_iter()
                         .map(|token| {
                             let content_id = match token.data.id {
-                                AnyId::AnyFileContentId(AnyFileContentId::ContentId(id)) => id,
+                                AnyId::AnyFileContentId(id) => id,
                                 _ => bail!(EdenApiError::Other(format_err!(downcast_error))),
                             };
                             Ok((content_id, token))
                         })
-                        .collect::<Result<BTreeMap<_, _>, _>>()?;
+                        .collect::<Result<HashMap<_, _>, _>>()?;
 
                     // build the list of HgFilenodeData for upload
                     let filenodes_data = filenodes_data.into_iter().map(|(node_id, content_id, parents, copy_from)| {

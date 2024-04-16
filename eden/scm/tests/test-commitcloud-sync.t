@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
 #inprocess-hg-incompatible
   $ setconfig experimental.allowfilepeer=True
 
@@ -67,6 +70,7 @@ Run cloud status before setting any workspace
   $ hg cloud join -w feature
   commitcloud: this repository is now connected to the 'user/test/feature' workspace for the 'server' repo
   commitcloud: synchronizing 'server' with 'user/test/feature'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -88,6 +92,7 @@ Run cloud status after setting a workspace
   $ hg cloud join
   commitcloud: this repository is now connected to the 'user/test/default' workspace for the 'server' repo
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -100,6 +105,7 @@ Make the second clone of the server
   $ hg cloud join
   commitcloud: this repository is now connected to the 'user/test/default' workspace for the 'server' repo
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -158,16 +164,21 @@ Make a commit in the first client, and sync it
   $ mkcommit "commit1"
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
-  backing up stack rooted at fa5d62c46fd7
+  commitcloud: head 'fa5d62c46fd7' hasn't been uploaded yet
+  edenapi: queue 1 commit for upload
+  edenapi: queue 1 file for upload
+  edenapi: uploaded 1 file
+  edenapi: queue 1 tree for upload
+  edenapi: uploaded 1 tree
+  edenapi: uploaded 1 changeset
   commitcloud: commits synchronized
   finished in * (glob)
-  remote: pushing 1 commit:
-  remote:     fa5d62c46fd7  commit1
 
 Sync requires visibility
   $ hg cloud sync --config visibility.enabled=false
   reverting to tracking visibility through obsmarkers
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   abort: commit cloud sync requires new-style visibility
   [255]
   $ cd ..
@@ -176,11 +187,10 @@ Sync from the second client - the commit should appear
   $ cd client2
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   pulling fa5d62c46fd7 from ssh://user@dummy/server
   searching for changes
-  adding changesets
-  adding manifests
-  adding file changes
+  fetching revlog data for 1 commits
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -194,12 +204,15 @@ Make a commit from the second client and sync it
   $ mkcommit "commit2"
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
-  backing up stack rooted at fa5d62c46fd7
+  commitcloud: head '02f6fc2b7154' hasn't been uploaded yet
+  edenapi: queue 1 commit for upload
+  edenapi: queue 1 file for upload
+  edenapi: uploaded 1 file
+  edenapi: queue 1 tree for upload
+  edenapi: uploaded 1 tree
+  edenapi: uploaded 1 changeset
   commitcloud: commits synchronized
   finished in * (glob)
-  remote: pushing 2 commits:
-  remote:     fa5d62c46fd7  commit1
-  remote:     02f6fc2b7154  commit2
   $ cd ..
 
 On the first client, make a bookmark, then sync - the bookmark and new commit should be synced
@@ -208,11 +221,10 @@ On the first client, make a bookmark, then sync - the bookmark and new commit sh
   switching to explicit tracking of visible commits
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   pulling 02f6fc2b7154 from ssh://user@dummy/server
   searching for changes
-  adding changesets
-  adding manifests
-  adding file changes
+  fetching revlog data for 1 commits
   commitcloud: commits synchronized
   finished in * (glob)
   $ tglog
@@ -228,6 +240,7 @@ Sync the bookmark back to the second client
   $ cd client2
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   $ tglog
@@ -241,6 +254,7 @@ Move the bookmark on the second client, and then sync it
   $ hg bookmark -r 'desc(commit2)' -f bookmark1
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -251,6 +265,7 @@ Move the bookmark also on the first client, it should be forked in the sync
   $ hg bookmark -r 'desc(commit1)' -f bookmark1
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   bookmark1 changed locally and remotely, local bookmark renamed to bookmark1-testhost
   commitcloud: commits synchronized
   finished in * (glob)
@@ -272,12 +287,15 @@ Try to push selectively
 
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
-  backing up stack rooted at a7bb357e7299
+  commitcloud: head '48610b1a7ec0' hasn't been uploaded yet
+  edenapi: queue 2 commits for upload
+  edenapi: queue 1 file for upload
+  edenapi: uploaded 1 file
+  edenapi: queue 2 trees for upload
+  edenapi: uploaded 2 trees
+  edenapi: uploaded 2 changesets
   commitcloud: commits synchronized
   finished in * (glob)
-  remote: pushing 2 commits:
-  remote:     a7bb357e7299  commit1 amended
-  remote:     48610b1a7ec0  commit2
 
   $ tglog
   o  48610b1a7ec0 'commit2' bookmark1
@@ -293,18 +311,15 @@ Sync the amended commit to the other client
   $ cd client2
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   pulling 48610b1a7ec0 from ssh://user@dummy/server
   searching for changes
-  adding changesets
-  adding manifests
-  adding file changes
+  fetching revlog data for 2 commits
   commitcloud: commits synchronized
   finished in * (glob)
   commitcloud: current revision 02f6fc2b7154 has been moved remotely to 48610b1a7ec0
-  hint[commitcloud-update-on-move]: if you would like to update to the moved version automatically add
-  [commitcloud]
-  updateonmove = true
-  to your .hgrc config file
+  hint[commitcloud-update-on-move]: if you would like to update to the moved version automatically, run:
+  `hg config --user commitcloud.updateonmove=true`
   hint[hint-ack]: use 'hg hint --ack commitcloud-update-on-move' to silence these hints
   $ hg up -q tip
   $ tglog
@@ -328,30 +343,28 @@ Expected result: the message telling that revision has been moved to another rev
   $ hg amend -m "`hg descr | head -n1` amended"
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
-  backing up stack rooted at a7bb357e7299
+  commitcloud: head '41f3b9359864' hasn't been uploaded yet
+  edenapi: queue 1 commit for upload
+  edenapi: queue 0 files for upload
+  edenapi: queue 0 trees for upload
+  edenapi: uploaded 1 changeset
   commitcloud: commits synchronized
   finished in * (glob)
-  remote: pushing 2 commits:
-  remote:     a7bb357e7299  commit1 amended
-  remote:     41f3b9359864  commit2 amended
 
   $ cd ..
 
   $ cd client2
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   pulling 41f3b9359864 from ssh://user@dummy/server
   searching for changes
-  adding changesets
-  adding manifests
-  adding file changes
+  fetching revlog data for 1 commits
   commitcloud: commits synchronized
   finished in * (glob)
   commitcloud: current revision 48610b1a7ec0 has been moved remotely to 41f3b9359864
-  hint[commitcloud-update-on-move]: if you would like to update to the moved version automatically add
-  [commitcloud]
-  updateonmove = true
-  to your .hgrc config file
+  hint[commitcloud-update-on-move]: if you would like to update to the moved version automatically, run:
+  `hg config --user commitcloud.updateonmove=true`
   hint[hint-ack]: use 'hg hint --ack commitcloud-update-on-move' to silence these hints
   $ tglog
   o  41f3b9359864 'commit2 amended' bookmark1
@@ -381,12 +394,15 @@ Expected result: client2 should be moved to the amended version
   8134e74ecdc8
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
-  backing up stack rooted at a7bb357e7299
+  commitcloud: head '8134e74ecdc8' hasn't been uploaded yet
+  edenapi: queue 1 commit for upload
+  edenapi: queue 1 file for upload
+  edenapi: uploaded 1 file
+  edenapi: queue 1 tree for upload
+  edenapi: uploaded 1 tree
+  edenapi: uploaded 1 changeset
   commitcloud: commits synchronized
   finished in * (glob)
-  remote: pushing 2 commits:
-  remote:     a7bb357e7299  commit1 amended
-  remote:     8134e74ecdc8  commit2 amended amended
 
   $ cd ..
 
@@ -399,11 +415,10 @@ Expected result: client2 should be moved to the amended version
   0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   pulling 8134e74ecdc8 from ssh://user@dummy/server
   searching for changes
-  adding changesets
-  adding manifests
-  adding file changes
+  fetching revlog data for 1 commits
   commitcloud: commits synchronized
   finished in * (glob)
   commitcloud: current revision 41f3b9359864 has been moved remotely to 8134e74ecdc8
@@ -439,13 +454,15 @@ Expected result: move should not happen, expect a message that move is ambiguous
   cebbb614447e
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
-  backing up stack rooted at a7bb357e7299
+  commitcloud: head 'abd5311ab3c6' hasn't been uploaded yet
+  commitcloud: head 'cebbb614447e' hasn't been uploaded yet
+  edenapi: queue 2 commits for upload
+  edenapi: queue 0 files for upload
+  edenapi: queue 2 trees for upload
+  edenapi: uploaded 2 trees
+  edenapi: uploaded 2 changesets
   commitcloud: commits synchronized
   finished in * (glob)
-  remote: pushing 3 commits:
-  remote:     a7bb357e7299  commit1 amended
-  remote:     abd5311ab3c6  commit2 amended amended
-  remote:     cebbb614447e  commit2 amended amended
 
   $ cd ..
 
@@ -453,14 +470,10 @@ Expected result: move should not happen, expect a message that move is ambiguous
   $ hg up 41f3b9359864 -q
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   pulling abd5311ab3c6 cebbb614447e from ssh://user@dummy/server
   searching for changes
-  adding changesets
-  adding manifests
-  adding file changes
-  adding changesets
-  adding manifests
-  adding file changes
+  fetching revlog data for 2 commits
   commitcloud: commits synchronized
   finished in * (glob)
   commitcloud: current revision 41f3b9359864 has been replaced remotely with multiple revisions
@@ -500,12 +513,15 @@ Expected result: client2 should be moved to fada67350ab0
   fada67350ab0
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
-  backing up stack rooted at a7bb357e7299
+  commitcloud: head 'fada67350ab0' hasn't been uploaded yet
+  edenapi: queue 1 commit for upload
+  edenapi: queue 1 file for upload
+  edenapi: uploaded 1 file
+  edenapi: queue 1 tree for upload
+  edenapi: uploaded 1 tree
+  edenapi: uploaded 1 changeset
   commitcloud: commits synchronized
   finished in * (glob)
-  remote: pushing 2 commits:
-  remote:     a7bb357e7299  commit1 amended
-  remote:     fada67350ab0  commit2 amended amended amended amended amended
 
   $ cd ..
 
@@ -513,11 +529,10 @@ Expected result: client2 should be moved to fada67350ab0
   $ hg up abd5311ab3c6 -q
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   pulling fada67350ab0 from ssh://user@dummy/server
   searching for changes
-  adding changesets
-  adding manifests
-  adding file changes
+  fetching revlog data for 1 commits
   commitcloud: commits synchronized
   finished in * (glob)
   commitcloud: current revision abd5311ab3c6 has been moved remotely to fada67350ab0
@@ -560,12 +575,13 @@ Expected result: client2 should be moved to 68e035cc1996
   ~
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
-  backing up stack rooted at a7bb357e7299
+  commitcloud: head '68e035cc1996' hasn't been uploaded yet
+  edenapi: queue 1 commit for upload
+  edenapi: queue 0 files for upload
+  edenapi: queue 0 trees for upload
+  edenapi: uploaded 1 changeset
   commitcloud: commits synchronized
   finished in * (glob)
-  remote: pushing 2 commits:
-  remote:     a7bb357e7299  commit1 amended
-  remote:     68e035cc1996  commit2 amended amended rebased amended rebased am
 
   $ cd ..
 
@@ -710,6 +726,7 @@ Check cloud sync in the source repo doesn't need to do anything
   
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -740,12 +757,14 @@ Check '--check-autosync-enabled' option
   commitcloud: background operations are currently disabled
   $ hg cloud sync --check-autosync-enabled --config infinitepushbackup.autobackup=true
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
 Check '--raw-workspace-name' option
   $ hg cloud sync --raw-workspace-name 'user/test/default'
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in 0.00 sec
   $ hg cloud sync --raw-workspace-name 'user/test/other'
@@ -753,13 +772,8 @@ Check '--raw-workspace-name' option
   [1]
 
 Check handling of failures
-Simulate failure to backup a commit by setting the server maxbundlesize limit very low
+Simulate failure to backup a commit by setting a FAILPOINT.
 
-  $ cp ../server/.hg/hgrc $TESTTMP/server-hgrc.bak
-  $ cat >> ../server/.hg/hgrc << EOF
-  > [infinitepush]
-  > maxbundlesize = 0
-  > EOF
   $ hg up testbookmark
   0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   (activating bookmark testbookmark)
@@ -777,51 +791,17 @@ Simulate failure to backup a commit by setting the server maxbundlesize limit ve
   │
   o  d20a80d4def3 'base'
   
-  $ hg cloud sync
+  $ FAILPOINTS=eagerepo::api::uploadchangesets=return hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
-  backing up stack rooted at 4b4f26511f8b
-  remote: pushing 4 commits:
-  remote:     4b4f26511f8b  race attempt
-  remote:     715c1454ae33  stack commit 2
-  remote:     a6b97eebbf74  shared commit updated
-  remote:     9bd68ef10d6b  toobig
-  push failed: bundle is too big: 3104 bytes. max allowed size is 0 MB
-  retrying push with discovery
-  searching for changes
-  remote: pushing 4 commits:
-  remote:     4b4f26511f8b  race attempt
-  remote:     715c1454ae33  stack commit 2
-  remote:     a6b97eebbf74  shared commit updated
-  remote:     9bd68ef10d6b  toobig
-  push of stack 4b4f26511f8b failed: bundle is too big: 3104 bytes. max allowed size is 0 MB
-  retrying each head individually
-  remote: pushing 3 commits:
-  remote:     4b4f26511f8b  race attempt
-  remote:     715c1454ae33  stack commit 2
-  remote:     a6b97eebbf74  shared commit updated
-  push failed: bundle is too big: 2441 bytes. max allowed size is 0 MB
-  retrying push with discovery
-  searching for changes
-  remote: pushing 3 commits:
-  remote:     4b4f26511f8b  race attempt
-  remote:     715c1454ae33  stack commit 2
-  remote:     a6b97eebbf74  shared commit updated
-  push of head a6b97eebbf74 failed: bundle is too big: 2441 bytes. max allowed size is 0 MB
-  remote: pushing 3 commits:
-  remote:     4b4f26511f8b  race attempt
-  remote:     715c1454ae33  stack commit 2
-  remote:     9bd68ef10d6b  toobig
-  push failed: bundle is too big: 2331 bytes. max allowed size is 0 MB
-  retrying push with discovery
-  searching for changes
-  remote: pushing 3 commits:
-  remote:     4b4f26511f8b  race attempt
-  remote:     715c1454ae33  stack commit 2
-  remote:     9bd68ef10d6b  toobig
-  push of head 9bd68ef10d6b failed: bundle is too big: 2331 bytes. max allowed size is 0 MB
-  commitcloud: failed to synchronize * (glob)
-  commitcloud: failed to synchronize * (glob)
-  finished in * (glob)
+  commitcloud: head 'a6b97eebbf74' hasn't been uploaded yet
+  commitcloud: head '9bd68ef10d6b' hasn't been uploaded yet
+  edenapi: queue 2 commits for upload
+  edenapi: queue 1 file for upload
+  edenapi: uploaded 1 file
+  edenapi: queue 1 tree for upload
+  edenapi: uploaded 1 tree
+  abort: server responded 500 Internal Server Error for eager://$TESTTMP/server/upload_changesets: failpoint. Headers: {}
+  [255]
 
 Run cloud status after failing to synchronize
   $ hg cloud status
@@ -829,46 +809,47 @@ Run cloud status after failing to synchronize
   Raw Workspace Name: user/test/default
   Automatic Sync (on local changes): OFF
   Automatic Sync via 'Scm Daemon' (on remote changes): OFF
-  Last Sync Version: 18
+  Last Sync Version: 17
   Last Sync Heads: 1 (0 omitted)
   Last Sync Bookmarks: 1 (0 omitted)
   Last Sync Remote Bookmarks: 0
   Last Sync Time: * (glob)
-  Last Sync Status: Failed
+  Last Sync Status: Exception:
+  server responded 500 Internal Server Error for eager://$TESTTMP/server/upload_changesets: failpoint. Headers: {}
 
   $ hg cloud check -r .
   9bd68ef10d6bdb8ebf3273a7b91bc4f3debe2a87 not backed up
 
-Set the limit back high.  Sync in the other repo and check it still looks ok
-(but with the failed commits missing).
+Sync in the other repo and check it still looks ok (but with the failed commits missing).
 
-  $ mv $TESTTMP/server-hgrc.bak ../server/.hg/hgrc
   $ cd ../client1
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   $ tglog
+  o  2c0ce859e76a 'shared commit'
+  │
   o  715c1454ae33 'stack commit 2' testbookmark
   │
   @  4b4f26511f8b 'race attempt'
   │
   o  d20a80d4def3 'base'
-  
 
 Now sync in the repo we failed in.  This time it should work.
 
   $ cd ../client2
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
-  backing up stack rooted at 4b4f26511f8b
+  commitcloud: head 'a6b97eebbf74' hasn't been uploaded yet
+  commitcloud: head '9bd68ef10d6b' hasn't been uploaded yet
+  edenapi: queue 2 commits for upload
+  edenapi: queue 0 files for upload
+  edenapi: queue 0 trees for upload
+  edenapi: uploaded 2 changesets
   commitcloud: commits synchronized
   finished in * (glob)
-  remote: pushing 4 commits:
-  remote:     4b4f26511f8b  race attempt
-  remote:     715c1454ae33  stack commit 2
-  remote:     a6b97eebbf74  shared commit updated
-  remote:     9bd68ef10d6b  toobig
   $ hg cloud check -r .
   9bd68ef10d6bdb8ebf3273a7b91bc4f3debe2a87 backed up
   $ tglog
@@ -888,27 +869,22 @@ And the commits should now be availble in the other client.
   $ cd ../client1
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   pulling a6b97eebbf74 9bd68ef10d6b from ssh://user@dummy/server
   searching for changes
-  adding changesets
-  adding manifests
-  adding file changes
-  adding changesets
-  adding manifests
-  adding file changes
+  fetching revlog data for 2 commits
   commitcloud: commits synchronized
   finished in * (glob)
   $ tglog
-  o  a6b97eebbf74 'shared commit updated'
+  o  9bd68ef10d6b 'toobig' testbookmark toobig
   │
-  │ o  9bd68ef10d6b 'toobig' testbookmark toobig
+  │ o  a6b97eebbf74 'shared commit updated'
   ├─╯
   o  715c1454ae33 'stack commit 2'
   │
   @  4b4f26511f8b 'race attempt'
   │
   o  d20a80d4def3 'base'
-  
 Clean up
 
   $ hg up -q -r d20a80d4def38df63a4b330b7fb688f3d4cae1e3
@@ -942,47 +918,34 @@ Make one of the commits public when it shouldn't be.
   $ hg debugmakepublic e58a6603d256
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
-  backing up stack rooted at 9a3e7907fd5c
-  remote: abort: 00changelog.i@e58a6603d256: unknown parent!
-  push failed: stream ended unexpectedly (got 0 bytes, expected 4)
-  retrying push with discovery
-  searching for changes
-  backing up stack rooted at 3597ff85ead0
-  commitcloud: commits synchronized
-  finished in * (glob)
-  remote: pushing 2 commits:
-  remote:     e58a6603d256  stack 1 first
-  remote:     9a3e7907fd5c  stack 1 second
-  remote: pushing 2 commits:
-  remote:     3597ff85ead0  stack 2 first
-  remote:     799d22972c4e  stack 2 second
+  commitcloud: head '9a3e7907fd5c' hasn't been uploaded yet
+  commitcloud: head '799d22972c4e' hasn't been uploaded yet
+  edenapi: queue 3 commits for upload
+  edenapi: queue 3 files for upload
+  edenapi: uploaded 3 files
+  edenapi: queue 3 trees for upload
+  edenapi: uploaded 3 trees
+  edenapi: uploaded 2 changesets
+  commitcloud: failed to synchronize 9a3e7907fd5c
+  finished in 0.00 sec
 
 Commit still becomes available in the other repo
 
   $ cd ../client2
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
-  pulling 9a3e7907fd5c 799d22972c4e from ssh://user@dummy/server
+  commitcloud: nothing to upload
+  pulling 799d22972c4e from ssh://user@dummy/server
   searching for changes
-  adding changesets
-  adding manifests
-  adding file changes
-  adding changesets
-  adding manifests
-  adding file changes
+  fetching revlog data for 2 commits
   commitcloud: commits synchronized
   finished in * (glob)
   $ tglog
-  o  9a3e7907fd5c 'stack 1 second'
+  o  799d22972c4e 'stack 2 second'
   │
-  o  e58a6603d256 'stack 1 first'
+  o  3597ff85ead0 'stack 2 first'
   │
-  │ o  799d22972c4e 'stack 2 second'
-  │ │
-  │ o  3597ff85ead0 'stack 2 first'
-  ├─╯
   @  d20a80d4def3 'base'
-  
 Fix up that public commit, set it back to draft
   $ cd ../client1
   $ hg debugmakepublic -d -r e58a6603d256
@@ -1019,22 +982,59 @@ Create another public commit on the server, moving one of the bookmarks
   $ tglog
   @  97250524560a 'public 2' publicbookmark2
   │
+  │ x  2da6c73964b8 'stack 1 second'
+  │ │
+  │ x  5df7c1d8d8ab 'stack 1 first'
+  ├─╯
   o  acd5b9e8c656 'public' publicbookmark1
   │
+  │ x  799d22972c4e 'stack 2 second'
+  │ │
+  │ x  3597ff85ead0 'stack 2 first'
+  ├─╯
+  │ x  9bd68ef10d6b 'toobig'
+  │ │
+  │ │ x  a6b97eebbf74 'shared commit updated'
+  │ ├─╯
+  │ │ x  2c0ce859e76a 'shared commit'
+  │ ├─╯
+  │ x  715c1454ae33 'stack commit 2'
+  │ │
+  │ x  4b4f26511f8b 'race attempt'
+  ├─╯
+  │ x  f2ccc2716735 'stack commit 2'
+  │ │
+  │ x  74473a0f136f 'stack commit 1'
+  ├─╯
+  │ x  68e035cc1996 'commit2 amended amended rebased amended rebased amended'
+  │ │
+  │ │ x  fada67350ab0 'commit2 amended amended amended amended amended'
+  │ ├─╯
+  │ │ x  cebbb614447e 'commit2 amended amended'
+  │ ├─╯
+  │ │ x  abd5311ab3c6 'commit2 amended amended'
+  │ ├─╯
+  │ │ x  8134e74ecdc8 'commit2 amended amended'
+  │ ├─╯
+  │ │ x  41f3b9359864 'commit2 amended'
+  │ ├─╯
+  │ │ x  48610b1a7ec0 'commit2'
+  │ ├─╯
+  │ x  a7bb357e7299 'commit1 amended'
+  ├─╯
+  │ x  02f6fc2b7154 'commit2'
+  │ │
+  │ x  fa5d62c46fd7 'commit1'
+  ├─╯
   o  d20a80d4def3 'base'
-  
 Sync this onto the second client, the remote bookmarks don't change.
   $ cd ../client2
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   pulling 2da6c73964b8 from ssh://user@dummy/server
   searching for changes
-  adding changesets
-  adding manifests
-  adding file changes
-  adding changesets
-  adding manifests
-  adding file changes
+  fetching revlog data for 3 commits
   commitcloud: commits synchronized
   finished in * (glob)
   $ hg trglog
@@ -1080,14 +1080,10 @@ Rebase the commits again, and resync to the first client.
   $ cd ../client1
   $ hg cloud sync
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   pulling af621240884f from ssh://user@dummy/server
   searching for changes
-  adding changesets
-  adding manifests
-  adding file changes
-  adding changesets
-  adding manifests
-  adding file changes
+  fetching revlog data for 3 commits
   commitcloud: commits synchronized
   finished in * (glob)
   $ hg trglog
@@ -1164,6 +1160,7 @@ Reconnect to a service where the workspace is brand new.  This should work.
   commitcloud: attempting to connect to the 'user/test/default' workspace for the 'server' repo
   commitcloud: this repository is now connected to the 'user/test/default' workspace for the 'server' repo
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -1175,14 +1172,7 @@ Reconnect to the default repository.  This should work and pull in the commits.
   commitcloud: attempting to connect to the 'user/test/default' workspace for the 'server' repo
   commitcloud: this repository is now connected to the 'user/test/default' workspace for the 'server' repo
   commitcloud: synchronizing 'server' with 'user/test/default'
-  pulling 799d22972c4e af621240884f from ssh://user@dummy/server
-  searching for changes
-  adding changesets
-  adding manifests
-  adding file changes
-  adding changesets
-  adding manifests
-  adding file changes
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   hint[commitcloud-switch]: the following commitcloud workspaces (backups) are available for this repo:
@@ -1193,20 +1183,19 @@ Reconnect to the default repository.  This should work and pull in the commits.
   hint[hint-ack]: use 'hg hint --ack commitcloud-switch' to silence these hints
 
   $ hg trglog
-  o  af621240884f 'stack 1 second'
+  @  af621240884f 'stack 1 second'
   │
   o  81cd67693e59 'stack 1 first'
+  │
+  o  97250524560a 'public 2'  default/publicbookmark2
+  │
+  o  acd5b9e8c656 'public'  default/publicbookmark1
   │
   │ o  799d22972c4e 'stack 2 second'
   │ │
   │ o  3597ff85ead0 'stack 2 first'
-  │ │
-  @ │  97250524560a 'public 2'  default/publicbookmark2
-  │ │
-  o │  acd5b9e8c656 'public'  default/publicbookmark1
   ├─╯
   o  d20a80d4def3 'base'
-  
 
 Reconnecting while already connected does nothing.
   $ hg cloud reconnect
@@ -1231,6 +1220,7 @@ Enable commit cloud background operations.
   commitcloud: attempting to connect to the 'user/test/default' workspace for the 'server' repo
   commitcloud: this repository is now connected to the 'user/test/default' workspace for the 'server' repo
   commitcloud: synchronizing 'server' with 'user/test/default'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   hint[commitcloud-switch]: the following commitcloud workspaces (backups) are available for this repo:
@@ -1265,6 +1255,7 @@ Pull with automigrate enabled and host-specific workspaces
   commitcloud: attempting to connect to the 'user/test/testhost' workspace for the 'server' repo
   commitcloud: this repository is now connected to the 'user/test/testhost' workspace for the 'server' repo
   commitcloud: synchronizing 'server' with 'user/test/testhost'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
 
@@ -1275,6 +1266,7 @@ Host-specific workspace now exists, so it should be chosen as the one to connect
   commitcloud: attempting to connect to the 'user/test/testhost' workspace for the 'server' repo
   commitcloud: this repository is now connected to the 'user/test/testhost' workspace for the 'server' repo
   commitcloud: synchronizing 'server' with 'user/test/testhost'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   hint[commitcloud-switch]: the following commitcloud workspaces (backups) are available for this repo:
@@ -1285,12 +1277,14 @@ Host-specific workspace now exists, so it should be chosen as the one to connect
   find the one the repo is connected to and learn how to switch between them
   hint[hint-ack]: use 'hg hint --ack commitcloud-switch' to silence these hints
 
-  $ hg cloud join --switch -w default
+  $ hg cloud join --switch -w default --traceback
   commitcloud: synchronizing 'server' with 'user/test/testhost'
+  commitcloud: nothing to upload
   commitcloud: commits synchronized
   finished in * (glob)
   commitcloud: now this repository will be switched from the 'user/test/testhost' to the 'user/test/default' workspace
-  commitcloud: this repository is now connected to the 'user/test/default' workspace for the 'server' repo
-  commitcloud: synchronizing 'server' with 'user/test/default'
-  commitcloud: commits synchronized
-  finished in * (glob)
+  Traceback (most recent call last):
+    # collapsed by devel.collapse-traceback
+  sapling.error.RepoLookupError: unknown revision 'master'
+  abort: unknown revision 'master'!
+  [255]

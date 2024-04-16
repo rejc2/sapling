@@ -15,7 +15,7 @@ import bindings
 
 from bindings import webview
 
-from .. import error
+from .. import error, pycompat
 from ..i18n import _
 from ..node import hex
 
@@ -60,7 +60,7 @@ DEFAULT_PORT = 3011
         (
             "",
             "app",
-            True,
+            None,
             _(
                 "Use a native OS window or Chrome-like browser to open ISL in a standalone window. "
                 + "Use --no-app to use a normal browser tab instead.",
@@ -94,7 +94,7 @@ DEFAULT_PORT = 3011
         ),
     ],
 )
-def isl_cmd(ui, repo, *args, **opts):
+def isl_cmd(ui, repo, **opts):
     """launch Sapling Web GUI on localhost
 
     Sapling Web is a collection of web-based tools including Interactive Smartlog,
@@ -140,6 +140,8 @@ def isl_cmd(ui, repo, *args, **opts):
     platform = opts.get("platform")
     browser = opts.get("browser")
     app = opts.get("app")
+    if app is None:
+        app = "web" not in pycompat.sysargv
     dev = opts.get("dev")
     session = opts.get("session")
 

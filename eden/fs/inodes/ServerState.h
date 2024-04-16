@@ -10,9 +10,9 @@
 #include <memory>
 
 #include "eden/common/utils/PathFuncs.h"
+#include "eden/common/utils/RefPtr.h"
 #include "eden/fs/config/CachedParsedFileMonitor.h"
 #include "eden/fs/model/git/GitIgnoreFileParser.h"
-#include "eden/fs/utils/RefPtr.h"
 #include "eden/fs/utils/UserInfo.h"
 
 // For ConfigReloadBehavior
@@ -43,7 +43,7 @@ class UnboundedQueueExecutor;
 using EdenStatsPtr = RefPtr<EdenStats>;
 
 /**
- * ServerState is the testabl, dependency injection seam for the inode
+ * ServerState is the testable, dependency injection seam for the inode
  * layer. It includes some platform abstractions like Clock, loggers,
  * and configuration, and state shared across multiple mounts.
  *

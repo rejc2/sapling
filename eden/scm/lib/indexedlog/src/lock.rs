@@ -12,7 +12,10 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use fs2::FileExt;
+use memmap2::MmapMut;
+use memmap2::MmapOptions;
 
+use crate::change_detect::SharedChangeDetector;
 use crate::errors::IoResultExt;
 use crate::utils;
 
@@ -110,14 +113,15 @@ impl ScopedDirLock {
         } else {
             let path = dir.join(opts.file_name);
 
-            // Try opening witout requiring write permission first. This allows
-            // shared lock as a different user without write permission.
-            let file = match fs::OpenOptions::new().read(true).open(&path) {
+            // Write permission is used for mutable mmap.
+            #[allow(unused_mut)]
+            let mut file = match fs::OpenOptions::new().read(true).write(true).open(&path) {
                 Ok(f) => f,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {
                     // Create the file.
                     utils::mkdir_p(dir)?;
                     fs::OpenOptions::new()
+                        .read(true)
                         .write(true)
                         .create(true)
                         .open(&path)
@@ -127,17 +131,26 @@ impl ScopedDirLock {
                     return Err(e).context(&path, "cannot open for locking");
                 }
             };
+
+            // Attempt to relax the permission for other users to use mmap.
+            #[cfg(unix)]
+            {
+                use std::fs::Permissions;
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(metadata) = file.metadata() {
+                    let mode = metadata.permissions().mode();
+                    let desired_mode = 0o666;
+                    if (mode & desired_mode) != desired_mode {
+                        let _ = file.set_permissions(Permissions::from_mode(mode | desired_mode));
+                    }
+                }
+            }
+
             (path, file)
         };
 
         // Lock
-        match (opts.exclusive, opts.non_blocking) {
-            (true, false) => file.lock_exclusive(),
-            (true, true) => file.try_lock_exclusive(),
-            (false, false) => file.lock_shared(),
-            (false, true) => file.try_lock_shared(),
-        }
-        .context(&path, || {
+        lock_file(&file, opts.exclusive, opts.non_blocking).context(&path, || {
             format!(
                 "cannot lock (exclusive: {}, non_blocking: {})",
                 opts.exclusive, opts.non_blocking,
@@ -152,12 +165,100 @@ impl ScopedDirLock {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Get a shared mutable mmap buffer of `len` bytes, backed by the lock file.
+    ///
+    /// The permission of the file is relaxed (rwrwrw). See [`ScopedDirLock::new`].
+    /// Avoid storing data that should be protected by filesystem ACL.
+    ///
+    /// The file is zero-filled on demand.
+    ///
+    /// The callsite should keep the return value to keep the mmap alive.
+    pub(crate) fn shared_mmap_mut(&self, len: usize) -> crate::Result<MmapMut> {
+        let metadata = self
+            .file
+            .metadata()
+            .context(&self.path, "cannot read metadata")?;
+        if len as u64 > metadata.len() {
+            self.file
+                .set_len(len as u64)
+                .context(&self.path, "cannot resize for mmap buffer")?;
+        }
+        unsafe { MmapOptions::new().len(len).map_mut(&self.file) }
+            .context(&self.path, "cannot mmap read-write")
+    }
+
+    /// Provide the `SharedChangeDetector` based on mmap.
+    pub(crate) fn shared_change_detector(&self) -> crate::Result<SharedChangeDetector> {
+        let mmap = self.shared_mmap_mut(std::mem::size_of::<u64>())?;
+        Ok(SharedChangeDetector::new(mmap))
+    }
 }
 
 impl Drop for ScopedDirLock {
     fn drop(&mut self) {
-        self.file.unlock().expect("unlock");
+        let _ = unlock_file(&self.file);
     }
+}
+
+fn lock_file(file: &File, exclusive: bool, non_blocking: bool) -> io::Result<()> {
+    #[cfg(windows)]
+    unsafe {
+        use std::os::windows::io::AsRawHandle;
+
+        use winapi::shared::minwindef::DWORD;
+        use winapi::um::fileapi::LockFileEx;
+        use winapi::um::minwinbase::LOCKFILE_EXCLUSIVE_LOCK;
+        use winapi::um::minwinbase::LOCKFILE_FAIL_IMMEDIATELY;
+        use winapi::um::minwinbase::OVERLAPPED;
+
+        let mut flags: DWORD = 0;
+        if exclusive {
+            flags |= LOCKFILE_EXCLUSIVE_LOCK;
+        }
+        if non_blocking {
+            flags |= LOCKFILE_FAIL_IMMEDIATELY;
+        }
+
+        // `overlapped` specifies the start position (u64) of locking.
+        let mut overlapped: OVERLAPPED = std::mem::zeroed();
+        overlapped.u.s_mut().Offset = u32::MAX - 1;
+        overlapped.u.s_mut().OffsetHigh = u32::MAX;
+
+        // Only lock 1 byte at the end of the u64 range, not the whole file.
+        let ret = LockFileEx(file.as_raw_handle(), flags, 0, 1, 0, &mut overlapped);
+        if ret == 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    #[cfg(not(windows))]
+    match (exclusive, non_blocking) {
+        (true, false) => file.lock_exclusive()?,
+        (true, true) => file.try_lock_exclusive()?,
+        (false, false) => file.lock_shared()?,
+        (false, true) => file.try_lock_shared()?,
+    }
+    Ok(())
+}
+
+fn unlock_file(file: &File) -> io::Result<()> {
+    #[cfg(windows)]
+    unsafe {
+        use std::os::windows::io::AsRawHandle;
+
+        use winapi::um::fileapi::UnlockFile;
+
+        // Only unlock the last 1 byte of the u64 range.
+        let ret = UnlockFile(file.as_raw_handle(), u32::MAX - 1, u32::MAX, 1, 0);
+        if ret == 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        file.unlock()?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -327,5 +428,71 @@ mod tests {
         assert!(ScopedDirLock::new_with_options(path, &opts).is_ok());
 
         drop(l4);
+    }
+
+    #[test]
+    fn test_dir_lock_shared_buffer() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+        let opts = DirLockOptions {
+            file_name: "foo",
+            exclusive: false,
+            non_blocking: false,
+        };
+
+        let mut v1 = &[1u8, 2, 3, 4, 5, 6, 7, 8][..];
+        let mut v2 = vec![0; v1.len()];
+
+        let l1 = ScopedDirLock::new_with_options(path, &opts).unwrap();
+        let mut buf1 = l1.shared_mmap_mut(v1.len()).unwrap();
+        buf1.as_mut().write_all(&v1).unwrap();
+
+        let l2 = ScopedDirLock::new_with_options(path, &opts).unwrap();
+        let buf2 = l2.shared_mmap_mut(v1.len()).unwrap();
+        buf2.as_ref().read_exact(&mut v2).unwrap();
+        assert_eq!(v1, v2);
+
+        // The buffer can be used even if the ScopedDirLock is dropped (which closes the files).
+        drop((l1, l2));
+        v1 = &[99u8, 98, 97, 96, 95, 94, 93, 92][..];
+        buf1.as_mut().write_all(&v1).unwrap();
+        buf2.as_ref().read_exact(&mut v2).unwrap();
+        assert_eq!(v1, v2);
+
+        // Buffer content is presisted on filesystem after dropping both lock and mmap states.
+        drop((buf1, buf2));
+        let l3 = ScopedDirLock::new_with_options(path, &opts).unwrap();
+        let buf3 = l3.shared_mmap_mut(v1.len()).unwrap();
+        buf3.as_ref().read_exact(&mut v2).unwrap();
+        assert_eq!(v1, v2);
+
+        // The mmap buffer can be used for SharedChangeDetector.
+        let d1 = l3.shared_change_detector().unwrap();
+        let d2 = l3.shared_change_detector().unwrap();
+        let d3 = d2.clone();
+
+        assert!(!d1.is_changed());
+        assert!(!d2.is_changed());
+        assert!(!d3.is_changed());
+
+        d1.set(1);
+
+        assert!(!d1.is_changed());
+        assert!(d2.is_changed());
+        assert!(d3.is_changed());
+
+        d2.set(1);
+        assert!(!d2.is_changed());
+        assert!(d3.is_changed());
+
+        d3.set(2);
+        assert!(d1.is_changed());
+        assert!(d2.is_changed());
+        assert!(!d3.is_changed());
+
+        d2.set(3);
+        assert!(d1.is_changed());
+        assert!(!d2.is_changed());
+        assert!(d3.is_changed());
     }
 }

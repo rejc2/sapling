@@ -6,7 +6,7 @@
  */
 
 import type {ServerSideTracker} from './analytics/serverSideTracker';
-import type {Logger} from './logger';
+import type {RepositoryContext} from './serverTypes';
 import type {
   OperationCommandProgressReporter,
   OperationProgress,
@@ -24,10 +24,9 @@ import {defer} from 'shared/utils';
  */
 export class OperationQueue {
   constructor(
-    private logger: Logger,
     private runCallback: (
+      ctx: RepositoryContext,
       operation: RunnableOperation,
-      cwd: string,
       handleProgress: OperationCommandProgressReporter,
       signal: AbortSignal,
     ) => Promise<void>,
@@ -46,11 +45,11 @@ export class OperationQueue {
    * - 'skipped', when the operation is never going to be run, since an earlier queued command errored.
    */
   async runOrQueueOperation(
+    ctx: RepositoryContext,
     operation: RunnableOperation,
     onProgress: (progress: OperationProgress) => void,
-    tracker: ServerSideTracker,
-    cwd: string,
   ): Promise<'ran' | 'skipped'> {
+    const {tracker, logger} = ctx;
     if (this.runningOperation != null) {
       this.queuedOperations.push({...operation, tracker});
       const deferred = defer<'ran' | 'skipped'>();
@@ -95,11 +94,11 @@ export class OperationQueue {
         operation.trackEventName,
         'RunOperationError',
         {extras: {args: operation.args, runner: operation.runner}, operationId: operation.id},
-        _p => this.runCallback(operation, cwd, handleCommandProgress, controller.signal),
+        _p => this.runCallback(ctx, operation, handleCommandProgress, controller.signal),
       );
     } catch (err) {
       const errString = (err as Error).toString();
-      this.logger.log('error running operation: ', operation.args[0], errString);
+      logger.log('error running operation: ', operation.args[0], errString);
       onProgress({id: operation.id, kind: 'error', error: errString});
 
       // clear queue to run when we hit an error,
@@ -122,11 +121,10 @@ export class OperationQueue {
       if (op != null) {
         // don't await this, the caller should resolve when the original operation finishes.
         this.runOrQueueOperation(
+          ctx,
           op,
           // TODO: we're using the onProgress from the LAST `runOperation`... should we be keeping the newer onProgress in the queued operation?
           onProgress,
-          op.tracker,
-          cwd,
         );
       }
     } else {

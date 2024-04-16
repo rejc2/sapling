@@ -224,6 +224,8 @@ fn parse_with_repo_definition(
         commit_graph_config,
         deep_sharding_config,
         everstore_local_path,
+        git_concurrency,
+        metadata_logger_config,
         ..
     } = named_repo_config;
 
@@ -339,6 +341,8 @@ fn parse_with_repo_definition(
 
     let commit_graph_config = commit_graph_config.convert()?.unwrap_or_default();
     let deep_sharding_config = deep_sharding_config.convert()?;
+    let git_concurrency = git_concurrency.convert()?;
+    let metadata_logger_config = metadata_logger_config.convert()?.unwrap_or_default();
 
     Ok(RepoConfig {
         enabled,
@@ -382,6 +386,8 @@ fn parse_with_repo_definition(
         default_commit_identity_scheme,
         deep_sharding_config,
         everstore_local_path,
+        git_concurrency,
+        metadata_logger_config,
     })
 }
 
@@ -511,6 +517,7 @@ mod test {
     use metaconfig_types::DerivedDataTypesConfig;
     use metaconfig_types::EphemeralBlobstoreConfig;
     use metaconfig_types::FilestoreParams;
+    use metaconfig_types::GitConcurrencyParams;
     use metaconfig_types::HgSyncConfig;
     use metaconfig_types::HookBypass;
     use metaconfig_types::HookConfig;
@@ -523,6 +530,7 @@ mod test {
     use metaconfig_types::LocalDatabaseConfig;
     use metaconfig_types::LoggingDestination;
     use metaconfig_types::MetadataDatabaseConfig;
+    use metaconfig_types::MetadataLoggerConfig;
     use metaconfig_types::MultiplexId;
     use metaconfig_types::MultiplexedStoreType;
     use metaconfig_types::PushParams;
@@ -546,6 +554,7 @@ mod test {
     use metaconfig_types::UpdateLoggingConfig;
     use metaconfig_types::WalkerConfig;
     use mononoke_types::path::MPath;
+    use mononoke_types::DerivableType;
     use mononoke_types::NonRootMPath;
     use mononoke_types_mocks::changesetid::ONES_CSID;
     use nonzero_ext::nonzero;
@@ -642,8 +651,7 @@ mod test {
                             NonRootMPath::new("p1").unwrap() => NonRootMPath::new(".r2-legacy/p1").unwrap(),
                             NonRootMPath::new("p5").unwrap() => NonRootMPath::new(".r2-legacy/p5").unwrap(),
                         },
-                        git_submodules_action: Default::default(),
-                        submodule_dependencies: HashMap::new(),
+                        submodule_config: Default::default(),
                     },
                     RepositoryId::new(3) => SmallRepoCommitSyncConfig {
                         default_action: DefaultSmallToLargeCommitSyncPathAction::PrependPrefix(NonRootMPath::new("subdir").unwrap()),
@@ -651,8 +659,7 @@ mod test {
                             NonRootMPath::new("p1").unwrap() => NonRootMPath::new("p1").unwrap(),
                             NonRootMPath::new("p4").unwrap() => NonRootMPath::new("p5/p4").unwrap(),
                         },
-                        git_submodules_action: Default::default(),
-                        submodule_dependencies: HashMap::new(),
+                        submodule_config: Default::default(),
                     }
                 },
                 version_name: CommitSyncConfigVersion("TEST_VERSION_NAME".to_string()),
@@ -890,6 +897,11 @@ mod test {
             scrub_enabled = true
             validate_enabled = true
 
+            [git_concurrency]
+            trees_and_blobs = 500
+            commits = 1000
+            tags = 1000
+
             [cross_repo_commit_validation_config]
             skip_bookmarks = ["weirdy"]
 
@@ -965,6 +977,7 @@ mod test {
         sparse_profiles = { db_address = "sparse_profiles_db_address" }
         bonsai_blob_mapping = { sharded = { shard_map = "blob_mapping_shards", shard_num = 12 } }
         deletion_log = { db_address = "deletion_log" }
+        commit_cloud = { db_address = "commit_cloud_db_address" }
 
         [main.blobstore.multiplexed_wal]
         multiplex_id = 1
@@ -1074,6 +1087,9 @@ mod test {
                 )),
                 deletion_log: Some(RemoteDatabaseConfig {
                     db_address: "deletion_log".into(),
+                }),
+                commit_cloud: Some(RemoteDatabaseConfig {
+                    db_address: "commit_cloud_db_address".into(),
                 }),
             }),
             ephemeral_blobstore: None,
@@ -1220,9 +1236,9 @@ mod test {
                     enabled_config_name: "default".to_string(),
                     available_configs: hashmap!["default".to_string() => DerivedDataTypesConfig {
                         types: hashset! {
-                            String::from("fsnodes"),
-                            String::from("unodes"),
-                            String::from("blame"),
+                            DerivableType::Fsnodes,
+                            DerivableType::Unodes,
+                            DerivableType::BlameV2,
                         },
                         mapping_key_prefixes: hashmap! {},
                         unode_version: UnodeVersion::V2,
@@ -1302,6 +1318,12 @@ mod test {
                 },
                 deep_sharding_config: Some(ShardingModeConfig { status: hashmap!() }),
                 everstore_local_path: None,
+                git_concurrency: Some(GitConcurrencyParams {
+                    trees_and_blobs: 500,
+                    commits: 1000,
+                    tags: 1000,
+                }),
+                metadata_logger_config: MetadataLoggerConfig::default(),
             },
         );
 
@@ -1377,6 +1399,8 @@ mod test {
                 commit_graph_config: CommitGraphConfig::default(),
                 deep_sharding_config: None,
                 everstore_local_path: None,
+                git_concurrency: None,
+                metadata_logger_config: MetadataLoggerConfig::default(),
             },
         );
         assert_eq!(
@@ -1534,6 +1558,7 @@ mod test {
         filenodes = { sharded = { shard_map = "some-shards", shard_num = 123 } }
         mutation = { db_address = "some_db" }
         sparse_profiles = { db_address = "some_db" }
+        commit_cloud = { db_address = "some_db" }
 
         [multiplex_store.blobstore.multiplexed_wal]
         multiplex_id = 1
@@ -1621,6 +1646,9 @@ mod test {
                         },
                         bonsai_blob_mapping: None,
                         deletion_log: None,
+                        commit_cloud:  Some(RemoteDatabaseConfig {
+                            db_address: "some_db".into(),
+                        }),
                     }),
                     ephemeral_blobstore: None,
                 },
@@ -1672,6 +1700,7 @@ mod test {
         filenodes = { sharded = { shard_map = "other-other-shards", shard_num = 789 } }
         mutation = { db_address = "other_other_mutation_db" }
         sparse_profiles = { db_address = "test_db" }
+        commit_cloud = { db_address = "other_other_other_mutation_db" }
 
         [storage.multiplex_store.blobstore]
         disabled = {}
@@ -1717,6 +1746,7 @@ mod test {
                         sparse_profiles: RemoteDatabaseConfig { db_address: "test_db".into(), },
                         bonsai_blob_mapping: None,
                         deletion_log: None,
+                        commit_cloud: Some(RemoteDatabaseConfig { db_address: "other_other_other_mutation_db".into(), }),
                     }),
 
                     ephemeral_blobstore: None,

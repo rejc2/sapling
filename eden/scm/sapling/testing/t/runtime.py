@@ -23,7 +23,7 @@ from .. import sh
 from ..sh.bufio import BufIO
 from ..sh.osfs import OSFS
 from ..sh.types import Env, OnError, Scope
-from . import shext
+from . import hghave, shext
 from .diff import MultiLineMatcher
 
 
@@ -36,9 +36,11 @@ def hasfeature(feature: str) -> bool:
     False
     >>> hasfeature("false")
     False
+    >>> hasfeature("banana")
+    False
+    >>> hasfeature("no-banana")
+    True
     """
-    from . import hghave
-
     res = hghave.checkfeatures([feature])
     return all(not res.get(k) for k in ["error", "missing", "skipped"])
 
@@ -241,6 +243,7 @@ class TestTmp:
         self,
         updateglobalstate: bool = True,
         tmpprefix: str = "",
+        testcase: Optional[str] = None,
     ):
         """create a TestTmp environment (tmpdir, and a shinterp Env)
         Intended to be used in 'with' context.
@@ -252,6 +255,7 @@ class TestTmp:
         self._origpathenv = os.getenv("PATH") or os.defpath
         self._setup(tmpprefix)
         self._lastout = ""
+        self._testcase = testcase
 
     def atexit(self, func):
         # register a function to be called during tearing down
@@ -336,8 +340,14 @@ class TestTmp:
             for path in paths:
                 if path.startswith(str(self.path / "bin")):
                     continue
-                fullpath = os.path.join(path, f"{name}{ext}")
-                if os.path.isfile(fullpath):
+                exts = [".exe", ".bat"] if os.name == "nt" else [""]
+                found = False
+                for x in exts:
+                    fullpath = os.path.join(path, f"{name}{x}")
+                    if os.path.isfile(fullpath):
+                        found = True
+                        break
+                if found:
                     break
             if not fullpath:
                 raise unittest.SkipTest(f"missing exe: {name}")
@@ -388,6 +398,14 @@ class TestTmp:
             if str(self.path) != self._origcwd:
                 os.chdir(str(self.path))
             shext.updateosenv(self.shenv.getexportedenv())
+
+        if self._testcase is not None:
+            if self._testcase in hghave.checks:
+                raise RuntimeError(
+                    f"test case {self._testcase} conflicts with an existing feature"
+                )
+            hghave.checks[self._testcase] = (True, f"test case {self._testcase}")
+
         return self
 
     def __exit__(self, et, ev, tb):
@@ -400,6 +418,10 @@ class TestTmp:
             if cwd != self._origcwd:
                 os.chdir(self._origcwd)
             shext.updateosenv(self._origenv)
+
+        if self._testcase is not None:
+            del hghave.checks[self._testcase]
+
         self._teardown()
 
     def _setup(self, tmpprefix):

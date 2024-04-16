@@ -355,7 +355,11 @@ def dispatch(req):
 
             if metrics:
                 # developer config: devel.print-metrics
-                if ui.configbool("devel", "print-metrics"):
+
+                # This used to be a bool, but I changed it to a prefix list. Keep previous
+                # behavior around by using empty prefix to mean print everything.
+                prefix = ui.config("devel", "print-metrics")
+                if prefix == "":
                     # Print it out.
                     msg = "%s\n" % pformat({"metrics": metrics}).replace("'", " ")
                     ui.flush()
@@ -903,12 +907,15 @@ def _dispatch(req):
         for ui_ in uis:
             ui_.setconfig("profiling", "enabled", "true", "--profile")
 
+    if lui.configbool("experimental", "evalframe-passthrough"):
+        bindings.cext.evalframe_set_pass_through()
+
     with profiling.profile(lui) as profiler:
         # progress behavior might be changed by extensions
         progress.init()
         # Configure extensions in phases: uisetup, extsetup, cmdtable, and
         # reposetup
-        extensions.loadall(lui)
+        extensions.initialload(lui)
         # Propagate any changes to lui.__class__ by extensions
         ui.__class__ = lui.__class__
 
@@ -1157,6 +1164,7 @@ def _exceptionwarning(ui):
     return _("** @LongProduct@ (version %s) has crashed:\n") % util.version()
 
 
+# NB: handlecommandexception() is replaced by the errorredirect extension.
 def handlecommandexception(ui):
     """Produce a warning message for broken commands
 

@@ -4,7 +4,8 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2.
 
-# pyre-unsafe
+# pyre-strict
+
 
 import argparse
 import asyncio
@@ -74,6 +75,7 @@ from .constants import (
     SHUTDOWN_EXIT_CODE_REQUESTED_SHUTDOWN,
     SHUTDOWN_EXIT_CODE_TERMINATED_VIA_SIGKILL,
 )
+from .doctor.problem import ProblemSeverity
 
 if sys.platform == "win32":
     from .file_handler_tools import WinFileHandlerReleaser
@@ -92,6 +94,7 @@ except ImportError:
 
     migration_restart_help = "This migrates ALL your mounts to a new mount protocol."
 
+    # pyre-fixme[2]: Parameter must be annotated.
     def get_migration_success_message(migrate_to) -> str:
         return f"Successfully migrated all your mounts to {migrate_to}."
 
@@ -134,28 +137,44 @@ def _get_unmount_timeout_suggestions(path: str) -> str:
         return UNMOUNT_TIMEOUT_SUGGESTIONS
 
 
-def do_version(args: argparse.Namespace, format_json: bool = False) -> int:
+def do_version(
+    args: argparse.Namespace, format_json: bool = False, verbose: bool = False
+) -> int:
     instance = get_eden_instance(args)
-    installed_version = version_mod.get_current_version()
-    running_version = "-"
-
-    try:
-        running_version = instance.get_running_version()
-    except EdenNotRunningError:
-        if not format_json:
-            running_version = "Unknown (EdenFS does not appear to be running)"
+    versions_info = version_mod.get_version_info(instance)
 
     if format_json:
-        if installed_version == "-":
-            installed_version = None
-        if running_version == "-":
-            running_version = None
-        info = {"installed": installed_version, "running": running_version}
+        if versions_info.installed_version == "-":
+            versions_info.installed_version = None
+        if versions_info.running_version == "-":
+            versions_info.running_version = None
+        info = {
+            "installed": versions_info.installed_version,
+            "running": versions_info.running_version,
+        }
         json.dump(info, sys.stdout, indent=2)
     else:
-        print(f"Installed: {installed_version}")
-        print(f"Running:   {running_version}")
-        if running_version.startswith("-") or running_version.endswith("-"):
+        if not versions_info.is_eden_running:
+            versions_info.running_version = (
+                "Unknown (EdenFS does not appear to be running)"
+            )
+
+        if verbose:
+            print(
+                f"Installed: {versions_info.installed_version}{f' ({versions_info.installed_version_age} days old)' if versions_info.installed_version_age else ''}"
+            )
+            print(
+                f"Running:   {versions_info.running_version}{f' ({versions_info.running_version_age} days old)' if versions_info.running_version_age else ''}"
+            )
+            if versions_info.ages_deltas:
+                print(
+                    f"Running version is {versions_info.ages_deltas} days older than installed"
+                )
+        else:
+            print(f"Installed: {versions_info.installed_version}")
+            print(f"Running:   {versions_info.running_version}")
+
+        if versions_info.is_dev:
             print("(Dev version of EdenFS seems to be running)")
 
     return 0
@@ -169,9 +188,14 @@ class VersionCmd(Subcmd):
             action="store_true",
             help="Print the running and installed versions in json format",
         )
+        parser.add_argument(
+            "--verbose",
+            action="store_true",
+            help="Add more info to the output, such as elapsed days since each version and delta between them",
+        )
 
     def run(self, args: argparse.Namespace) -> int:
-        return do_version(args, args.json)
+        return do_version(args, args.json, args.verbose)
 
 
 @subcmd("info", "Get details about a checkout")
@@ -192,6 +216,7 @@ class InfoCmd(Subcmd):
 @subcmd("du", "Show disk space usage for a checkout")
 class DiskUsageCmd(Subcmd):
 
+    # pyre-fixme[4]: Attribute must be annotated.
     isatty = sys.stdout and sys.stdout.isatty()
     # Escape sequence to move the cursor left to the start of the line
     # and then clear to the end of that line.
@@ -205,6 +230,7 @@ class DiskUsageCmd(Subcmd):
         "fsck": 0,
         "legacy": 0,
     }
+    # pyre-fixme[4]: Attribute must be annotated.
     color_out = ui.get_output()
     hasLFS = False
     hasWorkingCopyBacked = False
@@ -371,6 +397,7 @@ space by running:
 
         return 0
 
+    # pyre-fixme[2]: Parameter must be annotated.
     def make_summary(self, clean, deep_clean) -> None:
         self.write_ui(util.underlined("Summary"))
         type_labels = {
@@ -418,9 +445,12 @@ space by running:
         if not clean:
             self.writeln_ui("To perform automated cleanup, run `eden du --clean`\n")
 
+    # pyre-fixme[2]: Parameter must be annotated.
     def du(self, path) -> int:
         dev = os.stat(path).st_dev
 
+        # pyre-fixme[53]: Captured variable `dev` is not annotated.
+        # pyre-fixme[2]: Parameter must be annotated.
         def get_size(path) -> int:
             total = 0
             failed_to_check_files = []
@@ -460,15 +490,21 @@ space by running:
 
         return get_size(path)
 
+    # pyre-fixme[2]: Parameter must be annotated.
     def write_ui(self, message, fg=None) -> None:
         if not self.json_mode:
             self.color_out.write(message, fg=fg)
 
+    # pyre-fixme[2]: Parameter must be annotated.
     def writeln_ui(self, message, fg=None) -> None:
         self.write_ui(f"{message}\n")
 
     def usage_for_dir(
-        self, path, usage_type: str, print_label: Optional[str] = None
+        self,
+        # pyre-fixme[2]: Parameter must be annotated.
+        path,
+        usage_type: str,
+        print_label: Optional[str] = None,
     ) -> None:
         usage = self.du(path)
         if usage_type in self.aggregated_usage_counts.keys():
@@ -820,6 +856,8 @@ class CloneCmd(Subcmd):
                 )
                 return 1
 
+        # pyre-fixme[53]: Captured variable `instance` is not annotated.
+        # pyre-fixme[3]: Return type must be annotated.
         def is_nfs_default():
             default_protocol = "PrjFS" if sys.platform == "win32" else "FUSE"
             return (
@@ -1177,10 +1215,25 @@ class DoctorCmd(Subcmd):
             "intended to be run by tools running doctor in a continuous manner "
             "such as IDEs.",
         )
+        parser.add_argument(
+            "--no-warnings",
+            action="store_true",
+            help="Don't show warnings (but still log them to scuba). ",
+        )
 
     def run(self, args: argparse.Namespace) -> int:
         instance = get_eden_instance(args)
-        doctor = doctor_mod.EdenDoctor(instance, args.dry_run, args.debug, args.fast)
+        doctor = doctor_mod.EdenDoctor(
+            instance,
+            args.dry_run,
+            args.debug,
+            args.fast,
+            (
+                ProblemSeverity.POTENTIALLY_SERIOUS
+                if args.no_warnings
+                else ProblemSeverity.ALL
+            ),
+        )
         if args.current_edenfs_only:
             doctor.run_system_wide_checks = False
         return doctor.cure_what_ails_you()
@@ -1529,6 +1582,15 @@ class RemoveCmd(Subcmd):
         except Exception:
             return False
 
+    # pyre-fixme[3]: Return type must be annotated.
+    def optional_traceback(self, ex: Exception, debug: bool):
+        if debug:
+            traceback.print_exception(ex)
+        else:
+            print_stderr(
+                "Rerun with --debug to see full traceback (required to report issues; please do so if the error is unexpected or ambiguous)"
+            )
+
     def delete_file_with_confirmation(self, path: str) -> int:
         prompt = f"""\
 Warning: the following is a file, not a directory or an EdenFS mount: {path}
@@ -1601,7 +1663,7 @@ Do you still want to delete {path}?"""
                                     )
                                     return 1
                                 else:
-                                    winhr = WinFileHandlerReleaser()
+                                    winhr = WinFileHandlerReleaser(instance)
                                     maybe_succeeded = winhr.try_release(path)
                                     try:
                                         # Try again after try_release
@@ -1609,6 +1671,8 @@ Do you still want to delete {path}?"""
                                             fs_mod.new().rmdir(
                                                 path, args.preserve_mount_point
                                             )
+                                        else:
+                                            return 1
                                     except Exception as ex:
                                         print(
                                             f"Error: cannot remove contents of {path} even after trying to kill processes holding resources: {ex}"
@@ -1702,17 +1766,18 @@ Any uncommitted changes and shelves in this checkout will be lost forever."""
             except Exception as ex:
                 print_stderr(f"error deleting configuration for {mount}: {ex}")
                 exit_code = 1
-                if args.debug:
-                    traceback.print_exc()
+                self.optional_traceback(ex, args.debug)
             else:
                 try:
                     print(f"Cleaning up mount {mount}")
-                    instance.cleanup_mount(Path(mount), args.preserve_mount_point)
+                    instance.cleanup_mount(
+                        Path(mount), args.preserve_mount_point, args.debug
+                    )
                 except Exception as ex:
                     print_stderr(f"error cleaning up mount {mount}: {ex}")
                     exit_code = 1
-                    if args.debug:
-                        traceback.print_exc()
+                    self.optional_traceback(ex, args.debug)
+
                 # Continue around the loop removing any other mount points
 
         if exit_code == 0:
@@ -1911,10 +1976,10 @@ class StartCmd(Subcmd):
 def unmount_redirections_for_path(
     repo_path: str, complain_about_failing_to_unmount_redirs: bool
 ) -> None:
-    parser = create_parser()
-    args = parser.parse_args(["redirect", "unmount", "--mount", repo_path])
+    parser = create_parser()  # This parser comes preloaded with args, don't remove it.
+    args = parser.parse_args()
     try:
-        args.func(args)
+        redirect_mod.unmount(args, repo_path)
     except Exception as exc:
         if complain_about_failing_to_unmount_redirs:
             print(
@@ -2004,7 +2069,7 @@ class RestartCmd(Subcmd):
             "--only-if-running",
             action="store_true",
             default=False,
-            help="Only perform a restart if there is already an EdenFS instance"
+            help="Only perform a restart if there is already an EdenFS instance "
             "running.",
         )
         migration_group = parser.add_mutually_exclusive_group()
@@ -2312,6 +2377,7 @@ class RageCmd(Subcmd):
             if args.dry_run:
                 rage_processor = None
 
+            # pyre-fixme[24]: Generic type `subprocess.Popen` expects 1 type parameter.
             proc: Optional[subprocess.Popen] = None
             sink: typing.IO[bytes]
             # potential "deadlock" here. This works because rage reporters are not expected
@@ -2485,7 +2551,6 @@ def create_parser() -> argparse.ArgumentParser:
         subcmd_mod.HelpCmd,
         stats_mod.StatsCmd,
         trace_mod.TraceCmd,
-        redirect_mod.RedirectCmd,
         prefetch_mod.GlobCmd,
         prefetch_mod.PrefetchCmd,
     ]
@@ -2613,6 +2678,7 @@ async def async_main(parser: argparse.ArgumentParser, args: argparse.Namespace) 
 
 # TODO: Remove when we can rely on Python 3.7 everywhere.
 try:
+    # pyre-fixme[5]: Global expression must be annotated.
     asyncio_run = asyncio.run
 except AttributeError:
     asyncio_run = asyncio.get_event_loop().run_until_complete

@@ -22,12 +22,12 @@ use cmdlib::args::MononokeMatches;
 use context::CoreContext;
 use cross_repo_sync::create_commit_syncer_lease;
 use cross_repo_sync::create_commit_syncers;
-use cross_repo_sync::types::Source;
-use cross_repo_sync::types::Target;
 use cross_repo_sync::CommitSyncRepos;
 use cross_repo_sync::CommitSyncer;
+use cross_repo_sync::Source;
 use cross_repo_sync::SubmoduleDeps;
 use cross_repo_sync::Syncers;
+use cross_repo_sync::Target;
 use futures_util::stream;
 use futures_util::try_join;
 use futures_util::StreamExt;
@@ -265,7 +265,7 @@ pub async fn get_all_possible_small_repo_submodule_deps_from_matches<R: Repo>(
         .filter_map(|mut cfg| {
             cfg.small_repos
                 .remove(&source_repo_id)
-                .map(|small_repo_cfg| small_repo_cfg.submodule_dependencies)
+                .map(|small_repo_cfg| small_repo_cfg.submodule_config.submodule_dependencies)
         })
         .flatten()
         .collect::<HashSet<_>>();

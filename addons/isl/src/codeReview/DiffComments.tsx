@@ -78,6 +78,7 @@ const styles = stylex.create({
   },
   author: {
     fontSize: font.small,
+    flexShrink: 0,
   },
   avatar: {
     borderRadius: radius.full,
@@ -110,7 +111,7 @@ function Comment({comment, isTopLevel}: {comment: DiffComment; isTopLevel?: bool
         <div>
           {isTopLevel && comment.filename && (
             <Link
-              {...stylex.props(styles.inlineCommentFilename)}
+              xstyle={styles.inlineCommentFilename}
               onClick={() =>
                 comment.filename && foundPlatform.openFile(comment.filename, {line: comment.line})
               }>
@@ -168,6 +169,15 @@ const emoji: Record<DiffCommentReaction['reaction'], string> = {
   HAHA: '😆',
   ANGER: '😡',
   SAD: '😢',
+  // GitHub reactions
+  CONFUSED: '😕',
+  EYES: '👀',
+  HEART: '❤️',
+  HOORAY: '🎉',
+  LAUGH: '😄',
+  ROCKET: '🚀',
+  THUMBS_DOWN: '👎',
+  THUMBS_UP: '👍',
 };
 
 function Reactions({reactions}: {reactions: Array<DiffCommentReaction>}) {

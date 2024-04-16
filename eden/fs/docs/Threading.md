@@ -1,9 +1,9 @@
 # Eden's Threading Strategy
 
-There are `fuseNumThreads` (defaults to 16 as of Dec 2017) that block on reading
+There are `fuse:NumDispatcherThreads` (defaults to 16 as of Mar 2024) that block on reading
 the FUSE socket.  The reason we do blocking reads is to avoid two syscalls on an
 incoming event: an epoll wakeup plus a read.  Note that there is a FUSE socket
-per mount.  So if you have 3 mounts, there will be `3*fuseNumThreads` threads.
+per mount.  So if you have 3 mounts, there will be `3*fuse:NumDispatcherThreads` threads.
 
 The FUSE threads generally do any filesystem work directly rather than putting
 work on another thread.
@@ -13,11 +13,11 @@ We don't change the default number (ncores) of Thrift CPU threads.  The
 IO threads receive incoming requests, but serialization/deserialization and
 actually handling the request is done on the CPU threads.
 
-There is another pool of (8 as of Dec 2017) threads on which the HgBackingStore
+There is another pool of (8 as of Dec 2017) threads on which the SaplingBackingStore
 farms work out to (blocking) a Sapling retry processes.  Because importing from
 Sapling is high-latency and mostly blocking, we avoid doing any post-import
-computation, so it's put into the following pool.  Note that each HgBackingStore
-has its own pool, and there is one HgBackingStore per underlying Sapling
+computation, so it's put into the following pool.  Note that each SaplingBackingStore
+has its own pool, and there is one SaplingBackingStore per underlying Sapling
 repository.
 
 Eden also creates a CPU pool (12 threads as of Dec 2017) for miscellaneous

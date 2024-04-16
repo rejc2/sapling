@@ -1,6 +1,9 @@
 #debugruntest-compatible
 
-  $ configure modern
+#require no-eden
+
+
+  $ eagerepo
   $ enable crdump remotenames
 
   $ showgraph() {
@@ -9,8 +12,8 @@
 
 Setup server
 
-  $ newserver server
-  $ cd $TESTTMP/server
+  $ hg init server
+  $ cd server
   $ drawdag <<EOS
   > Y
   > |
@@ -26,7 +29,7 @@ Setup client
   $ clone server client
   $ cd client
   $ hg pull -B bookmark1 -B bookmark2 -B bookmark1.1
-  pulling from ssh://user@dummy/server
+  pulling from test:server
   $ hg goto -r bookmark1 -q
   $ echo 1 >> a
   $ hg ci -Am a

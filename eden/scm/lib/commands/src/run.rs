@@ -37,6 +37,7 @@ use commandserver::ipc::Server;
 use configloader::config::ConfigSet;
 use configmodel::Config;
 use configmodel::ConfigExt;
+use configmodel::Text;
 use fail::FailScenario;
 use parking_lot::Mutex;
 use progress_model::Registry;
@@ -254,6 +255,8 @@ fn dispatch_command(
             if failed_fallback {
                 197
             } else if should_fallback {
+                tracing::debug!(?err, "falling back to python");
+
                 fell_back = true;
                 // Change the current dir back to the original so it is not surprising to the Python
                 // code.
@@ -329,6 +332,7 @@ fn dispatch_command(
     }
 
     let _ = log_perftrace(io, config, start_time);
+    let _ = print_metrics(io, config);
 
     exit_code
 }
@@ -748,7 +752,7 @@ fn log_end(
         target: "command_info",
         exit_code=exit_code,
         max_rss=max_rss,
-        total_blocked_ms=util::math::truncate_int(total_blocked_ms, 3),
+        total_blocked_ms=total_blocked_ms,
         is_plain=hgplain::is_plain(None),
     );
 
@@ -865,6 +869,26 @@ fn log_perftrace(io: &IO, config: &dyn Config, start_time: StartTime) -> Result<
     Ok(())
 }
 
+fn print_metrics(io: &IO, config: &dyn Config) -> Result<()> {
+    let prefixes: Vec<Text> = config.must_get::<Vec<Text>>("devel", "print-metrics")?;
+    if prefixes.is_empty() {
+        return Ok(());
+    }
+
+    let metrics = hg_metrics::summarize();
+    let mut keys = metrics.keys().collect::<Vec<_>>();
+    keys.sort();
+    for key in keys {
+        for prefix in prefixes.iter() {
+            if key.starts_with(prefix.as_ref()) {
+                writeln!(io.error(), "{key}: {}", metrics.get(key).unwrap())?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // TODO: Replace this with the 'exitcode' crate once it's available.
 mod exitcode {
     pub const IOERR: i32 = 74;
@@ -895,13 +919,13 @@ fn setup_atexit(start_time: StartTime) {
     atexit::AtExit::new(Box::new(move || {
         let duration_ms = start_time.elapsed().as_millis() as u64;
 
-        // Truncate duration to top three significant decimal digits of
-        // precision to reduce cardinality for logging storage.
-        tracing::debug!(target: "measuredtimes", command_duration=util::math::truncate_int(duration_ms, 3));
+        tracing::debug!(target: "measuredtimes", command_duration=duration_ms);
 
         // Make extra sure our metrics are written out.
         sampling::flush();
-    })).named("flush sampling".into()).queued();
+    }))
+    .named("flush sampling".into())
+    .queued();
 }
 
 fn setup_ctrlc() {

@@ -5,11 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+import {BookmarksManagerMenu} from './BookmarksManager';
 import {BugButton} from './BugButton';
 import {BulkActionsMenu} from './BulkActionsMenu';
 import serverAPI from './ClientToServerAPI';
 import {CwdSelector} from './CwdSelector';
 import {DownloadCommitsTooltipButton} from './DownloadCommitsMenu';
+import {FocusModeToggle} from './FocusMode';
 import {PullButton} from './PullButton';
 import {SettingsGearButton} from './SettingsTooltip';
 import {ShelvedChangesMenu} from './ShelvedChanges';
@@ -17,13 +19,8 @@ import {DOCUMENTATION_DELAY, Tooltip} from './Tooltip';
 import {tracker} from './analytics';
 import {DebugToolsButton} from './debug/DebugToolsButton';
 import {t} from './i18n';
-import {
-  haveCommitsLoadedYet,
-  haveRemotePath,
-  isFetchingCommits,
-  maybeRemoveForgottenOperation,
-  useClearAllOptimisticState,
-} from './serverAPIState';
+import {maybeRemoveForgottenOperation, useClearAllOptimisticState} from './operationsState';
+import {haveCommitsLoadedYet, haveRemotePath, isFetchingCommits} from './serverAPIState';
 import {VSCodeButton} from '@vscode/webview-ui-toolkit/react';
 import {useAtomValue} from 'jotai';
 import {Icon} from 'shared/Icon';
@@ -45,10 +42,12 @@ export function TopBar() {
         <DownloadCommitsTooltipButton />
         <ShelvedChangesMenu />
         <BulkActionsMenu />
+        <BookmarksManagerMenu />
         <FetchingDataIndicator />
       </span>
       <span className="button-group">
         <DebugToolsButton />
+        <FocusModeToggle />
         <BugButton />
         <SettingsGearButton />
         <RefreshButton />

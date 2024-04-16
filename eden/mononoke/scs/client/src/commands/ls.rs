@@ -11,18 +11,22 @@ use std::io::Write;
 
 use anyhow::bail;
 use anyhow::Result;
+use cloned::cloned;
 use futures::stream;
 use futures::stream::StreamExt;
 use futures::stream::TryStreamExt;
 use futures::Stream;
 use serde::Serialize;
-use source_control::types as thrift;
+use source_control as thrift;
 
 use crate::args::commit_id::resolve_commit_id;
 use crate::args::commit_id::CommitIdArgs;
 use crate::args::commit_id::SchemeArgs;
 use crate::args::repo::RepoArgs;
 use crate::connection::Connection;
+use crate::library::summary::run_stress;
+use crate::library::summary::summary_output;
+use crate::library::summary::StressArgs;
 use crate::render::Render;
 use crate::util::byte_count_short;
 use crate::ScscApp;
@@ -55,6 +59,9 @@ pub(super) struct CommandArgs {
     #[clap(long, short)]
     /// Show additional information for each entry
     long: bool,
+    /// Enable stress test mode
+    #[clap(flatten)]
+    stress: Option<StressArgs>,
 }
 
 #[derive(Serialize)]
@@ -62,8 +69,10 @@ pub(super) struct CommandArgs {
 enum LsEntryOutput {
     Tree {
         id: String,
-        simple_format_sha1: String,
-        simple_format_sha256: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        simple_format_sha1: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        simple_format_sha256: Option<String>,
         child_files_count: i64,
         child_files_total_size: i64,
         child_dirs_count: i64,
@@ -193,9 +202,14 @@ fn list_output(
                 let entry_output = match entry.info {
                     thrift::EntryInfo::tree(info) => {
                         let id = faster_hex::hex_string(&info.id);
-                        let simple_format_sha1 = faster_hex::hex_string(&info.simple_format_sha1);
-                        let simple_format_sha256 =
-                            faster_hex::hex_string(&info.simple_format_sha256);
+                        let simple_format_sha1 = info
+                            .simple_format_sha1
+                            .as_deref()
+                            .map(faster_hex::hex_string);
+                        let simple_format_sha256 = info
+                            .simple_format_sha256
+                            .as_deref()
+                            .map(faster_hex::hex_string);
                         LsEntryOutput::Tree {
                             id,
                             simple_format_sha1,
@@ -266,6 +280,20 @@ pub(super) async fn run(app: ScscApp, args: CommandArgs) -> Result<()> {
         limit: CHUNK_SIZE,
         ..Default::default()
     };
+    if let Some(stress) = args.stress {
+        let results = run_stress(stress.count, stress.parallel, || {
+            cloned!(conn, params, tree);
+            Box::pin(async move {
+                conn.tree_list(&tree, &params).await?;
+                Ok(())
+            })
+        })
+        .await;
+
+        let output = summary_output(results);
+        return app.target.render(&(), output).await;
+    }
+
     let response = conn.tree_list(&tree, &params).await?;
     let count = response.count;
     let long = args.long;

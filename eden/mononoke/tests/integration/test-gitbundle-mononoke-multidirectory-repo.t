@@ -81,7 +81,7 @@
 
 # Import it into Mononoke
   $ cd "$TESTTMP"
-  $ gitimport --record-head-symref "$GIT_REPO" --generate-bookmarks full-repo
+  $ gitimport "$GIT_REPO" --generate-bookmarks full-repo
   * using repo "repo" repoid RepositoryId(0) (glob)
   * GitRepo:$TESTTMP/repo-git commit 1 of 7 - Oid:8ce3eae4 => Bid:032cd4dc (glob)
   * GitRepo:$TESTTMP/repo-git commit 2 of 7 - Oid:a612a217 => Bid:148f9770 (glob)
@@ -102,7 +102,7 @@
   * Ref: "refs/tags/tag_version": Some(ChangesetId(Blake2(*))) (glob)
   * Initializing repo: repo (glob)
   * Initialized repo: repo (glob)
-  * All repos initialized. It took: 0 seconds (glob)
+  * All repos initialized. It took: * seconds (glob)
   * Bookmark: "heads/master": ChangesetId(Blake2(*)) (created) (glob)
   * Bookmark: "heads/dev_branch": ChangesetId(Blake2(*)) (created) (glob)
   * Bookmark: "heads/master": ChangesetId(Blake2(*)) (already up-to-date) (glob)

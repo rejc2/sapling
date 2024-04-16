@@ -7,13 +7,14 @@
 
 import type {ResolveCommandConflictOutput} from '../commands';
 import type {ServerPlatform} from '../serverPlatform';
-import type {ExecutionContext} from '../serverTypes';
-import type {MergeConflicts, ValidatedRepoInfo} from 'isl/src/types';
+import type {RepositoryContext} from '../serverTypes';
+import type {RunnableOperation} from 'isl/src/types';
 
 import {absolutePathForFileInRepo, Repository} from '../Repository';
 import {makeServerSideTracker} from '../analytics/serverSideTracker';
 import {extractRepoInfoFromUrl, setConfigOverrideForTests} from '../commands';
 import * as execa from 'execa';
+import {CommandRunner, type MergeConflicts, type ValidatedRepoInfo} from 'isl/src/types';
 import os from 'os';
 import path from 'path';
 import * as fsUtils from 'shared/fs';
@@ -28,6 +29,7 @@ jest.mock('execa', () => {
 jest.mock('../WatchForChanges', () => {
   class MockWatchForChanges {
     dispose = jest.fn();
+    poll = jest.fn();
   }
   return {WatchForChanges: MockWatchForChanges};
 });
@@ -80,12 +82,16 @@ function setPathsDefault(path: string) {
 }
 
 describe('Repository', () => {
-  const ctx: ExecutionContext = {
-    cmd: 'sl',
-    cwd: '/path/to/cwd',
-    logger: mockLogger,
-    tracker: mockTracker,
-  };
+  let ctx: RepositoryContext;
+  beforeEach(() => {
+    ctx = {
+      cmd: 'sl',
+      cwd: '/path/to/cwd',
+      logger: mockLogger,
+      tracker: mockTracker,
+    };
+  });
+
   it('setting command name', async () => {
     const execaSpy = mockExeca([]);
     await Repository.getRepoInfo({...ctx, cmd: 'slb'});
@@ -113,7 +119,7 @@ describe('Repository', () => {
     it('extracting github repo info', async () => {
       setPathsDefault('https://github.com/myUsername/myRepo.git');
       const info = (await Repository.getRepoInfo(ctx)) as ValidatedRepoInfo;
-      const repo = new Repository(info, mockLogger, mockTracker);
+      const repo = new Repository(info, ctx);
       expect(repo.info).toEqual({
         type: 'success',
         command: 'sl',
@@ -132,7 +138,7 @@ describe('Repository', () => {
     it('extracting github enterprise repo info', async () => {
       setPathsDefault('https://ghe.myCompany.com/myUsername/myRepo.git');
       const info = (await Repository.getRepoInfo(ctx)) as ValidatedRepoInfo;
-      const repo = new Repository(info, mockLogger, mockTracker);
+      const repo = new Repository(info, ctx);
       expect(repo.info).toEqual({
         type: 'success',
         command: 'sl',
@@ -151,7 +157,7 @@ describe('Repository', () => {
     it('handles non-github-enterprise unknown code review providers', async () => {
       setPathsDefault('https://gitlab.myCompany.com/myUsername/myRepo.git');
       const info = (await Repository.getRepoInfo(ctx)) as ValidatedRepoInfo;
-      const repo = new Repository(info, mockLogger, mockTracker);
+      const repo = new Repository(info, ctx);
       expect(repo.info).toEqual({
         type: 'success',
         command: 'sl',
@@ -169,7 +175,7 @@ describe('Repository', () => {
   it('applies isl.hold-off-refresh-ms config', async () => {
     setConfigOverrideForTests([['isl.hold-off-refresh-ms', '12345']], false);
     const info = (await Repository.getRepoInfo(ctx)) as ValidatedRepoInfo;
-    const repo = new Repository(info, mockLogger, mockTracker);
+    const repo = new Repository(info, ctx);
     await new Promise(process.nextTick);
     expect(repo.configHoldOffRefreshMs).toBe(12345);
   });
@@ -182,7 +188,7 @@ describe('Repository', () => {
       [/^sl root/, {stdout: '/path/to/myRepo'}],
     ]);
     const info = (await Repository.getRepoInfo(ctx)) as ValidatedRepoInfo;
-    const repo = new Repository(info, mockLogger, mockTracker);
+    const repo = new Repository(info, ctx);
     expect(repo.info).toEqual({
       type: 'success',
       command: 'sl',
@@ -233,11 +239,219 @@ describe('Repository', () => {
       [/^sl root/, {stdout: '/path/to/myRepo'}],
     ]);
     const info = (await Repository.getRepoInfo(ctx)) as ValidatedRepoInfo;
-    const repo = new Repository(info, mockLogger, mockTracker);
+    const repo = new Repository(info, ctx);
     // @ts-expect-error We expect a type error in addition to runtime validation
-    await expect(repo.setConfig('user', 'some-random-config', 'hi')).rejects.toEqual(
-      new Error('Config some-random-config not in allowlist for settable configs'),
+    await expect(repo.setConfig(ctx, 'user', 'some-random-config', 'hi')).rejects.toEqual(
+      new Error('config some-random-config not in allowlist for settable configs'),
     );
+  });
+
+  describe('running operations', () => {
+    const repoInfo: ValidatedRepoInfo = {
+      type: 'success',
+      command: 'sl',
+      dotdir: '/path/to/repo/.sl',
+      repoRoot: '/path/to/repo',
+      codeReviewSystem: {type: 'unknown'},
+      pullRequestDomain: undefined,
+    };
+
+    let execaSpy: ReturnType<typeof mockExeca>;
+    beforeEach(() => {
+      execaSpy = mockExeca([]);
+    });
+
+    async function runOperation(op: Partial<RunnableOperation>) {
+      const repo = new Repository(repoInfo, ctx);
+      const progressSpy = jest.fn();
+
+      await repo.runOrQueueOperation(
+        ctx,
+        {
+          id: '1',
+          trackEventName: 'CommitOperation',
+          args: [],
+          runner: CommandRunner.Sapling,
+          ...op,
+        },
+        progressSpy,
+      );
+    }
+
+    it('runs operations', async () => {
+      runOperation({
+        args: ['commit', '--message', 'hi'],
+      });
+
+      expect(execaSpy).toHaveBeenCalledWith(
+        'sl',
+        ['commit', '--message', 'hi', '--noninteractive'],
+        expect.anything(),
+      );
+    });
+
+    it('handles succeedable revsets', async () => {
+      runOperation({
+        args: ['rebase', '--rev', {type: 'succeedable-revset', revset: 'aaa'}],
+      });
+
+      expect(execaSpy).toHaveBeenCalledWith(
+        'sl',
+        ['rebase', '--rev', 'max(successors(aaa))', '--noninteractive'],
+        expect.anything(),
+      );
+    });
+
+    it('handles exact revsets', async () => {
+      runOperation({
+        args: ['rebase', '--rev', {type: 'exact-revset', revset: 'aaa'}],
+      });
+
+      expect(execaSpy).toHaveBeenCalledWith(
+        'sl',
+        ['rebase', '--rev', 'aaa', '--noninteractive'],
+        expect.anything(),
+      );
+    });
+
+    it('handles repo-relative files', async () => {
+      runOperation({
+        args: ['add', {type: 'repo-relative-file', path: 'path/to/file.txt'}],
+      });
+
+      expect(execaSpy).toHaveBeenCalledWith(
+        'sl',
+        ['add', '../repo/path/to/file.txt', '--noninteractive'],
+        expect.anything(),
+      );
+    });
+
+    it('handles allowed configs', async () => {
+      runOperation({
+        args: ['commit', {type: 'config', key: 'ui.allowemptycommit', value: 'True'}],
+      });
+
+      expect(execaSpy).toHaveBeenCalledWith(
+        'sl',
+        ['commit', '--config', 'ui.allowemptycommit=True', '--noninteractive'],
+        expect.anything(),
+      );
+    });
+
+    it('disallows some commands', async () => {
+      runOperation({
+        args: ['debugsh'],
+      });
+
+      expect(execaSpy).not.toHaveBeenCalledWith(
+        'sl',
+        ['debugsh', '--noninteractive'],
+        expect.anything(),
+      );
+    });
+
+    it('disallows unknown configs', async () => {
+      runOperation({
+        args: ['commit', {type: 'config', key: 'foo.bar', value: '1'}],
+      });
+
+      expect(execaSpy).not.toHaveBeenCalledWith(
+        'sl',
+        expect.arrayContaining(['commit', '--config', 'foo.bar=1']),
+        expect.anything(),
+      );
+    });
+
+    it('disallows unstructured --config flag', async () => {
+      runOperation({
+        args: ['commit', '--config', 'foo.bar=1'],
+      });
+
+      expect(execaSpy).not.toHaveBeenCalledWith(
+        'sl',
+        expect.arrayContaining(['commit', '--config', 'foo.bar=1']),
+        expect.anything(),
+      );
+    });
+  });
+
+  describe('fetchSmartlogCommits', () => {
+    const repoInfo: ValidatedRepoInfo = {
+      type: 'success',
+      command: 'sl',
+      dotdir: '/path/to/repo/.sl',
+      repoRoot: '/path/to/repo',
+      codeReviewSystem: {type: 'unknown'},
+      pullRequestDomain: undefined,
+    };
+
+    const expectCalledWithRevset = (spy: jest.SpyInstance<unknown>, revset: string) => {
+      expect(spy).toHaveBeenCalledWith(
+        'sl',
+        expect.arrayContaining(['log', '--rev', revset]),
+        expect.anything(),
+      );
+    };
+
+    it('uses correct revset in normal case', async () => {
+      const repo = new Repository(repoInfo, ctx);
+
+      const execaSpy = mockExeca([]);
+
+      await repo.fetchSmartlogCommits();
+      expectCalledWithRevset(
+        execaSpy,
+        'smartlog(((interestingbookmarks() + heads(draft())) & date(-14)) + .)',
+      );
+    });
+
+    it('updates revset when changing date range', async () => {
+      const execaSpy = mockExeca([]);
+      const repo = new Repository(repoInfo, ctx);
+
+      repo.nextVisibleCommitRangeInDays();
+      await repo.fetchSmartlogCommits();
+      expectCalledWithRevset(
+        execaSpy,
+        'smartlog(((interestingbookmarks() + heads(draft())) & date(-60)) + .)',
+      );
+
+      repo.nextVisibleCommitRangeInDays();
+      await repo.fetchSmartlogCommits();
+      expectCalledWithRevset(execaSpy, 'smartlog((interestingbookmarks() + heads(draft())) + .)');
+    });
+
+    it('fetches additional revsets', async () => {
+      const execaSpy = mockExeca([]);
+      const repo = new Repository(repoInfo, ctx);
+
+      repo.stableLocations = [
+        {name: 'mystable', hash: 'aaa', info: 'this is the stable for aaa', date: new Date(0)},
+      ];
+      await repo.fetchSmartlogCommits();
+      expectCalledWithRevset(
+        execaSpy,
+        'smartlog(((interestingbookmarks() + heads(draft())) & date(-14)) + . + present(aaa))',
+      );
+
+      repo.stableLocations = [
+        {name: 'mystable', hash: 'aaa', info: 'this is the stable for aaa', date: new Date(0)},
+        {name: '2', hash: 'bbb', info: '2', date: new Date(0)},
+      ];
+      await repo.fetchSmartlogCommits();
+      expectCalledWithRevset(
+        execaSpy,
+        'smartlog(((interestingbookmarks() + heads(draft())) & date(-14)) + . + present(aaa) + present(bbb))',
+      );
+
+      repo.nextVisibleCommitRangeInDays();
+      repo.nextVisibleCommitRangeInDays();
+      await repo.fetchSmartlogCommits();
+      expectCalledWithRevset(
+        execaSpy,
+        'smartlog((interestingbookmarks() + heads(draft())) + . + present(aaa) + present(bbb))',
+      );
+    });
   });
 
   describe('merge conflicts', () => {
@@ -350,7 +564,7 @@ ${MARK_OUT}
     });
 
     it('checks for merge conflicts', async () => {
-      const repo = new Repository(repoInfo, mockLogger, mockTracker);
+      const repo = new Repository(repoInfo, ctx);
 
       const onChange = jest.fn();
       repo.onChangeConflictState(onChange);
@@ -378,7 +592,7 @@ ${MARK_OUT}
     });
 
     it('disposes conflict change subscriptions', async () => {
-      const repo = new Repository(repoInfo, mockLogger, mockTracker);
+      const repo = new Repository(repoInfo, ctx);
 
       const onChange = jest.fn();
       const subscription = repo.onChangeConflictState(onChange);
@@ -392,7 +606,7 @@ ${MARK_OUT}
     it('sends conflicts right away on subscription if already in conflicts', async () => {
       enterMergeConflict(MOCK_CONFLICT);
 
-      const repo = new Repository(repoInfo, mockLogger, mockTracker);
+      const repo = new Repository(repoInfo, ctx);
 
       const onChange = jest.fn();
       repo.onChangeConflictState(onChange);
@@ -414,7 +628,7 @@ ${MARK_OUT}
     });
 
     it('preserves previous conflicts as resolved', async () => {
-      const repo = new Repository(repoInfo, mockLogger, mockTracker);
+      const repo = new Repository(repoInfo, ctx);
       const onChange = jest.fn();
       repo.onChangeConflictState(onChange);
 
@@ -455,7 +669,7 @@ ${MARK_OUT}
         [/^sl resolve --tool internal:dumpjson --all/, new Error('failed to do the thing')],
       ]);
 
-      const repo = new Repository(repoInfo, mockLogger, mockTracker);
+      const repo = new Repository(repoInfo, ctx);
       const onChange = jest.fn();
       repo.onChangeConflictState(onChange);
 
@@ -579,6 +793,16 @@ describe('extractRepoInfoFromUrl', () => {
 });
 
 describe('absolutePathForFileInRepo', () => {
+  let ctx: RepositoryContext;
+  beforeEach(() => {
+    ctx = {
+      cmd: 'sl',
+      cwd: '/path/to/cwd',
+      logger: mockLogger,
+      tracker: mockTracker,
+    };
+  });
+
   it('rejects .. in paths that escape the repo', () => {
     const repoInfo: ValidatedRepoInfo = {
       type: 'success',
@@ -588,7 +812,7 @@ describe('absolutePathForFileInRepo', () => {
       codeReviewSystem: {type: 'unknown'},
       pullRequestDomain: undefined,
     };
-    const repo = new Repository(repoInfo, mockLogger, mockTracker);
+    const repo = new Repository(repoInfo, ctx);
 
     expect(absolutePathForFileInRepo('foo/bar/file.txt', repo)).toEqual(
       '/path/to/repo/foo/bar/file.txt',
@@ -614,7 +838,7 @@ describe('absolutePathForFileInRepo', () => {
       codeReviewSystem: {type: 'unknown'},
       pullRequestDomain: undefined,
     };
-    const repo = new Repository(repoInfo, mockLogger, mockTracker);
+    const repo = new Repository(repoInfo, ctx);
 
     expect(absolutePathForFileInRepo('foo\\bar\\file.txt', repo, path.win32)).toEqual(
       'C:\\path\\to\\repo\\foo\\bar\\file.txt',

@@ -40,8 +40,10 @@ use cross_repo_sync::CandidateSelectionHint;
 use cross_repo_sync::CommitSyncContext;
 use cross_repo_sync::CommitSyncOutcome;
 use cross_repo_sync::CommitSyncer;
+use cross_repo_sync::Large;
 use cross_repo_sync::Repo as CrossRepo;
 use cross_repo_sync::SubmoduleDeps;
+use cross_repo_sync::SubmoduleExpansionData;
 use cross_repo_sync::Syncers;
 use derived_data_utils::derived_data_utils;
 use environment::MononokeEnvironment;
@@ -67,6 +69,7 @@ use metaconfig_types::DefaultSmallToLargeCommitSyncPathAction;
 use metaconfig_types::MetadataDatabaseConfig;
 use metaconfig_types::RepoConfig;
 use metaconfig_types::SegmentedChangelogConfig;
+use metaconfig_types::DEFAULT_GIT_SUBMODULE_METADATA_FILE_PREFIX;
 use mononoke_app::args::RepoArgs;
 use mononoke_app::fb303::AliveService;
 use mononoke_app::fb303::Fb303AppExtension;
@@ -232,15 +235,26 @@ async fn rewrite_file_paths(
 
     for (index, bcs) in gitimport_changesets.iter().enumerate() {
         let bcs_id = bcs.get_changeset_id();
+
+        let large_repo_id = Large(repo.repo_identity().id());
+        let submodule_expansion_data = match submodule_deps {
+            SubmoduleDeps::ForSync(ref deps) => Some(SubmoduleExpansionData {
+                submodule_deps: deps,
+                x_repo_submodule_metadata_file_prefix: DEFAULT_GIT_SUBMODULE_METADATA_FILE_PREFIX,
+                large_repo_id,
+            }),
+            SubmoduleDeps::NotNeeded => None,
+        };
+
         let rewritten_bcs_opt = rewrite_commit(
             ctx,
             bcs.clone().into_mut(),
             &remapped_parents,
             mover.clone(),
             repo,
-            &submodule_deps,
             Default::default(),
             Default::default(),
+            submodule_expansion_data,
         )
         .await?;
 
@@ -391,7 +405,7 @@ async fn derive_bonsais_single_repo(
 
     let derived_utils: Vec<_> = derived_data_types
         .iter()
-        .map(|ty| derived_data_utils(ctx.fb, repo.as_blob_repo(), ty))
+        .map(|ty| derived_data_utils(ctx.fb, repo.as_blob_repo(), *ty))
         .collect::<Result<_, _>>()?;
 
     stream::iter(derived_utils)
@@ -444,7 +458,7 @@ async fn move_bookmark(
     let mut transaction = repo.bookmarks().create_transaction(ctx.clone());
     if maybe_old_csid.is_none() {
         transaction.create(bookmark, old_csid.clone(), BookmarkUpdateReason::ManualMove)?;
-        if !transaction.commit().await? {
+        if transaction.commit().await?.is_none() {
             return Err(format_err!("Logical failure while creating {:?}", bookmark));
         }
         info!(
@@ -476,7 +490,7 @@ async fn move_bookmark(
             BookmarkUpdateReason::ManualMove,
         )?;
 
-        if !transaction.commit().await? {
+        if transaction.commit().await?.is_none() {
             return Err(format_err!("Logical failure while setting {:?}", bookmark));
         }
         info!(
@@ -657,6 +671,7 @@ async fn push_merge_commit(
         repo,
         bookmark_to_merge_into,
         &repo_config.pushrebase,
+        None,
     )?;
 
     let pushrebase_res = do_pushrebase_bonsai(
@@ -1409,7 +1424,7 @@ async fn repo_import(
         BookmarkUpdateReason::ManualMove,
     )?;
 
-    if !transaction.commit().await? {
+    if transaction.commit().await?.is_none() {
         return Err(format_err!(
             "Logical failure while setting {:?} to the merge commit",
             &repo_import_setting.importing_bookmark,

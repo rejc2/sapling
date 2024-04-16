@@ -66,7 +66,22 @@ export type DiffSummary = GitHubDiffSummary | InternalTypes['PhabricatorDiffSumm
 
 export type DiffCommentReaction = {
   name: string;
-  reaction: 'ANGER' | 'HAHA' | 'LIKE' | 'LOVE' | 'WOW' | 'SORRY' | 'SAD';
+  reaction:
+    | 'ANGER'
+    | 'HAHA'
+    | 'LIKE'
+    | 'LOVE'
+    | 'WOW'
+    | 'SORRY'
+    | 'SAD'
+    | 'CONFUSED'
+    | 'EYES'
+    | 'HEART'
+    | 'HOORAY'
+    | 'LAUGH'
+    | 'ROCKET'
+    | 'THUMBS_DOWN'
+    | 'THUMBS_UP';
 };
 
 export type DiffComment = {
@@ -168,6 +183,24 @@ export type StableCommitMetadata = {
   description: string;
 };
 
+export type StableLocationData = {
+  /** Stables found automatically from recent builds */
+  stables: Array<Result<StableInfo>>;
+  /** Stables that enabled automatically for certain users */
+  special: Array<Result<StableInfo>>;
+  /** Stables entered in the UI */
+  manual: Array<Result<StableInfo>>;
+};
+export type StableInfo = {
+  hash: string;
+  name: string;
+  /** If present, this is informational text, like the reason it's been added */
+  byline?: string;
+  /** If present, this is extra details that might be shown in a tooltip */
+  info?: string;
+  date: Date;
+};
+
 export type CommitInfo = {
   title: string;
   hash: Hash;
@@ -179,7 +212,11 @@ export type CommitInfo = {
    */
   parents: ReadonlyArray<Hash>;
   phase: CommitPhaseType;
-  isHead: boolean;
+  /**
+   * Whether this commit is the "." (working directory parent).
+   * It is the parent of "wdir()" or the "You are here" virtual commit.
+   */
+  isDot: boolean;
   author: string;
   date: Date;
   description: string;
@@ -202,6 +239,7 @@ export type CommitInfo = {
   totalFileCount: number;
   /** @see {@link DiffId} */
   diffId?: DiffId;
+  isFollower?: boolean;
   stableCommitMetadata?: ReadonlyArray<StableCommitMetadata>;
 };
 export type SuccessorInfo = {
@@ -517,6 +555,7 @@ export const allConfigNames = [
   'github.preferred_submit_command',
   'isl.open-file-cmd',
   'isl.generated-files-regex',
+  'ui.username',
 ] as const;
 
 /** sl configs read by ISL */
@@ -525,6 +564,7 @@ export type ConfigName = (typeof allConfigNames)[number];
 /**
  * Not all configs should be set-able from the UI, for security.
  * Only configs which could not possibly allow code execution should be allowed.
+ * This also includes values allowed to be passed in the args for Operations.
  * Most ISL configs are OK.
  */
 export const settableConfigNames = [
@@ -543,6 +583,8 @@ export const settableConfigNames = [
   'isl.experimental-graph-renderer',
   'isl.generated-files-regex',
   'github.preferred_submit_command',
+  'ui.allowemptycommit',
+  'amend.autorestack',
 ] as const;
 
 /** sl configs written to by ISL */
@@ -551,6 +593,7 @@ export type SettableConfigName = (typeof settableConfigNames)[number];
 /** local storage keys written by ISL */
 export type LocalStorageName =
   | 'isl.drawer-state'
+  | 'isl.bookmarks'
   | 'isl.ui-zoom'
   | 'isl.has-shown-getting-started'
   | 'isl.amend-autorestack'
@@ -558,6 +601,7 @@ export type LocalStorageName =
   | 'isl.debug-react-tools'
   | 'isl.debug-redux-tools'
   | 'isl.comparison-display-mode'
+  | 'isl.expand-generated-files'
   | 'isl-color-theme';
 
 export type ClientToServerMessage =
@@ -586,6 +630,7 @@ export type ClientToServerMessage =
   | {type: 'fetchDiffSummaries'; diffIds?: Array<DiffId>}
   | {type: 'fetchDiffComments'; diffId: DiffId}
   | {type: 'fetchLandInfo'; topOfStack: DiffId}
+  | {type: 'fetchAndSetStables'}
   | {type: 'confirmLand'; landConfirmationInfo: LandConfirmationInfo}
   | {type: 'getSuggestedReviewers'; context: {paths: Array<string>}; key: string}
   | {type: 'updateRemoteDiffMessage'; diffId: DiffId; title: string; description: string}
@@ -658,12 +703,13 @@ export type ServerToClientMessage =
   | {type: 'fetchedLandInfo'; topOfStack: DiffId; landInfo: Result<LandInfo>}
   | {type: 'confirmedLand'; result: Result<undefined>}
   | {type: 'fetchedCommitCloudState'; state: Result<CommitCloudSyncState>}
+  | {type: 'fetchedStables'; stables: StableLocationData}
   | {type: 'renderedMarkup'; html: string; id: number}
   | {type: 'gotSuggestedReviewers'; reviewers: Array<string>; key: string}
   | {type: 'updatedRemoteDiffMessage'; diffId: DiffId; error?: string}
   | {type: 'uploadFileResult'; id: string; result: Result<string>}
   | {type: 'comparison'; comparison: Comparison; data: ComparisonData}
-  | {type: 'comparisonContextLines'; path: RepoRelativePath; lines: Array<string>}
+  | {type: 'comparisonContextLines'; path: RepoRelativePath; lines: Result<Array<string>>}
   | {type: 'beganLoadingMoreCommits'}
   | {type: 'commitsShownRange'; rangeInDays: number | undefined}
   | {type: 'additionalCommitAvailability'; moreAvailable: boolean}

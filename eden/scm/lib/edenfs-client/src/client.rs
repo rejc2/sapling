@@ -10,6 +10,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::anyhow;
 use anyhow::Result;
@@ -18,7 +19,7 @@ use clientinfo::get_client_request_info;
 use fbthrift_socket::SocketTransport;
 use serde::Deserialize;
 use thrift_types::edenfs;
-use thrift_types::edenfs::client::EdenService;
+use thrift_types::edenfs_clients::EdenService;
 use thrift_types::fbthrift::binary_protocol::BinaryProtocol;
 use tokio_uds_compat::UnixStream;
 use types::HgId;
@@ -29,6 +30,8 @@ use crate::types::CheckoutConflict;
 use crate::types::CheckoutMode;
 use crate::types::EdenError;
 use crate::types::FileStatus;
+use crate::types::LocalFrom;
+use crate::types::LocalTryFrom;
 
 /// EdenFS client for Sapling CLI integration.
 pub struct EdenFsClient {
@@ -97,6 +100,9 @@ impl EdenFsClient {
     ) -> anyhow::Result<BTreeMap<RepoPathBuf, FileStatus>> {
         let thrift_client = block_on(self.get_thrift_client())?;
         let filter_id = self.get_active_filter_id(commit.clone())?;
+
+        let start_time = Instant::now();
+
         let thrift_result = extract_error(block_on(thrift_client.getScmStatusV2(
             &edenfs::GetScmStatusParams {
                 mountPoint: self.root_vec(),
@@ -110,6 +116,9 @@ impl EdenFsClient {
                 ..Default::default()
             },
         )))?;
+
+        tracing::debug!(target: "measuredtimes", edenclientstatus_time=start_time.elapsed().as_millis() as u64);
+
         let mut result = BTreeMap::new();
         for (path_bytes, status) in thrift_result.status.entries {
             let path = match RepoPathBuf::from_utf8(path_bytes) {
@@ -119,7 +128,7 @@ impl EdenFsClient {
                 }
                 Ok(path) => path,
             };
-            let status = status.into();
+            let status = FileStatus::local_from(status);
             result.insert(path, status);
         }
         Ok(result)
@@ -185,16 +194,22 @@ impl EdenFsClient {
         };
         let root_vec = self.root_vec();
         let node_vec = node.into_byte_array().into();
-        let thrift_mode: edenfs::CheckoutMode = mode.into();
+        let thrift_mode = edenfs::CheckoutMode::local_from(mode);
+
+        let start_time = Instant::now();
+
         let thrift_result = extract_error(block_on(thrift_client.checkOutRevision(
             &root_vec,
             &node_vec,
             &thrift_mode,
             &params,
         )))?;
+
+        tracing::debug!(target: "measuredtimes", edenclientcheckout_time=start_time.elapsed().as_millis() as u64);
+
         let result = thrift_result
             .into_iter()
-            .filter_map(|c| CheckoutConflict::try_from(c).ok())
+            .filter_map(|c| CheckoutConflict::local_try_from(c).ok())
             .collect();
         Ok(result)
     }
@@ -208,7 +223,7 @@ pub(crate) fn extract_error<V, E: std::error::Error + Send + Sync + 'static>(
     match result {
         Err(err) => {
             if let Some(source) = err.source() {
-                if let Ok(err) = EdenError::try_from(source) {
+                if let Ok(err) = EdenError::local_try_from(source) {
                     return Err(err.into());
                 }
             }

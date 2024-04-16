@@ -20,6 +20,7 @@
 #include <folly/stop_watch.h>
 #include <thrift/lib/cpp2/protocol/Serializer.h>
 
+#include "eden/common/utils/Bug.h"
 #include "eden/common/utils/PathFuncs.h"
 #include "eden/fs/config/EdenConfig.h"
 #include "eden/fs/inodes/DirEntry.h"
@@ -33,7 +34,7 @@
 #include "eden/fs/inodes/sqlitecatalog/SqliteInodeCatalog.h"
 #include "eden/fs/sqlite/SqliteDatabase.h"
 #include "eden/fs/telemetry/EdenStats.h"
-#include "eden/fs/utils/Bug.h"
+#include "eden/fs/telemetry/LogEvent.h"
 
 #ifndef _WIN32
 #include "eden/fs/inodes/lmdbcatalog/BufferedLMDBInodeCatalog.h" // @manual
@@ -438,7 +439,7 @@ InodeNumber Overlay::allocateInodeNumber() {
 }
 
 DirContents Overlay::loadOverlayDir(InodeNumber inodeNumber) {
-  DurationScope statScope{stats_, &OverlayStats::loadOverlayDir};
+  DurationScope<EdenStats> statScope{stats_, &OverlayStats::loadOverlayDir};
   DirContents result(caseSensitive_);
   IORequest req{this};
   auto dirData = inodeCatalog_->loadOverlayDir(inodeNumber);
@@ -536,7 +537,7 @@ overlay::OverlayDir Overlay::serializeOverlayDir(
 }
 
 void Overlay::saveOverlayDir(InodeNumber inodeNumber, const DirContents& dir) {
-  DurationScope statScope{stats_, &OverlayStats::saveOverlayDir};
+  DurationScope<EdenStats> statScope{stats_, &OverlayStats::saveOverlayDir};
   inodeCatalog_->saveOverlayDir(
       inodeNumber, serializeOverlayDir(inodeNumber, dir));
 }
@@ -551,7 +552,7 @@ void Overlay::freeInodeFromMetadataTable(InodeNumber ino) {
 }
 
 void Overlay::removeOverlayFile(InodeNumber inodeNumber) {
-  DurationScope statScope{stats_, &OverlayStats::removeOverlayFile};
+  DurationScope<EdenStats> statScope{stats_, &OverlayStats::removeOverlayFile};
 #ifndef _WIN32
   IORequest req{this};
 
@@ -563,7 +564,7 @@ void Overlay::removeOverlayFile(InodeNumber inodeNumber) {
 }
 
 void Overlay::removeOverlayDir(InodeNumber inodeNumber) {
-  DurationScope statScope{stats_, &OverlayStats::removeOverlayDir};
+  DurationScope<EdenStats> statScope{stats_, &OverlayStats::removeOverlayDir};
   IORequest req{this};
 
   freeInodeFromMetadataTable(inodeNumber);
@@ -598,7 +599,7 @@ folly::Future<folly::Unit> Overlay::flushPendingAsync() {
 #endif // !_WIN32
 
 bool Overlay::hasOverlayDir(InodeNumber inodeNumber) {
-  DurationScope statScope{stats_, &OverlayStats::hasOverlayDir};
+  DurationScope<EdenStats> statScope{stats_, &OverlayStats::hasOverlayDir};
   IORequest req{this};
   return inodeCatalog_->hasOverlayDir(inodeNumber);
 }
@@ -606,7 +607,7 @@ bool Overlay::hasOverlayDir(InodeNumber inodeNumber) {
 #ifndef _WIN32
 
 bool Overlay::hasOverlayFile(InodeNumber inodeNumber) {
-  DurationScope statScope{stats_, &OverlayStats::hasOverlayFile};
+  DurationScope<EdenStats> statScope{stats_, &OverlayStats::hasOverlayFile};
   IORequest req{this};
   XCHECK(fileContentStore_);
   return fileContentStore_->hasOverlayFile(inodeNumber);
@@ -816,7 +817,7 @@ void Overlay::addChild(
     InodeNumber parent,
     const std::pair<PathComponent, DirEntry>& childEntry,
     const DirContents& content) {
-  DurationScope statScope{stats_, &OverlayStats::addChild};
+  DurationScope<EdenStats> statScope{stats_, &OverlayStats::addChild};
   if (supportsSemanticOperations_) {
     inodeCatalog_->addChild(
         parent, childEntry.first, serializeOverlayEntry(childEntry.second));
@@ -829,7 +830,7 @@ void Overlay::removeChild(
     InodeNumber parent,
     PathComponentPiece childName,
     const DirContents& content) {
-  DurationScope statScope{stats_, &OverlayStats::removeChild};
+  DurationScope<EdenStats> statScope{stats_, &OverlayStats::removeChild};
   if (supportsSemanticOperations_) {
     inodeCatalog_->removeChild(parent, childName);
   } else {
@@ -838,7 +839,7 @@ void Overlay::removeChild(
 }
 
 void Overlay::removeChildren(InodeNumber parent, const DirContents& content) {
-  DurationScope statScope{stats_, &OverlayStats::removeChildren};
+  DurationScope<EdenStats> statScope{stats_, &OverlayStats::removeChildren};
   saveOverlayDir(parent, content);
 }
 
@@ -849,7 +850,7 @@ void Overlay::renameChild(
     PathComponentPiece dstName,
     const DirContents& srcContent,
     const DirContents& dstContent) {
-  DurationScope statScope{stats_, &OverlayStats::renameChild};
+  DurationScope<EdenStats> statScope{stats_, &OverlayStats::renameChild};
   if (supportsSemanticOperations_) {
     inodeCatalog_->renameChild(src, dst, srcName, dstName);
   } else {

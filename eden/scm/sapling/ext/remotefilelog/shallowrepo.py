@@ -6,7 +6,7 @@
 # shallowrepo.py - shallow repository that uses remote filelogs
 from __future__ import absolute_import
 
-from sapling import error, match, progress, util
+from sapling import match, progress, util
 from sapling.i18n import _
 from sapling.node import hex, nullid
 
@@ -33,9 +33,9 @@ def wraprepo(repo) -> None:
                 ),
             )
             if not path:
-                raise error.Abort(
-                    "no remotefilelog server " "configured - is your .hg/hgrc trusted?"
-                )
+                # raise AttributeError insteal of error.Abort, so `getattr(repo, "fallbackpath", None)`
+                # will not break
+                raise AttributeError("fallbackpath")
 
             return path
 
@@ -58,16 +58,10 @@ def wraprepo(repo) -> None:
             if f[0] == "/":
                 f = f[1:]
 
-            if self.shallowmatch(f):
-                return remotefilelog.remotefilelog(self.svfs, f, self)
-            else:
-                return super(shallowrepository, self).file(f)
+            return remotefilelog.remotefilelog(self.svfs, f, self)
 
         def filectx(self, path, changeid=None, fileid=None):
-            if self.shallowmatch(path):
-                return remotefilectx.remotefilectx(self, path, changeid, fileid)
-            else:
-                return super(shallowrepository, self).filectx(path, changeid, fileid)
+            return remotefilectx.remotefilectx(self, path, changeid, fileid)
 
         def close(self):
             result = super(shallowrepository, self).close()
@@ -133,29 +127,22 @@ def wraprepo(repo) -> None:
                     mfctx = ctx.manifestctx()
                     mf = mfctx.read()
 
-                    if base is None and hasattr(mf, "walkfiles"):
-                        # If there is no base, skip diff and use more efficient walk.
-                        files.update(mf.walkfiles(matcher))
-                    else:
-                        for path, (new, _old) in mf.diff(basemf, matcher).items():
-                            if new[0]:
-                                files.add((path, new[0]))
+                    with progress.spinner(self.ui, _("computing files")):
+                        if base is None and hasattr(mf, "walkfiles"):
+                            # If there is no base, skip diff and use more efficient walk.
+                            files.update(mf.walkfiles(matcher))
+                        else:
+                            for path, (new, _old) in mf.diff(basemf, matcher).items():
+                                if new[0]:
+                                    files.add((path, new[0]))
 
                     prog.value += 1
 
             if files:
-                results = [(path, hex(fnode)) for (path, fnode) in files]
-                self.fileservice.prefetch(results, fetchhistory=False)
+                with progress.spinner(self.ui, _("ensuring files fetched")):
+                    results = [(path, hex(fnode)) for (path, fnode) in files]
+                    self.fileservice.prefetch(results, fetchhistory=False)
 
     repo.__class__ = shallowrepository
 
-    repo.shallowmatch = match.always(repo.root, "")
     repo.fileservice = fileserverclient.fileserverclient(repo)
-
-    repo.includepattern = repo.ui.configlist("remotefilelog", "includepattern", None)
-    repo.excludepattern = repo.ui.configlist("remotefilelog", "excludepattern", None)
-
-    if repo.includepattern or repo.excludepattern:
-        repo.shallowmatch = match.match(
-            repo.root, "", None, repo.includepattern, repo.excludepattern
-        )

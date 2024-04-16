@@ -3,74 +3,33 @@ load("@fbcode_macros//build_defs:cpp_library.bzl", "cpp_library")
 oncall("scm_client_infra")
 
 cpp_library(
-    name = "hg_backing_store",
-    srcs = ["HgBackingStore.cpp"],
-    headers = ["HgBackingStore.h"],
-    deps = [
-        ":hg_import_request",
-        ":hg_proxy_hash",
-        "//eden/common/utils:throw",
-        "//eden/fs/config:config",
-        "//eden/fs/model:model",
-        "//eden/fs/telemetry:log_info",
-        "//eden/fs/telemetry:structured_logger",
-        "//eden/fs/utils:enum",
-        "//eden/fs/utils:utils",
-        "//folly:stop_watch",
-        "//folly:thread_local",
-        "//folly:try",
-        "//folly/executors:cpu_thread_pool_executor",
-        "//folly/executors:global_executor",
-        "//folly/executors/task_queue:unbounded_blocking_queue",
-        "//folly/executors/thread_factory:init_thread_factory",
-        "//folly/executors/thread_factory:named_thread_factory",
-        "//folly/futures:core",
-        "//folly/logging:logging",
-    ],
-    exported_deps = [
-        ":hg_backing_store_options",
-        ":hg_datapack_store",
-        "//eden/common/utils:path",
-        "//eden/fs:config",
-        "//eden/fs/store:backing_store_interface",
-        "//eden/fs/store:context",
-        "//eden/fs/store:store",
-        "//eden/fs/telemetry:telemetry",
-        "//eden/fs/utils:ref_ptr",
-        "//folly:executor",
-        "//folly:range",
-        "//folly:synchronized",
-    ],
-)
-
-cpp_library(
-    name = "hg_import_request",
-    srcs = ["HgImportRequest.cpp"],
-    headers = ["HgImportRequest.h"],
+    name = "sapling_import_request",
+    srcs = ["SaplingImportRequest.cpp"],
+    headers = ["SaplingImportRequest.h"],
     deps = [
         "//folly:try",
     ],
     exported_deps = [
         ":hg_proxy_hash",
+        "//eden/common/telemetry:telemetry",
+        "//eden/common/utils:utils",
         "//eden/fs/model:model",
         "//eden/fs/store:context",
-        "//eden/fs/telemetry:telemetry",
-        "//eden/fs/utils:utils",
         "//folly/futures:core",
     ],
 )
 
 cpp_library(
-    name = "hg_import_request_queue",
-    srcs = ["HgImportRequestQueue.cpp"],
-    headers = ["HgImportRequestQueue.h"],
+    name = "sapling_import_request_queue",
+    srcs = ["SaplingImportRequestQueue.cpp"],
+    headers = ["SaplingImportRequestQueue.h"],
     deps = [
         "//eden/common/utils:immediate_future",
         "//eden/fs/config:config",
         "//folly:map_util",
     ],
     exported_deps = [
-        ":hg_import_request",
+        ":sapling_import_request",
         "//eden/fs/model:model",
         "//folly:synchronized",
         "//folly:try",
@@ -79,35 +38,47 @@ cpp_library(
 )
 
 cpp_library(
-    name = "hg_queued_backing_store",
-    srcs = ["HgQueuedBackingStore.cpp"],
-    headers = ["HgQueuedBackingStore.h"],
+    name = "sapling_backing_store",
+    srcs = ["SaplingBackingStore.cpp"],
+    headers = ["SaplingBackingStore.h"],
     deps = [
-        ":hg_import_request",
         ":hg_proxy_hash",
+        ":sapling_import_request",
+        "//eden/common/telemetry:structured_logger",
+        "//eden/common/utils:enum",
         "//eden/common/utils:path",
         "//eden/common/utils:throw",
+        "//eden/common/utils:utils",
         "//eden/fs/config:config",
         "//eden/fs/service:thrift_util",
-        "//eden/fs/store:store",
-        "//eden/fs/telemetry:structured_logger",
-        "//eden/fs/utils:enum",
+        "//eden/fs/telemetry:log_info",
+        "//eden/fs/telemetry:stats",
         "//eden/fs/utils:static_assert",
-        "//eden/fs/utils:utils",
+        "//folly:executor",
         "//folly:string",
+        "//folly/executors:cpu_thread_pool_executor",
+        "//folly/executors/task_queue:unbounded_blocking_queue",
+        "//folly/executors/thread_factory:init_thread_factory",
         "//folly/futures:core",
         "//folly/logging:logging",
         "//folly/portability:gflags",
         "//folly/system:thread_name",
     ],
     exported_deps = [
-        ":hg_backing_store",
-        ":hg_import_request_queue",
+        "fbsource//third-party/googletest:gtest_headers",
+        ":sapling_backing_store_options",
+        ":sapling_import_request_queue",
+        "//eden/common/telemetry:telemetry",
+        "//eden/common/utils:ref_ptr",
+        "//eden/fs:config",
         "//eden/fs/model:model",
         "//eden/fs/store:backing_store_interface",
         "//eden/fs/store:context",
+        "//eden/fs/store:store",
         "//eden/fs/telemetry:activity_buffer",
-        "//eden/fs/telemetry:telemetry",
+        "//eden/scm/lib/backingstore:backingstore",  # @manual
+        "//eden/scm/lib/backingstore:backingstore_bridge@header",  # @manual
+        "//eden/scm/lib/backingstore:sapling_native_backingstore-include",
         "//folly:range",
         "//folly:synchronized",
     ],
@@ -117,48 +88,8 @@ cpp_library(
 )
 
 cpp_library(
-    name = "hg_datapack_store",
-    srcs = ["HgDatapackStore.cpp"],
-    headers = ["HgDatapackStore.h"],
-    # TODO: This is a hack to work around the fact that Rust framework
-    # dependencies do not propagate to downstream libraries and
-    # binaries. Remove when that's fixed.
-    os_deps = [(
-        "macos",
-        [
-            "fbsource//third-party/toolchains/macos:CoreFoundation",
-            "fbsource//third-party/toolchains/macos:Security",
-        ],
-    )],
-    deps = [
-        ":hg_import_request",
-        ":hg_proxy_hash",
-        "//eden/fs/config:config",
-        "//eden/fs/model:model",
-        "//eden/fs/store:context",
-        "//eden/fs/telemetry:log_info",
-        "//eden/fs/telemetry:structured_logger",
-        "//eden/fs/utils:ref_ptr",
-        "//eden/fs/utils:utils",
-        "//folly/io:iobuf",
-        "//folly/logging:logging",
-    ],
-    exported_deps = [
-        ":hg_backing_store_options",
-        "//eden/common/utils:path",
-        "//eden/fs/model:model-fwd",
-        "//eden/fs/telemetry:telemetry",
-        "//eden/scm/lib/backingstore:backingstore",  # @manual
-        "//eden/scm/lib/backingstore:backingstore_bridge@header",  # @manual
-        "//eden/scm/lib/backingstore:sapling_native_backingstore-include",
-        "//folly:range",
-        "//folly/futures:core",
-    ],
-)
-
-cpp_library(
-    name = "hg_backing_store_options",
-    headers = ["HgBackingStoreOptions.h"],
+    name = "sapling_backing_store_options",
+    headers = ["SaplingBackingStoreOptions.h"],
 )
 
 cpp_library(
@@ -168,8 +99,8 @@ cpp_library(
     deps = [
         "fbsource//third-party/fmt:fmt",
         "//eden/common/utils:throw",
-        "//eden/fs/telemetry:telemetry",
-        "//eden/fs/utils:utils",
+        "//eden/common/utils:utils",
+        "//eden/fs/telemetry:stats",
         "//folly/logging:logging",
     ],
     exported_deps = [

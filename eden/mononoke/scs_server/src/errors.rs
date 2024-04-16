@@ -13,7 +13,7 @@ use git_types::GitError;
 use megarepo_error::MegarepoError;
 use mononoke_api::MononokeError;
 use source_control as thrift;
-use source_control::services::source_control_service as service;
+use source_control_services::errors::source_control_service as service;
 
 pub(crate) enum ServiceError {
     Request(thrift::RequestError),
@@ -241,6 +241,7 @@ impl_into_thrift_error!(service::CommitFileDiffsExn);
 impl_into_thrift_error!(service::CommitLookupExn);
 impl_into_thrift_error!(service::CommitLookupPushrebaseHistoryExn);
 impl_into_thrift_error!(service::CommitInfoExn);
+impl_into_thrift_error!(service::CommitGenerationExn);
 impl_into_thrift_error!(service::CommitCompareExn);
 impl_into_thrift_error!(service::CommitIsAncestorOfExn);
 impl_into_thrift_error!(service::CommitFindFilesExn);

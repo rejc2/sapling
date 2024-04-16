@@ -12,6 +12,7 @@
 #include <folly/portability/GTest.h>
 #include <folly/test/TestUtils.h>
 
+#include "eden/common/telemetry/NullStructuredLogger.h"
 #include "eden/common/utils/ImmediateFuture.h"
 #include "eden/common/utils/PathFuncs.h"
 #include "eden/common/utils/ProcessInfoCache.h"
@@ -24,7 +25,6 @@
 #include "eden/fs/store/ScmStatusDiffCallback.h"
 #include "eden/fs/store/TreeCache.h"
 #include "eden/fs/telemetry/EdenStats.h"
-#include "eden/fs/telemetry/NullStructuredLogger.h"
 #include "eden/fs/testharness/FakeBackingStore.h"
 #include "eden/fs/testharness/FakeTreeBuilder.h"
 #include "eden/fs/testharness/TestUtil.h"
@@ -74,9 +74,11 @@ class DiffTest : public ::testing::Test {
         rawEdenConfig, ConfigReloadBehavior::NoReload);
     auto treeCache = TreeCache::create(edenConfig);
     localStore_ = make_shared<MemoryLocalStore>(makeRefPtr<EdenStats>());
-    backingStore_ = make_shared<FakeBackingStore>();
+    backingStore_ = make_shared<FakeBackingStore>(
+        BackingStore::LocalStoreCachingPolicy::NoCaching);
     store_ = ObjectStore::create(
         backingStore_,
+        localStore_,
         treeCache,
         makeRefPtr<EdenStats>(),
         std::make_shared<ProcessInfoCache>(),

@@ -5,31 +5,83 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import type {ThemeColor} from '../../theme';
+import type {
+  SyntaxWorkerRequest,
+  SyntaxWorkerResponse,
+  TokenizedDiffHunks,
+  TokenizedHunk,
+} from './syntaxHighlightingTypes';
 import type {ParsedDiff} from 'shared/patch/parse';
-import type {HighlightedToken} from 'shared/textmate-lib/tokenize';
-import type {TextMateGrammar} from 'shared/textmate-lib/types';
-import type {Registry, IGrammar} from 'vscode-textmate';
 
-import {grammars, languages} from '../../generated/textmate/TextMateGrammarManifest';
+import foundPlatform from '../../platform';
 import {themeState} from '../../theme';
-import VSCodeDarkPlusTheme from './VSCodeDarkPlusTheme';
-import VSCodeLightPlusTheme from './VSCodeLightPlusTheme';
+import {SynchronousWorker, WorkerApi} from './workerApi';
 import {useAtomValue} from 'jotai';
 import {useEffect, useState} from 'react';
 import {CancellationToken} from 'shared/CancellationToken';
-import FilepathClassifier from 'shared/textmate-lib/FilepathClassifier';
-import createTextMateRegistry from 'shared/textmate-lib/createTextMateRegistry';
 import {updateTextMateGrammarCSS} from 'shared/textmate-lib/textmateStyles';
-import {tokenizeLines} from 'shared/textmate-lib/tokenize';
-import {unwrap} from 'shared/utils';
-import {loadWASM} from 'vscode-oniguruma';
 
-const URL_TO_ONIG_WASM = 'generated/textmate/onig.wasm';
+// Syntax highlighting is done in a WebWorker. This file contains APIs
+// to be called from the main thread, which are delegated to the worker.
+// In some environemtns, WebWorker is not available. In that case,
+// we fall back to a synchronous worker.
 
-export type TokenizedHunk = Array<Array<HighlightedToken>>;
-export type TokenizedDiffHunk = [before: TokenizedHunk, after: TokenizedHunk];
-export type TokenizedDiffHunks = Array<TokenizedDiffHunk>;
+// Useful for testing the non-WebWorker implementation
+const forceDisableWorkers = false;
+
+let cachedWorkerPromise: Promise<WorkerApi<SyntaxWorkerRequest, SyntaxWorkerResponse>>;
+function getWorker(): Promise<WorkerApi<SyntaxWorkerRequest, SyntaxWorkerResponse>> {
+  if (cachedWorkerPromise) {
+    return cachedWorkerPromise;
+  }
+  cachedWorkerPromise = (async () => {
+    let worker: WorkerApi<SyntaxWorkerRequest, SyntaxWorkerResponse>;
+    if (foundPlatform.platformName === 'vscode') {
+      if (process.env.NODE_ENV === 'development') {
+        // NOTE: when using vscode in dev mode, because the web worker is not compiled to a single file,
+        // the webview can't use it properly.
+        // Fall back to a synchronous worker (note that this may have perf issues)
+        worker = new WorkerApi(
+          new SynchronousWorker(() => import('./syntaxHighlightingWorker')) as unknown as Worker,
+        );
+      } else {
+        // Production vscode build: webworkers in vscode webviews
+        // are very particular and can only be loaded via blob: URL.
+        // Vite will have built a special worker js asset due to the imports in this file.
+        const PATH_TO_WORKER = './worker/syntaxHighlightingWorker.js';
+        const blobUrl = await fetch(PATH_TO_WORKER)
+          .then(r => r.blob())
+          .then(b => URL.createObjectURL(b));
+
+        worker = new WorkerApi(new Worker(blobUrl));
+      }
+    } else if (window.Worker && !forceDisableWorkers) {
+      // Non-vscode environments: web workers should work normally
+      worker = new WorkerApi(
+        new Worker(new URL('./syntaxHighlightingWorker', import.meta.url), {type: 'module'}),
+      );
+    } else {
+      worker = new WorkerApi(
+        new SynchronousWorker(() => import('./syntaxHighlightingWorker')) as unknown as Worker,
+      );
+    }
+
+    // Explicitly set the base URI so the worker can make fetch requests.
+    worker.worker.postMessage({type: 'setBaseUri', base: document.baseURI} as SyntaxWorkerRequest);
+
+    worker.listen('cssColorMap', msg => {
+      // During testing-library tear down (ex. syntax highlighting was canceled),
+      // `document` may be null. Abort here to avoid errors.
+      if (document == null) {
+        return undefined;
+      }
+      updateTextMateGrammarCSS(msg.colorMap);
+    });
+
+    return worker;
+  })();
+  return cachedWorkerPromise;
+}
 
 /**
  * Given a set of hunks from a diff view,
@@ -48,13 +100,13 @@ export function useTokenizedHunks(
 
   useEffect(() => {
     const token = newTrackedCancellationToken();
-    // TODO: run this in a web worker so we don't block the UI?
-    // May only be a problem for very large files.
-    tokenizeHunks(theme, path, hunks, token).then(result => {
-      if (!token.isCancelled) {
-        setTokenized(result);
-      }
-    });
+    getWorker().then(worker =>
+      worker.request({type: 'tokenizeHunks', theme, path, hunks}, token).then(result => {
+        if (!token.isCancelled) {
+          setTokenized(result.result);
+        }
+      }),
+    );
     return () => token.cancel();
   }, [theme, path, hunks]);
   return tokenized;
@@ -76,13 +128,13 @@ export function useTokenizedContents(
       return;
     }
     const token = newTrackedCancellationToken();
-    // TODO: run this in a web worker so we don't block the UI?
-    // May only be a problem for very large files.
-    tokenizeContent(theme, path, content, token).then(result => {
-      if (!token.isCancelled) {
-        setTokenized(result);
-      }
-    });
+    getWorker().then(worker =>
+      worker.request({type: 'tokenizeContents', theme, path, content}, token).then(result => {
+        if (!token.isCancelled) {
+          setTokenized(result.result);
+        }
+      }),
+    );
     return () => token.cancel();
   }, [theme, path, content]);
   return tokenized;
@@ -128,15 +180,20 @@ export function useTokenizedContentsOnceVisible(
       return;
     }
     const token = newTrackedCancellationToken();
+
     Promise.all([
-      tokenizeContent(theme, path, contentBefore, token),
-      tokenizeContent(theme, path, contentAfter, token),
+      getWorker().then(worker =>
+        worker.request({type: 'tokenizeContents', theme, path, content: contentBefore}, token),
+      ),
+      getWorker().then(worker =>
+        worker.request({type: 'tokenizeContents', theme, path, content: contentAfter}, token),
+      ),
     ]).then(([a, b]) => {
-      if (a == null || b == null) {
+      if (a?.result == null || b?.result == null) {
         return;
       }
       if (!token.isCancelled) {
-        setTokenized([a, b]);
+        setTokenized([a.result, b.result]);
       }
     });
     return () => token.cancel();
@@ -145,158 +202,6 @@ export function useTokenizedContentsOnceVisible(
     tokenized?.[1].length === contentAfter?.length
     ? tokenized
     : undefined;
-}
-
-async function tokenizeHunks(
-  theme: ThemeColor,
-  path: string,
-  hunks: Array<{lines: Array<string>}>,
-  cancellationToken: CancellationToken,
-): Promise<TokenizedDiffHunks | undefined> {
-  await ensureOnigurumaIsLoaded();
-
-  // During testing-library tear down (ex. syntax highlighting was canceled),
-  // `document` may be null. Abort here to avoid errors.
-  if (document == null) {
-    return undefined;
-  }
-
-  const scopeName = getFilepathClassifier().findScopeNameForPath(path);
-  if (!scopeName) {
-    return undefined;
-  }
-  const store = getGrammerStore(theme);
-  const grammar = await getGrammar(store, scopeName);
-  if (grammar == null) {
-    return undefined;
-  }
-  if (cancellationToken.isCancelled) {
-    // check for cancellation before doing expensive highlighting
-    return undefined;
-  }
-  const tokenizedPatches: TokenizedDiffHunks = hunks
-    .map(hunk => recoverFileContentsFromPatchLines(hunk.lines))
-    .map(([before, after]) => [tokenizeLines(before, grammar), tokenizeLines(after, grammar)]);
-
-  return tokenizedPatches;
-}
-
-async function tokenizeContent(
-  theme: ThemeColor,
-  path: string,
-  content: Array<string>,
-  cancellationToken: CancellationToken,
-): Promise<TokenizedHunk | undefined> {
-  await ensureOnigurumaIsLoaded();
-  const scopeName = getFilepathClassifier().findScopeNameForPath(path);
-  if (!scopeName) {
-    return undefined;
-  }
-  const store = getGrammerStore(theme);
-  const grammar = await getGrammar(store, scopeName);
-  if (grammar == null) {
-    return undefined;
-  }
-  if (cancellationToken.isCancelled) {
-    // check for cancellation before doing expensive highlighting
-    return undefined;
-  }
-
-  return tokenizeLines(content, grammar);
-}
-
-const grammarCache: Map<string, Promise<IGrammar | null>> = new Map();
-function getGrammar(store: Registry, scopeName: string): Promise<IGrammar | null> {
-  if (grammarCache.has(scopeName)) {
-    return unwrap(grammarCache.get(scopeName));
-  }
-  const grammarPromise = store.loadGrammar(scopeName);
-  grammarCache.set(scopeName, grammarPromise);
-  return grammarPromise;
-}
-
-/**
- * Patch lines start with ' ', '+', or '-'. From this we can reconstruct before & after file contents as strings,
- * which we can actually use in the syntax highlighting.
- */
-function recoverFileContentsFromPatchLines(
-  lines: Array<string>,
-): [before: Array<string>, after: Array<string>] {
-  const linesBefore = [];
-  const linesAfter = [];
-  for (const line of lines) {
-    if (line[0] === ' ') {
-      linesBefore.push(line.slice(1));
-      linesAfter.push(line.slice(1));
-    } else if (line[0] === '+') {
-      linesAfter.push(line.slice(1));
-    } else if (line[0] === '-') {
-      linesBefore.push(line.slice(1));
-    }
-  }
-
-  return [linesBefore, linesAfter];
-}
-
-let cachedGrammarStore: {value: Registry; theme: ThemeColor} | null = null;
-function getGrammerStore(theme: ThemeColor) {
-  const found = cachedGrammarStore;
-  if (found != null && found.theme === theme) {
-    return found.value;
-  }
-
-  // Grammars were cached according to the store, but the theme may have changed. Just bust the cache
-  // to force grammars to reload.
-  grammarCache.clear();
-
-  const themeValues = theme === 'light' ? VSCodeLightPlusTheme : VSCodeDarkPlusTheme;
-
-  const registry = createTextMateRegistry(themeValues, grammars, fetchGrammar);
-
-  updateTextMateGrammarCSS(registry.getColorMap());
-  cachedGrammarStore = {value: registry, theme};
-  return registry;
-}
-
-async function fetchGrammar(moduleName: string, type: 'json' | 'plist'): Promise<TextMateGrammar> {
-  const uri = `generated/textmate/${moduleName}.${type}`;
-  const response = await fetch(uri);
-  const grammar = await response.text();
-  return {type, grammar};
-}
-
-let onigurumaLoadingJob: Promise<void> | null = null;
-function ensureOnigurumaIsLoaded(): Promise<void> {
-  if (onigurumaLoadingJob === null) {
-    onigurumaLoadingJob = loadOniguruma();
-  }
-  return onigurumaLoadingJob;
-}
-
-async function loadOniguruma(): Promise<void> {
-  const onigurumaWASMRequest = fetch(URL_TO_ONIG_WASM);
-  const response = await onigurumaWASMRequest;
-
-  const contentType = response.headers.get('content-type');
-  const useStreamingParser = contentType === 'application/wasm';
-
-  if (useStreamingParser) {
-    await loadWASM(response);
-  } else {
-    const dataOrOptions = {
-      data: await response.arrayBuffer(),
-    };
-    await loadWASM(dataOrOptions);
-  }
-}
-
-let _classifier: FilepathClassifier | null = null;
-
-function getFilepathClassifier(): FilepathClassifier {
-  if (_classifier == null) {
-    _classifier = new FilepathClassifier(grammars, languages);
-  }
-  return _classifier;
 }
 
 /** Track the `CancellationToken`s so they can be cancelled immediately in tests. */

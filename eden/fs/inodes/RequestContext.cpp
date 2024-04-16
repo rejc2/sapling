@@ -9,8 +9,8 @@
 
 #include <folly/logging/xlog.h>
 
+#include "eden/common/telemetry/RequestMetricsScope.h"
 #include "eden/common/utils/SystemError.h"
-#include "eden/fs/telemetry/RequestMetricsScope.h"
 
 using namespace std::chrono;
 
@@ -27,7 +27,9 @@ RequestContext::~RequestContext() noexcept {
     }
 
     if (requestWatchList_) {
-      { auto temp = std::move(requestMetricsScope_); }
+      {
+        auto temp = std::move(requestMetricsScope_);
+      }
       requestWatchList_.reset();
     }
 

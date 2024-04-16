@@ -16,6 +16,7 @@ import {Commit} from '../Commit';
 import {OpenComparisonViewButton} from '../ComparisonView/OpenComparisonViewButton';
 import {Center} from '../ComponentUtils';
 import {numPendingImageUploads} from '../ImageUpload';
+import {Link} from '../Link';
 import {OperationDisabledButton} from '../OperationDisabledButton';
 import {SubmitSelectionButton} from '../SubmitSelectionButton';
 import {SubmitUpdateMessageInput} from '../SubmitUpdateMessageInput';
@@ -31,6 +32,8 @@ import {
   latestCommitMessageFields,
 } from '../codeReview/CodeReviewInfo';
 import {submitAsDraft, SubmitAsDraftCheckbox} from '../codeReview/DraftCheckbox';
+import {Badge} from '../components/Badge';
+import {Divider} from '../components/Divider';
 import {FoldButton, useRunFoldPreview} from '../fold';
 import {t, T} from '../i18n';
 import {readAtom, writeAtom} from '../jotaiUtils';
@@ -42,11 +45,12 @@ import {FOLD_COMMIT_PREVIEW_HASH_PREFIX} from '../operations/FoldOperation';
 import {GhStackSubmitOperation} from '../operations/GhStackSubmitOperation';
 import {PrSubmitOperation} from '../operations/PrSubmitOperation';
 import {SetConfigOperation} from '../operations/SetConfigOperation';
+import {useRunOperation} from '../operationsState';
 import {useUncommittedSelection} from '../partialSelection';
 import platform from '../platform';
 import {CommitPreview, uncommittedChangesWithPreviews} from '../previews';
 import {selectedCommits} from '../selection';
-import {commitByHash, latestHeadCommit, repositoryInfo, useRunOperation} from '../serverAPIState';
+import {commitByHash, latestHeadCommit, repositoryInfo} from '../serverAPIState';
 import {succeedableRevset} from '../types';
 import {useModal} from '../useModal';
 import {firstOfIterable} from '../utils';
@@ -72,21 +76,14 @@ import {
 } from './CommitMessageFields';
 import {FillCommitMessage} from './FillCommitMessage';
 import {CommitTitleByline, getTopmostEditedField, Section, SmallCapsTitle} from './utils';
-import {
-  VSCodeBadge,
-  VSCodeButton,
-  VSCodeDivider,
-  VSCodeLink,
-  VSCodeRadio,
-  VSCodeRadioGroup,
-} from '@vscode/webview-ui-toolkit/react';
+import {VSCodeButton, VSCodeRadio, VSCodeRadioGroup} from '@vscode/webview-ui-toolkit/react';
 import {useAtom, useAtomValue} from 'jotai';
 import {useAtomCallback} from 'jotai/utils';
 import {useCallback, useEffect} from 'react';
 import {ComparisonType} from 'shared/Comparison';
 import {useContextMenu} from 'shared/ContextMenu';
 import {Icon} from 'shared/Icon';
-import {firstLine, notEmpty, unwrap} from 'shared/utils';
+import {firstLine, notEmpty, nullthrows} from 'shared/utils';
 
 import './CommitInfoView.css';
 
@@ -119,7 +116,7 @@ export function MultiCommitInfo({selectedCommits}: {selectedCommits: Array<Commi
         <Icon icon="layers" size="M" />
         <T replace={{$num: selectedCommits.length}}>$num Commits Selected</T>
       </strong>
-      <VSCodeDivider />
+      <Divider />
       <div className="commit-list">
         {selectedCommits.map(commit => (
           <Commit
@@ -164,7 +161,7 @@ function useFetchActiveDiffDetails(diffId?: string) {
 
 export function CommitInfoDetails({commit}: {commit: CommitInfo}) {
   const [mode, setMode] = useAtom(commitMode);
-  const isCommitMode = commit.isHead && mode === 'commit';
+  const isCommitMode = mode === 'commit';
   const hashOrHead = isCommitMode ? 'head' : commit.hash;
   const [editedMessage, setEditedCommitMessage] = useAtom(editedCommitMessages(hashOrHead));
   const uncommittedChanges = useAtomValue(uncommittedChangesWithPreviews);
@@ -185,7 +182,7 @@ export function CommitInfoDetails({commit}: {commit: CommitInfo}) {
   const [forceEditAll, setForceEditAll] = useAtom(forceNextCommitToEditAllFields);
 
   useEffect(() => {
-    if (isCommitMode && commit.isHead) {
+    if (isCommitMode && commit.isDot) {
       // no use resetting edited state for commit mode, where it's always being edited.
       return;
     }
@@ -193,10 +190,10 @@ export function CommitInfoDetails({commit}: {commit: CommitInfo}) {
     if (!forceEditAll) {
       // If the selected commit is changed, the fields being edited should slim down to only fields
       // that are meaningfully edited on the new commit.
-      if (Object.keys(editedMessage.fields).length > 0) {
-        const trimmedEdits = removeNoopEdits(schema, parsedFields, editedMessage.fields);
-        if (Object.keys(trimmedEdits).length !== Object.keys(editedMessage.fields).length) {
-          setEditedCommitMessage({fields: trimmedEdits});
+      if (Object.keys(editedMessage).length > 0) {
+        const trimmedEdits = removeNoopEdits(schema, parsedFields, editedMessage);
+        if (Object.keys(trimmedEdits).length !== Object.keys(editedMessage).length) {
+          setEditedCommitMessage(trimmedEdits);
         }
       }
     }
@@ -213,10 +210,8 @@ export function CommitInfoDetails({commit}: {commit: CommitInfo}) {
     // Set the latest message value for the edited message of this field.
     // fieldsBeingEdited is derived from this.
     setEditedCommitMessage(last => ({
-      fields: {
-        ...last.fields,
-        [field]: parsedFields[field],
-      },
+      ...last,
+      [field]: parsedFields[field],
     }));
   };
 
@@ -224,7 +219,7 @@ export function CommitInfoDetails({commit}: {commit: CommitInfo}) {
 
   return (
     <div className="commit-info-view" data-testid="commit-info-view">
-      {!commit.isHead ? null : (
+      {!commit.isDot ? null : (
         <div className="commit-info-view-toolbar-top" data-testid="commit-info-toolbar-top">
           <Tooltip
             title={t(
@@ -244,24 +239,22 @@ export function CommitInfoDetails({commit}: {commit: CommitInfo}) {
           </Tooltip>
         </div>
       )}
-      {mode === 'commit' && commit.isHead && <FillCommitMessage commit={commit} mode={mode} />}
+      {isCommitMode && <FillCommitMessage commit={commit} mode={mode} />}
       <div
         className="commit-info-view-main-content"
         // remount this if we change to commit mode
         key={mode}>
         {schema
-          .filter(field => mode !== 'commit' || field.type !== 'read-only')
+          .filter(field => !isCommitMode || field.type !== 'read-only')
           .map(field => {
             const setField = (newVal: string) =>
               setEditedCommitMessage(val => ({
-                fields: {
-                  ...val.fields,
-                  [field.key]: field.type === 'field' ? [newVal] : newVal,
-                },
+                ...val,
+                [field.key]: field.type === 'field' ? [newVal] : newVal,
               }));
 
-            let editedFieldValue = editedMessage.fields?.[field.key];
-            if (editedFieldValue == null && mode === 'commit' && commit.isHead) {
+            let editedFieldValue = editedMessage?.[field.key];
+            if (editedFieldValue == null && isCommitMode) {
               // If the field is supposed to edited but not in the editedMessage,
               // it means we're loading from a blank slate. This is when we can load from the commit template.
               editedFieldValue = parsedFields[field.key];
@@ -279,7 +272,7 @@ export function CommitInfoDetails({commit}: {commit: CommitInfo}) {
                 editedField={editedFieldValue}
                 setEditedField={setField}
                 extra={
-                  mode !== 'commit' && field.key === 'Title' ? (
+                  !isCommitMode && field.key === 'Title' ? (
                     <>
                       <CommitTitleByline commit={commit} />
                       {isFoldPreview && <FoldPreviewBanner />}
@@ -294,12 +287,12 @@ export function CommitInfoDetails({commit}: {commit: CommitInfo}) {
               />
             );
           })}
-        <VSCodeDivider />
-        {commit.isHead && !isAmendDisabled ? (
+        <Divider />
+        {commit.isDot && !isAmendDisabled ? (
           <Section data-testid="changes-to-amend">
             <SmallCapsTitle>
               {isCommitMode ? <T>Changes to Commit</T> : <T>Changes to Amend</T>}
-              <VSCodeBadge>{uncommittedChanges.length}</VSCodeBadge>
+              <Badge>{uncommittedChanges.length}</Badge>
             </SmallCapsTitle>
             {uncommittedChanges.length === 0 ? (
               <Subtle>
@@ -314,7 +307,7 @@ export function CommitInfoDetails({commit}: {commit: CommitInfo}) {
           <Section data-testid="committed-changes">
             <SmallCapsTitle>
               <T>Files Changed</T>
-              <VSCodeBadge>{commit.totalFileCount}</VSCodeBadge>
+              <Badge>{commit.totalFileCount}</Badge>
             </SmallCapsTitle>
             <div className="changed-file-list">
               <div className="button-row">
@@ -519,7 +512,7 @@ function ActionsBar({
   // after committing/amending, if you've previously selected the head commit,
   // we should show you the newly amended/committed commit instead of the old one.
   const deselectIfHeadIsSelected = useAtomCallback((get, set) => {
-    if (!commit.isHead) {
+    if (!commit.isDot) {
       return;
     }
     const selected = get(selectedCommits);
@@ -545,12 +538,12 @@ function ActionsBar({
         }
       }
 
-      writeAtom(editedCommitMessages(isCommitMode ? 'head' : commit.hash), {fields: {}});
+      writeAtom(editedCommitMessages(isCommitMode ? 'head' : commit.hash), {});
     },
     [commit.hash, isCommitMode],
   );
   const doAmendOrCommit = () => {
-    const updatedMessage = applyEditedFields(latestMessage, editedMessage.fields);
+    const updatedMessage = applyEditedFields(latestMessage, editedMessage);
     const message = commitMessageFieldsToString(schema, updatedMessage);
     const headHash = headCommit?.hash ?? '.';
     const allFiles = uncommittedChanges.map(file => file.path);
@@ -585,9 +578,7 @@ function ActionsBar({
 
   // Generally "Amend"/"Commit" for head commit, but if there's no changes while amending, just use "Amend message"
   const showCommitOrAmend =
-    commit.isHead && (isCommitMode || anythingToCommit || !isAnythingBeingEdited);
-
-  const onCommitFormSubmit = platform.onCommitFormSubmit;
+    commit.isDot && (isCommitMode || anythingToCommit || !isAnythingBeingEdited);
 
   return (
     <div className="commit-info-actions-bar" data-testid="commit-info-actions-bar">
@@ -624,7 +615,7 @@ function ActionsBar({
               disabled={!anythingToCommit || editedMessage == null || areImageUploadsOngoing}
               runOperation={async () => {
                 if (!isCommitMode) {
-                  const updatedMessage = applyEditedFields(latestMessage, editedMessage.fields);
+                  const updatedMessage = applyEditedFields(latestMessage, editedMessage);
                   const stringifiedMessage = commitMessageFieldsToString(schema, updatedMessage);
                   const diffId = findEditedDiffNumber(updatedMessage) ?? commit.diffId;
                   // if there's a diff attached, we should also update the remote message
@@ -667,7 +658,7 @@ function ActionsBar({
               data-testid="amend-message-button"
               disabled={!isAnythingBeingEdited || editedMessage == null || areImageUploadsOngoing}
               runOperation={async () => {
-                const updatedMessage = applyEditedFields(latestMessage, editedMessage.fields);
+                const updatedMessage = applyEditedFields(latestMessage, editedMessage);
                 const stringifiedMessage = commitMessageFieldsToString(schema, updatedMessage);
                 const diffId = findEditedDiffNumber(updatedMessage) ?? commit.diffId;
                 // if there's a diff attached, we should also update the remote message
@@ -694,8 +685,8 @@ function ActionsBar({
             </OperationDisabledButton>
           </Tooltip>
         )}
-        {(commit.isHead && (anythingToCommit || !isAnythingBeingEdited)) ||
-        (!commit.isHead &&
+        {(commit.isDot && (anythingToCommit || !isAnythingBeingEdited)) ||
+        (!commit.isDot &&
           canSubmitIndividualDiffs &&
           // For non-head commits, "submit" doesn't update the message, which is confusing.
           // Just hide the submit button so you're encouraged to "amend message" first.
@@ -714,13 +705,9 @@ function ActionsBar({
             }
             placement="top">
             <OperationDisabledButton
-              contextKey={`submit-${commit.isHead ? 'head' : commit.hash}`}
+              contextKey={`submit-${commit.isDot ? 'head' : commit.hash}`}
               disabled={!canSubmitWithCodeReviewProvider || areImageUploadsOngoing}
               runOperation={async () => {
-                if (onCommitFormSubmit !== undefined) {
-                  onCommitFormSubmit();
-                }
-
                 let amendOrCommitOp;
                 if (anythingToCommit) {
                   // TODO: we should also amend if there are pending commit message changes, and change the button
@@ -760,11 +747,9 @@ function ActionsBar({
                         <div>
                           <T>To continue, select a command to use to submit.</T>
                         </div>
-                        <VSCodeLink
-                          href="https://sapling-scm.com/docs/git/intro#pull-requests"
-                          target="_blank">
+                        <Link href="https://sapling-scm.com/docs/git/intro#pull-requests">
                           <T>Learn More</T>
-                        </VSCodeLink>
+                        </Link>
                       </div>
                     ),
                     buttons,
@@ -778,7 +763,7 @@ function ActionsBar({
                     answer,
                   );
                   setRepoInfo(info => ({
-                    ...unwrap(info),
+                    ...nullthrows(info),
                     preferredSubmitCommand: answer,
                   }));
                   // setRepoInfo updates `provider`, but we still have a stale reference in this callback.
@@ -801,8 +786,8 @@ function ActionsBar({
                 // during another amend or amend message.
                 const shouldUpdateMessage = !isCommitMode && messageSyncEnabled && anythingToCommit;
 
-                const submitOp = unwrap(provider).submitOperation(
-                  commit.isHead ? [] : [commit], // [] means to submit the head commit
+                const submitOp = nullthrows(provider).submitOperation(
+                  commit.isDot ? [] : [commit], // [] means to submit the head commit
                   {
                     draft: shouldSubmitAsDraft,
                     updateFields: shouldUpdateMessage,
@@ -816,7 +801,7 @@ function ActionsBar({
 
                 return [amendOrCommitOp, submitOp].filter(notEmpty);
               }}>
-              {commit.isHead && anythingToCommit ? (
+              {commit.isDot && anythingToCommit ? (
                 isCommitMode ? (
                   <T>Commit and Submit</T>
                 ) : (

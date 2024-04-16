@@ -8,6 +8,7 @@
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -24,6 +25,7 @@ use manifest::FileType;
 use manifest::Manifest;
 use manifest_tree::ReadTreeManifest;
 use manifest_tree::TreeManifest;
+use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use pathmatcher::DifferenceMatcher;
 use pathmatcher::DynMatcher;
@@ -32,6 +34,7 @@ use pathmatcher::IntersectMatcher;
 use pathmatcher::Matcher;
 use pathmatcher::NegateMatcher;
 use pathmatcher::UnionMatcher;
+use regex::Regex;
 use repolock::LockedPath;
 use repolock::RepoLocker;
 use repostate::MergeState;
@@ -39,10 +42,7 @@ use status::FileStatus;
 use status::Status;
 use status::StatusBuilder;
 use storemodel::FileStore;
-use treestate::dirstate::Dirstate;
-use treestate::dirstate::TreeStateFields;
 use treestate::filestate::StateFlags;
-use treestate::serialization::Serializable;
 use treestate::tree::VisitorResult;
 use treestate::treestate::TreeState;
 use types::hgid::NULL_ID;
@@ -55,18 +55,20 @@ use util::file::read_to_string_if_exists;
 use util::file::unlink_if_exists;
 use vfs::VFS;
 
-#[cfg(feature = "eden")]
-use crate::edenfs::EdenFileSystem;
+use crate::client::WorkingCopyClient;
 use crate::errors;
+use crate::filesystem::DotGitFileSystem;
+#[cfg(feature = "eden")]
+use crate::filesystem::EdenFileSystem;
 use crate::filesystem::FileSystem;
 use crate::filesystem::FileSystemType;
 use crate::filesystem::PendingChange;
+use crate::filesystem::PhysicalFileSystem;
+use crate::filesystem::WatchmanFileSystem;
 use crate::git::parse_submodules;
-use crate::physicalfs::PhysicalFileSystem;
 use crate::status::compute_status;
 use crate::util::walk_treestate;
 use crate::watchman_client::DeferredWatchmanClient;
-use crate::watchmanfs::WatchmanFileSystem;
 
 #[cfg(not(feature = "eden"))]
 pub struct EdenFsClient {}
@@ -94,7 +96,6 @@ pub struct WorkingCopy {
     pub ignore_matcher: Arc<GitignoreMatcher>,
     pub(crate) locker: Arc<RepoLocker>,
     pub(crate) dot_hg_path: PathBuf,
-    eden_client: Option<Arc<EdenFsClient>>,
     pub journal: Journal,
     watchman_client: Arc<DeferredWatchmanClient>,
 }
@@ -130,74 +131,23 @@ impl WorkingCopy {
             );
         }
 
-        let fsmonitor_ext = config.get("extensions", "fsmonitor");
-        let fsmonitor_mode = config.get_nonempty("fsmonitor", "mode");
-        let is_watchman = if fsmonitor_ext.is_none() || fsmonitor_ext == Some("!".into()) {
-            false
+        let file_system_type = if is_eden {
+            FileSystemType::Eden
+        } else if has_requirement("dotgit") {
+            FileSystemType::DotGit
         } else {
-            fsmonitor_mode.is_none() || fsmonitor_mode == Some("on".into())
-        };
-        let file_system_type = match (is_eden, is_watchman) {
-            (true, _) => FileSystemType::Eden,
-            (false, true) => FileSystemType::Watchman,
-            (false, false) => FileSystemType::Normal,
-        };
-        let treestate = {
-            let case_sensitive = vfs.case_sensitive();
-            tracing::trace!("case sensitive: {case_sensitive}");
-            let dirstate_path = dot_dir.join("dirstate");
-            let treestate = match file_system_type {
-                FileSystemType::Eden => {
-                    tracing::trace!("loading edenfs dirstate");
-                    TreeState::from_eden_dirstate(dirstate_path, case_sensitive)?
-                }
-                _ => {
-                    let treestate_path = dot_dir.join("treestate");
-                    if util::file::exists(&dirstate_path)
-                        .map_err(anyhow::Error::from)?
-                        .is_some()
-                    {
-                        tracing::trace!("reading dirstate file");
-                        let mut buf =
-                            util::file::open(dirstate_path, "r").map_err(anyhow::Error::from)?;
-                        tracing::trace!("deserializing dirstate");
-                        let dirstate = Dirstate::deserialize(&mut buf)?;
-                        let fields = dirstate
-                            .tree_state
-                            .ok_or_else(|| anyhow!("missing treestate fields on dirstate"))?;
-
-                        let filename = fields.tree_filename;
-                        let root_id = fields.tree_root_id;
-                        tracing::trace!("loading treestate {filename} {root_id:?}");
-                        TreeState::open(treestate_path.join(filename), root_id, case_sensitive)?
-                    } else {
-                        tracing::trace!("creating treestate");
-                        let (treestate, root_id) = TreeState::new(&treestate_path, case_sensitive)?;
-
-                        tracing::trace!("creating dirstate");
-                        let dirstate = Dirstate {
-                            p1: *HgId::null_id(),
-                            p2: *HgId::null_id(),
-                            tree_state: Some(TreeStateFields {
-                                tree_filename: treestate.file_name()?,
-                                tree_root_id: root_id,
-                                // TODO: set threshold
-                                repack_threshold: None,
-                            }),
-                        };
-
-                        tracing::trace!(target: "repo::workingcopy", "creating dirstate file");
-                        let mut file =
-                            util::file::create(dirstate_path).map_err(anyhow::Error::from)?;
-
-                        tracing::trace!(target: "repo::workingcopy", "serializing dirstate");
-                        dirstate.serialize(&mut file)?;
-                        treestate
-                    }
-                }
+            let fsmonitor_ext = config.get("extensions", "fsmonitor");
+            let fsmonitor_mode = config.get_nonempty("fsmonitor", "mode");
+            let is_watchman = if fsmonitor_ext.is_none() || fsmonitor_ext == Some("!".into()) {
+                false
+            } else {
+                fsmonitor_mode.is_none() || fsmonitor_mode == Some("on".into())
             };
-            tracing::debug!(target: "dirstate_size", dirstate_size=treestate.len());
-            Arc::new(Mutex::new(treestate))
+            if is_watchman {
+                FileSystemType::Watchman
+            } else {
+                FileSystemType::Normal
+            }
         };
 
         let ignore_matcher = Arc::new(GitignoreMatcher::new(
@@ -211,16 +161,18 @@ impl WorkingCopy {
 
         let watchman_client = Arc::new(DeferredWatchmanClient::new(config.clone()));
 
-        let (filesystem, eden_client) = Self::construct_file_system(
+        let filesystem = Self::construct_file_system(
             vfs.clone(),
+            dot_dir,
             config,
             file_system_type,
-            treestate.clone(),
             tree_resolver.clone(),
             filestore.clone(),
             locker.clone(),
             watchman_client.clone(),
         )?;
+        let treestate = filesystem.get_treestate()?;
+        tracing::debug!(target: "dirstate_size", dirstate_size=treestate.lock().len());
         let filesystem = Mutex::new(filesystem);
 
         let root = vfs.root();
@@ -245,7 +197,6 @@ impl WorkingCopy {
             ignore_matcher,
             locker,
             dot_hg_path,
-            eden_client,
             journal,
             watchman_client,
         })
@@ -324,53 +275,50 @@ impl WorkingCopy {
 
     fn construct_file_system(
         vfs: VFS,
-        _config: &dyn Config,
+        dot_dir: &Path,
+        config: &dyn Config,
         file_system_type: FileSystemType,
-        treestate: Arc<Mutex<TreeState>>,
         tree_resolver: ArcReadTreeManifest,
         store: ArcFileStore,
         locker: Arc<RepoLocker>,
         watchman_client: Arc<DeferredWatchmanClient>,
-    ) -> Result<(BoxFileSystem, Option<Arc<EdenFsClient>>)> {
+    ) -> Result<BoxFileSystem> {
         Ok(match file_system_type {
-            FileSystemType::Normal => (
-                Box::new(PhysicalFileSystem::new(
-                    vfs.clone(),
-                    tree_resolver,
-                    store.clone(),
-                    treestate,
-                    locker,
-                )?),
-                None,
-            ),
-            FileSystemType::Watchman => (
-                Box::new(WatchmanFileSystem::new(
-                    vfs.clone(),
-                    tree_resolver,
-                    store.clone(),
-                    treestate,
-                    locker,
-                    watchman_client,
-                )?),
-                None,
-            ),
+            FileSystemType::Normal => Box::new(PhysicalFileSystem::new(
+                vfs.clone(),
+                dot_dir,
+                tree_resolver,
+                store.clone(),
+                locker,
+            )?),
+            FileSystemType::Watchman => Box::new(WatchmanFileSystem::new(
+                vfs.clone(),
+                dot_dir,
+                tree_resolver,
+                store.clone(),
+                locker,
+                watchman_client,
+            )?),
             FileSystemType::Eden => {
                 #[cfg(not(feature = "eden"))]
                 panic!("cannot use EdenFS in a non-EdenFS build");
                 #[cfg(feature = "eden")]
                 {
                     let client = Arc::new(EdenFsClient::from_wdir(vfs.root())?);
-                    (
-                        Box::new(EdenFileSystem::new(
-                            treestate,
-                            client.clone(),
-                            vfs.clone(),
-                            store.clone(),
-                        )?),
-                        Some(client),
-                    )
+                    Box::new(EdenFileSystem::new(
+                        client,
+                        vfs.clone(),
+                        dot_dir,
+                        store.clone(),
+                    )?)
                 }
             }
+            FileSystemType::DotGit => Box::new(DotGitFileSystem::new(
+                vfs.clone(),
+                dot_dir,
+                store.clone(),
+                config,
+            )?),
         })
     }
 
@@ -404,6 +352,46 @@ impl WorkingCopy {
     }
 
     pub fn status(
+        &self,
+        ctx: &CoreContext,
+        matcher: DynMatcher,
+        include_ignored: bool,
+    ) -> Result<Status> {
+        let result = self.status_internal(ctx, matcher.clone(), include_ignored);
+
+        result.or_else(|e| {
+            if self
+                .config
+                .get_or("experimental", "repair-eden-dirstate", || true)?
+            {
+                let errmsg = e.to_string();
+                if errmsg.contains("EdenError: error computing status") {
+                    match parse_edenfs_status_error(&errmsg) {
+                        Some(parent) => {
+                            self.treestate
+                                .lock()
+                                .set_parents(&mut std::iter::once(&parent))?;
+                            tracing::warn!("repaired eden dirstate: set parent to {}", parent);
+                        }
+
+                        None => {
+                            tracing::warn!(
+                                "could not parse a parent from error message {}",
+                                errmsg
+                            );
+                            return Err(e);
+                        }
+                    }
+
+                    // retry
+                    return self.status_internal(ctx, matcher, include_ignored);
+                }
+            }
+            Err(e)
+        })
+    }
+
+    pub fn status_internal(
         &self,
         ctx: &CoreContext,
         mut matcher: DynMatcher,
@@ -605,10 +593,13 @@ impl WorkingCopy {
         Ok(copied)
     }
 
-    pub fn eden_client(&self) -> Result<Arc<EdenFsClient>> {
-        self.eden_client
-            .clone()
-            .context("EdenFS client not available in current working copy")
+    /// For supported working copies, get the "client" that talks to the external
+    /// "working copy" program for low-level access.
+    pub fn working_copy_client(&self) -> Result<Arc<dyn WorkingCopyClient>> {
+        match self.filesystem.lock().get_client() {
+            Some(v) => Ok(v),
+            None => anyhow::bail!("bug: working_copy_client() called on wrong type"),
+        }
     }
 
     pub fn read_merge_state(&self) -> Result<Option<MergeState>> {
@@ -635,6 +626,17 @@ impl WorkingCopy {
     pub fn config(&self) -> &Arc<dyn Config> {
         &self.config
     }
+}
+
+// Example:
+// error.EdenError: error computing status: requested parent commit is out-of-date: requested 71060cd2999820e7c1e8cb85a48ef045b1ae79b4, but current parent commit is 01f208e3ffbfa4c32985e9247f26567bf2ec4683. Try running `eden doctor` to remediate
+static EDENFS_STATUS_ERROR_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"current parent commit is ([^.]*)\.").unwrap());
+
+fn parse_edenfs_status_error(errmsg: &str) -> Option<HgId> {
+    let caps = EDENFS_STATUS_ERROR_RE.captures(errmsg)?;
+    let hash = caps.get(1)?;
+    HgId::from_str(hash.as_str()).ok()
 }
 
 pub struct LockedWorkingCopy<'a> {

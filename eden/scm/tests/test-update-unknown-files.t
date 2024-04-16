@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
 #inprocess-hg-incompatible
   $ setconfig experimental.nativecheckout=true
   $ setconfig commands.update.check=noconflict
@@ -45,7 +48,7 @@
   $ hg up null
   abort: 1 conflicting file changes:
    a
-  (commit, shelve, goto --clean to discard all your changes, or update --merge to merge them)
+  (commit, shelve, goto --clean to discard all your changes, or goto --merge to merge them)
   [255]
 #if no-windows
 Replacing symlink with content

@@ -5,12 +5,11 @@
 
 from __future__ import absolute_import
 
+import contextlib
 import os
 
 from sapling import error, node as nodemod, util
 from sapling.pycompat import encodeutf8
-
-from . import dependencies, util as ccutil
 
 FORMAT_VERSION = "v2"
 
@@ -24,29 +23,36 @@ class BackupState:
     name = "backedupheads.remote"
     directory = "commitcloud"
 
-    def __init__(self, repo, resetlocalstate=False, usehttp=False):
-        self.repo = repo
-        self.usehttp = usehttp
-        repo.sharedvfs.makedirs(self.directory)
-        self.filename = os.path.join(
-            self.directory,
-            self.name,
-        )
-        self.heads = set()
-        if repo.sharedvfs.exists(self.filename) and not resetlocalstate:
-            lines = repo.sharedvfs.readutf8(self.filename).splitlines()
-            if len(lines) < 1 or lines[0].strip() != FORMAT_VERSION:
-                version = lines[0].strip() if len(lines) > 0 else "<empty>"
-                repo.ui.debug(
-                    "unrecognised backedupheads version '%s', ignoring\n" % version
-                )
-                self.initfromserver()
-                return
-            heads = [nodemod.bin(head.strip()) for head in lines[1:]]
-            heads = repo.changelog.filternodes(heads, local=True)
-            self.heads = set(heads)
+    def __init__(self, repo, resetlocalstate=False):
+        # Don't take repo lock when loading backup state. This way, "cloud backup" etc.
+        # won't conflict with stuck commands (e.g. "rebase" waiting for user input).
+        if repo.ui.configbool("experimental", "lock-for-backup-state", False):
+            cm = repo.lock()
         else:
-            self.initfromserver()
+            cm = contextlib.nullcontext()
+
+        with cm:
+            self.repo = repo
+            repo.sharedvfs.makedirs(self.directory)
+            self.filename = os.path.join(
+                self.directory,
+                self.name,
+            )
+            self.heads = set()
+            if repo.sharedvfs.exists(self.filename) and not resetlocalstate:
+                lines = repo.sharedvfs.readutf8(self.filename).splitlines()
+                if len(lines) < 1 or lines[0].strip() != FORMAT_VERSION:
+                    version = lines[0].strip() if len(lines) > 0 else "<empty>"
+                    repo.ui.debug(
+                        "unrecognised backedupheads version '%s', ignoring\n" % version
+                    )
+                    self.initfromserver()
+                    return
+                heads = [nodemod.bin(head.strip()) for head in lines[1:]]
+                heads = repo.changelog.filternodes(heads, local=True)
+                self.heads = set(heads)
+            else:
+                self.initfromserver()
 
     def initfromserver(self):
         # Check with the server about all visible commits that we don't already
@@ -62,36 +68,12 @@ class BackupState:
         if not unknown:
             return
 
-        if self.usehttp:
-            try:
-                unknown = [nodemod.bin(node) for node in unknown]
-                stream = repo.edenapi.commitknown(unknown)
-                nodes = {
-                    item["hgid"] for item in stream if item["known"].get("Ok") is True
-                }
-            except (error.UncategorizedNativeError, error.HttpError) as e:
-                raise error.Abort(e)
-        else:
-
-            def getconnection():
-                return repo.connectionpool.get(
-                    ccutil.getremotepath(repo.ui), reason="restore backup state"
-                )
-
-            nodes = {}
-            try:
-                nodes = {
-                    nodemod.bin(hexnode)
-                    for hexnode, backedup in zip(
-                        unknown,
-                        dependencies.infinitepush.isbackedupnodes(
-                            getconnection, unknown
-                        ),
-                    )
-                    if backedup
-                }
-            except error.RepoError:
-                pass
+        try:
+            unknown = [nodemod.bin(node) for node in unknown]
+            stream = repo.edenapi.commitknown(unknown)
+            nodes = {item["hgid"] for item in stream if item["known"].get("Ok") is True}
+        except (error.UncategorizedNativeError, error.HttpError) as e:
+            raise error.Abort(e)
 
         self.update(nodes)
 

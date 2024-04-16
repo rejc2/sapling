@@ -59,11 +59,11 @@ use clientinfo::ClientInfo;
 use cmdlib::helpers;
 use cmdlib_cross_repo::create_commit_syncers_from_app_unredacted;
 use context::CoreContext;
-use cross_repo_sync::types::Source;
-use cross_repo_sync::types::Target;
 use cross_repo_sync::CommitSyncer;
 use cross_repo_sync::ConcreteRepo as CrossRepo;
 use cross_repo_sync::PushrebaseRewriteDates;
+use cross_repo_sync::Source;
+use cross_repo_sync::Target;
 use derived_data_utils::derive_data_for_csids;
 use fbinit::FacebookInit;
 use futures::future;
@@ -81,6 +81,7 @@ use mononoke_app::fb303::AliveService;
 use mononoke_app::MononokeApp;
 use mononoke_hg_sync_job_helper_lib::wait_for_latest_log_id_to_be_synced;
 use mononoke_types::ChangesetId;
+use mononoke_types::DerivableType;
 use mutable_counters::ArcMutableCounters;
 use mutable_counters::MutableCountersArc;
 use mutable_counters::MutableCountersRef;
@@ -227,7 +228,7 @@ async fn run_in_tailing_mode<M: SyncedCommitMapping + Clone + 'static>(
     common_pushrebase_bookmarks: HashSet<BookmarkKey>,
     base_scuba_sample: MononokeScubaSampleBuilder,
     backpressure_params: BackpressureParams,
-    derived_data_types: Vec<String>,
+    derived_data_types: Vec<DerivableType>,
     tailing_args: TailingArgs<M, Repo>,
     sleep_duration: Duration,
     maybe_bookmark_regex: Option<Regex>,
@@ -301,7 +302,7 @@ async fn tail<M: SyncedCommitMapping + Clone + 'static>(
     mut scuba_sample: MononokeScubaSampleBuilder,
     common_pushrebase_bookmarks: &HashSet<BookmarkKey>,
     backpressure_params: &BackpressureParams,
-    derived_data_types: &[String],
+    derived_data_types: &[DerivableType],
     sleep_duration: Duration,
     maybe_bookmark_regex: &Option<Regex>,
     pushrebase_rewrite_dates: PushrebaseRewriteDates,
@@ -314,14 +315,19 @@ async fn tail<M: SyncedCommitMapping + Clone + 'static>(
     let start_id = maybe_start_id.ok_or_else(|| format_err!("counter not found"))?;
     let limit = 10;
     let log_entries = bookmark_update_log
-        .read_next_bookmark_log_entries(ctx.clone(), start_id as u64, limit, Freshness::MaybeStale)
+        .read_next_bookmark_log_entries(
+            ctx.clone(),
+            start_id.try_into()?,
+            limit,
+            Freshness::MaybeStale,
+        )
         .try_collect::<Vec<_>>()
         .await?;
 
     let remaining_entries = commit_syncer
         .get_source_repo()
         .bookmark_update_log()
-        .count_further_bookmark_log_entries(ctx.clone(), start_id as u64, None)
+        .count_further_bookmark_log_entries(ctx.clone(), start_id.try_into()?, None)
         .await?;
 
     if log_entries.is_empty() {
@@ -333,7 +339,7 @@ async fn tail<M: SyncedCommitMapping + Clone + 'static>(
 
         for entry in log_entries {
             let entry_id = entry.id;
-            scuba_sample.add("entry_id", entry.id);
+            scuba_sample.add("entry_id", u64::from(entry.id));
 
             let mut skip = false;
             if let Some(regex) = maybe_bookmark_regex {
@@ -390,7 +396,7 @@ async fn tail<M: SyncedCommitMapping + Clone + 'static>(
             // This is expected - next run will try to update the counter again without
             // re-syncing the commits.
             target_mutable_counters
-                .set_counter(ctx, &counter, entry_id, None)
+                .set_counter(ctx, &counter, entry_id.try_into()?, None)
                 .await?;
         }
         Ok(true)
@@ -416,7 +422,9 @@ async fn maybe_apply_backpressure(
                     let maybe_counter = repo
                         .mutable_counters()
                         .get_counter(ctx, &backsyncer_counter)
-                        .await?;
+                        .await?
+                        .map(|counter| counter.try_into())
+                        .transpose()?;
 
                     match maybe_counter {
                         Some(counter) => {
@@ -425,7 +433,7 @@ async fn maybe_apply_backpressure(
                             bookmark_update_log
                                 .count_further_bookmark_log_entries(
                                     ctx.clone(),
-                                    counter as u64,
+                                    counter,
                                     None, // exclude_reason
                                 )
                                 .await
@@ -568,7 +576,11 @@ async fn async_main<'a>(app: MononokeApp, ctx: CoreContext) -> Result<(), Error>
                 common_bookmarks,
                 scuba_sample,
                 backpressure_params,
-                tail_cmd_args.derived_data_types.clone(),
+                tail_cmd_args
+                    .derived_data_types
+                    .into_iter()
+                    .map(|ty| DerivableType::from_name(&ty))
+                    .collect::<Result<_>>()?,
                 tailing_args,
                 sleep_duration,
                 maybe_bookmark_regex,

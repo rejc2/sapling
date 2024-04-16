@@ -8,6 +8,7 @@
 use std::pin::Pin;
 
 use futures::FutureExt;
+use futures_stats::futures03::TimedFutureExt;
 use gotham::handler::HandlerFuture;
 use gotham::middleware::state::StateMiddleware;
 use gotham::pipeline::new_pipeline;
@@ -17,6 +18,7 @@ use gotham::router::builder::DefineSingleRoute;
 use gotham::router::builder::DrawRoutes;
 use gotham::router::Router;
 use gotham::state::State;
+use gotham_ext::middleware::ScubaMiddlewareState;
 use gotham_ext::response::build_error_response;
 use gotham_ext::response::build_response;
 
@@ -28,7 +30,8 @@ use crate::read;
 
 fn capability_advertisement_handler(mut state: State) -> Pin<Box<HandlerFuture>> {
     async move {
-        let res = read::capability_advertisement(&mut state).await;
+        let (future_stats, res) = read::capability_advertisement(&mut state).timed().await;
+        ScubaMiddlewareState::try_set_future_stats(&mut state, &future_stats);
         build_response(res, state, &GitErrorFormatter)
     }
     .boxed()
@@ -36,7 +39,8 @@ fn capability_advertisement_handler(mut state: State) -> Pin<Box<HandlerFuture>>
 
 fn upload_pack_handler(mut state: State) -> Pin<Box<HandlerFuture>> {
     async move {
-        let res = read::upload_pack(&mut state).await;
+        let (future_stats, res) = read::upload_pack(&mut state).timed().await;
+        ScubaMiddlewareState::try_set_future_stats(&mut state, &future_stats);
         match res {
             Ok(res) => Ok((state, res)),
             Err(err) => {
@@ -59,13 +63,13 @@ pub fn build_router(context: GitServerContext) -> Router {
 
     gotham_build_router(chain, pipelines, |route| {
         route
-            .get("/*repository/info/refs")
+            .get("/repos/git/:server_type/*repository/info/refs")
             .with_path_extractor::<RepositoryParams>()
             .with_query_string_extractor::<ServiceType>()
             .to(capability_advertisement_handler);
 
         route
-            .post("/*repository/git-upload-pack")
+            .post("/repos/git/:server_type/*repository/git-upload-pack")
             .with_path_extractor::<RepositoryParams>()
             .to(upload_pack_handler);
 

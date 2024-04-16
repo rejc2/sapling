@@ -7,11 +7,19 @@
 
 import type {ServerSideTracker} from './analytics/serverSideTracker';
 import type {Logger} from './logger';
+import type {ConfigName} from 'isl/src/types';
 
-/** Context in which to execute sl commands */
-export type ExecutionContext = {
+/**
+ * Per-connection context with which to access a repository.
+ * Repositories instances are shared and reused, but
+ * this context is not. It's used for any state that cannot be shared.
+ */
+export type RepositoryContext = {
   cmd: string;
   cwd: string;
   logger: Logger;
   tracker: ServerSideTracker;
+
+  knownConfigs?: ReadonlyMap<ConfigName, string> | undefined;
+  // TODO: visible commit age range
 };

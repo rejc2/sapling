@@ -14,6 +14,7 @@
 #include <optional>
 #include <string_view>
 
+#include "eden/fs/store/ObjectFetchContext.h"
 #include "eden/scm/lib/backingstore/src/ffi.rs.h" // @manual
 
 namespace folly {
@@ -29,11 +30,19 @@ namespace sapling {
  * object ID again, this can be made into a struct.
  */
 using NodeId = folly::ByteRange;
+using FetchCause = facebook::eden::ObjectFetchContext::Cause;
+
+struct SaplingRequest {
+  NodeId node;
+  FetchCause cause;
+  // TODO: sapling::FetchMode mode;
+  // TODO: sapling::ClientRequestInfo cri;
+};
 
 /**
- * List of NodeIds used in batch requests.
+ * List of SaplingRequests used in batch requests.
  */
-using NodeIdRange = folly::Range<const NodeId*>;
+using SaplingRequestRange = folly::Range<const SaplingRequest*>;
 
 /**
  * Storage for a 20-byte hg manifest id.
@@ -70,8 +79,8 @@ class SaplingNativeBackingStore {
       sapling::FetchMode fetch_mode);
 
   void getTreeBatch(
-      NodeIdRange requests,
-      bool local,
+      SaplingRequestRange requests,
+      sapling::FetchMode fetch_mode,
       folly::FunctionRef<void(size_t, folly::Try<std::shared_ptr<Tree>>)>
           resolve);
 
@@ -80,8 +89,8 @@ class SaplingNativeBackingStore {
       sapling::FetchMode fetchMode);
 
   void getBlobBatch(
-      NodeIdRange requests,
-      bool local,
+      SaplingRequestRange requests,
+      sapling::FetchMode fetchMode,
       folly::FunctionRef<
           void(size_t, folly::Try<std::unique_ptr<folly::IOBuf>>)> resolve);
 
@@ -90,8 +99,8 @@ class SaplingNativeBackingStore {
       bool local);
 
   void getBlobMetadataBatch(
-      NodeIdRange requests,
-      bool local,
+      SaplingRequestRange requests,
+      sapling::FetchMode fetch_mode,
       folly::FunctionRef<void(size_t, folly::Try<std::shared_ptr<FileAuxData>>)>
           resolve);
 

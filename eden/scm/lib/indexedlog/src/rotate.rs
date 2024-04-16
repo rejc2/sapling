@@ -21,6 +21,7 @@ use tracing::debug;
 use tracing::debug_span;
 use tracing::trace;
 
+use crate::change_detect::SharedChangeDetector;
 use crate::errors::IoResultExt;
 use crate::errors::ResultExt;
 use crate::lock::ScopedDirLock;
@@ -50,6 +51,7 @@ pub struct RotateLog {
     latest: u8,
     // Indicate an active reader. Destrictive writes (repair) are unsafe.
     reader_lock: Option<ScopedDirLock>,
+    change_detector: Option<SharedChangeDetector>,
     // Run after log.sync(). For testing purpose only.
     #[cfg(test)]
     hook_after_log_sync: Option<Box<dyn Fn()>>,
@@ -162,6 +164,7 @@ impl OpenOptions {
         let dir = dir.as_ref();
         let result: crate::Result<_> = (|| {
             let reader_lock = ScopedDirLock::new_with_options(dir, &READER_LOCK_OPTS)?;
+            let change_detector = reader_lock.shared_change_detector()?;
             let span = debug_span!("RotateLog::open", dir = &dir.to_string_lossy().as_ref());
             let _guard = span.enter();
 
@@ -231,22 +234,25 @@ impl OpenOptions {
             };
 
             let logs_len = AtomicUsize::new(logs.len());
-            Ok(RotateLog {
+            let mut rotate_log = RotateLog {
                 dir: Some(dir.into()),
                 open_options: self.clone(),
                 logs,
                 logs_len,
                 latest,
                 reader_lock: Some(reader_lock),
+                change_detector: Some(change_detector),
                 #[cfg(test)]
                 hook_after_log_sync: None,
-            })
+            };
+            rotate_log.update_change_detector_to_match_meta();
+            Ok(rotate_log)
         })();
 
         result.context(|| format!("in rotate::OpenOptions::open({:?})", dir))
     }
 
-    /// Open an-empty [`RotateLog`] in memory. The [`RotateLog`] cannot [`sync`].
+    /// Open an-empty [`RotateLog`] in memory. The [`RotateLog`] cannot [`RotateLog::sync`].
     pub fn create_in_memory(&self) -> crate::Result<RotateLog> {
         let result: crate::Result<_> = (|| {
             let cell = create_log_cell(self.log_open_options.open(())?);
@@ -260,6 +266,7 @@ impl OpenOptions {
                 logs_len,
                 latest: 0,
                 reader_lock: None,
+                change_detector: None,
                 #[cfg(test)]
                 hook_after_log_sync: None,
             })
@@ -526,12 +533,21 @@ impl RotateLog {
                 }
             }
 
+            self.update_change_detector_to_match_meta();
             Ok(self.latest)
         })();
 
         result
             .context("in RotateLog::sync")
             .context(|| format!("  RotateLog.dir = {:?}", self.dir))
+    }
+
+    fn update_change_detector_to_match_meta(&mut self) {
+        let meta = &self.writable_log().meta;
+        let value = meta.primary_len ^ meta.epoch ^ ((self.latest as u64) << 56);
+        if let Some(detector) = &self.change_detector {
+            detector.set(value);
+        }
     }
 
     /// Attempt to remove outdated logs.
@@ -548,6 +564,20 @@ impl RotateLog {
             }
         }
         Ok(())
+    }
+
+    /// Returns `true` if `sync` will load more data on disk.
+    ///
+    /// This function is optimized to be called frequently. It does not access
+    /// the filesystem directly, but communicate using a shared mmap buffer.
+    ///
+    /// This is not about testing buffered pending changes. To access buffered
+    /// pending changes, use [`RotateLog::iter_dirty`] instead.
+    pub fn is_changed_on_disk(&self) -> bool {
+        match &self.change_detector {
+            Some(detector) => detector.is_changed(),
+            None => false,
+        }
     }
 
     /// Force create a new [`Log`]. Bump latest.
@@ -778,6 +808,51 @@ pub struct RotateLogLookupIter<'a> {
     key: Bytes,
 }
 
+impl<'a> RotateLogLookupIter<'a> {
+    fn load_next_log(&mut self) -> crate::Result<()> {
+        if self.log_index + 1 >= self.log_rotate.logs.len() {
+            self.end = true;
+            Ok(())
+        } else {
+            // Try the next log
+            self.log_index += 1;
+            match self.log_rotate.load_log(self.log_index) {
+                Ok(None) => {
+                    self.end = true;
+                    Ok(())
+                }
+                Err(_err) => {
+                    self.end = true;
+                    // Not fatal (since RotateLog is designed to be able
+                    // to drop data).
+                    Ok(())
+                }
+                Ok(Some(log)) => match log.lookup(self.index_id, &self.key) {
+                    Err(err) => {
+                        self.end = true;
+                        Err(err)
+                    }
+                    Ok(iter) => {
+                        self.inner_iter = iter;
+                        Ok(())
+                    }
+                },
+            }
+        }
+    }
+
+    /// Consume iterator, returning whether the iterator has any data.
+    pub fn is_empty(mut self) -> crate::Result<bool> {
+        while !self.end {
+            if !self.inner_iter.is_empty() {
+                return Ok(false);
+            }
+            self.load_next_log()?;
+        }
+        Ok(true)
+    }
+}
+
 impl<'a> Iterator for RotateLogLookupIter<'a> {
     type Item = crate::Result<&'a [u8]>;
 
@@ -787,35 +862,15 @@ impl<'a> Iterator for RotateLogLookupIter<'a> {
         }
         match self.inner_iter.next() {
             None => {
-                if self.log_index + 1 >= self.log_rotate.logs.len() {
-                    self.end = true;
-                    None
-                } else {
-                    // Try the next log
-                    self.log_index += 1;
-                    match self.log_rotate.load_log(self.log_index) {
-                        Ok(None) => {
-                            self.end = true;
-                            return None;
-                        }
-                        Err(_err) => {
-                            self.end = true;
-                            // Not fatal (since RotateLog is designed to be able
-                            // to drop data).
-                            return None;
-                        }
-                        Ok(Some(log)) => {
-                            self.inner_iter = match log.lookup(self.index_id, &self.key) {
-                                Err(err) => {
-                                    self.end = true;
-                                    return Some(Err(err));
-                                }
-                                Ok(iter) => iter,
-                            }
-                        }
-                    }
-                    self.next()
+                if let Err(err) = self.load_next_log() {
+                    return Some(Err(err));
                 }
+
+                if self.end {
+                    return None;
+                }
+
+                self.next()
             }
             Some(Err(err)) => {
                 self.end = true;
@@ -1211,6 +1266,35 @@ mod tests {
     }
 
     #[test]
+    fn test_is_empty() -> crate::Result<()> {
+        let dir = tempdir().unwrap();
+        let open_opts = OpenOptions::new()
+            .create(true)
+            .max_bytes_per_log(2)
+            .max_log_count(4)
+            .index("first-byte", |_| vec![IndexOutput::Reference(0..1)]);
+
+        let mut rotate = open_opts.open(&dir)?;
+        rotate.append(b"a1")?;
+        assert_eq!(rotate.sync()?, 1);
+
+        rotate.append(b"a2")?;
+        assert_eq!(rotate.sync()?, 2);
+
+        rotate.append(b"b1")?;
+        assert_eq!(rotate.sync()?, 3);
+
+        assert_eq!(lookup(&rotate, b"a"), vec![b"a2", b"a1"]);
+        assert_eq!(lookup(&rotate, b"b"), vec![b"b1"]);
+
+        assert!(!rotate.lookup(0, b"a".to_vec())?.is_empty()?);
+        assert!(!rotate.lookup(0, b"b".to_vec())?.is_empty()?);
+        assert!(rotate.lookup(0, b"c".to_vec())?.is_empty()?);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_lookup_truncated_meta() {
         // Look up or iteration should work with rotated logs.
         let dir = tempdir().unwrap();
@@ -1337,6 +1421,61 @@ mod tests {
 
         assert_eq!(rotate1.sync().unwrap(), 1); // trigger flush filter by RotateLog
         assert_eq!(read_log("1"), vec![b"xx", b"aa"]);
+    }
+
+    #[test]
+    fn test_is_changed_on_disk() {
+        let dir = tempdir().unwrap();
+        let open_opts = OpenOptions::new()
+            .create(true)
+            .max_bytes_per_log(5000)
+            .max_log_count(2);
+
+        // Repeat a few times to trigger rotation.
+        for _ in 0..10 {
+            let mut rotate1 = open_opts.open(&dir).unwrap();
+            let mut rotate2 = open_opts.open(&dir).unwrap();
+
+            assert!(!rotate1.is_changed_on_disk());
+            assert!(!rotate2.is_changed_on_disk());
+
+            // no-op sync() does not set is_changed().
+            rotate1.sync().unwrap();
+            assert!(!rotate2.is_changed_on_disk());
+
+            // change before flush does not set is_changed().
+            rotate1.append([b'a'; 1000]).unwrap();
+
+            assert!(!rotate1.is_changed_on_disk());
+            assert!(!rotate2.is_changed_on_disk());
+
+            // sync() does not set is_changed().
+            rotate1.sync().unwrap();
+            assert!(!rotate1.is_changed_on_disk());
+
+            // rotate2 should be able to detect the on-disk change from rotate1.
+            assert!(rotate2.is_changed_on_disk());
+
+            // is_changed() does not clear is_changed().
+            assert!(rotate2.is_changed_on_disk());
+
+            // read-only sync() should clear is_changed().
+            rotate2.sync().unwrap();
+            assert!(!rotate2.is_changed_on_disk());
+            // ... and not set other Logs' is_changed().
+            assert!(!rotate1.is_changed_on_disk());
+
+            rotate2.append([b'a'; 1000]).unwrap();
+            rotate2.sync().unwrap();
+
+            // rotate1 should be able to detect the on-disk change from rotate2.
+            assert!(rotate1.is_changed_on_disk());
+
+            // read-write sync() should clear is_changed().
+            rotate1.append([b'a'; 1000]).unwrap();
+            rotate1.sync().unwrap();
+            assert!(!rotate1.is_changed_on_disk());
+        }
     }
 
     #[test]

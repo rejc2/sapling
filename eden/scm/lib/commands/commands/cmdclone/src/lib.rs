@@ -105,6 +105,12 @@ struct CloneSource {
     default_bookmark: Option<String>,
 }
 
+impl CloneSource {
+    fn is_eager(&self) -> bool {
+        self.scheme == "eager" || self.scheme == "test"
+    }
+}
+
 impl CloneOpts {
     fn source(&self, config: &dyn Config) -> Result<CloneSource> {
         if let Some(local_path) = local_path(&self.source)? {
@@ -252,14 +258,12 @@ pub fn run(mut ctx: ReqCtx<CloneOpts>) -> Result<u8> {
     config.set("paths", "default", Some(&source.path), &"arg".into());
 
     let reponame = match config.get_opt::<String>("remotefilelog", "reponame")? {
-        // This gets the reponame from the --configfile config. Ignore
-        // bogus "no-repo" value that internalconfig sets when there is
-        // no repo name.
-        Some(c) if c != "no-repo" => {
+        // This gets the reponame from the --configfile config.
+        Some(c) => {
             logger.verbose(|| format!("Repo name is {} from config", c));
             c
         }
-        Some(_) | None => match configloader::hg::repo_name_from_url(&config, &ctx.opts.source) {
+        None => match configloader::hg::repo_name_from_url(&config, &ctx.opts.source) {
             Some(name) => {
                 logger.verbose(|| format!("Repo name is {} via URL {}", name, ctx.opts.source));
                 config.set(
@@ -487,7 +491,7 @@ fn clone_metadata(
     let shallow = match ctx.opts.shallow {
         Some(shallow) => shallow,
         // Infer non-shallow for eager->eager clone.
-        None => !eager_format || source.scheme != "eager",
+        None => !eager_format || !source.is_eager(),
     };
 
     if shallow {
@@ -498,7 +502,7 @@ fn clone_metadata(
         }
 
         abort_if!(
-            source.scheme != "eager",
+            !source.is_eager(),
             "don't know how to clone {} into eagerepo",
             source.path,
         );

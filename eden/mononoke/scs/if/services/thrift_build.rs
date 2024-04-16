@@ -18,7 +18,8 @@ fn main() {
         "derived_data_type derived_data_type_if //eden/mononoke/derived_data/if:derived_data_type_if-rust
 fb303_core fb303_core //fb303/thrift:fb303_core-rust
 megarepo_configs megarepo_configs //configerator/structs/scm/mononoke/megarepo:megarepo_configs-rust
-source_control crate //eden/mononoke/scs/if:source_control-rust",
+source_control crate //eden/mononoke/scs/if:source_control-rust
+thrift thrift //thrift/annotation:thrift-rust",
     ).expect("Failed to write cratemap");
 
     let conf = {
@@ -55,13 +56,9 @@ source_control crate //eden/mononoke/scs/if:source_control-rust",
             conf.options(options);
         }
 
-        let lib_include_srcs = vec![
-            
-        ];
         let types_include_srcs = vec![
             
         ];
-        conf.lib_include_srcs(lib_include_srcs);
         conf.types_include_srcs(types_include_srcs);
 
         conf

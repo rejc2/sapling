@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import type {ExecutionContext} from './serverTypes';
+import type {RepositoryContext} from './serverTypes';
 import type {AbsolutePath, MergeConflicts} from 'isl/src/types';
 
 import {isExecaError} from './utils';
@@ -46,7 +46,7 @@ export type ResolveCommandConflictOutput = [
 
 /** Run an sl command (without analytics). */
 export async function runCommand(
-  ctx: ExecutionContext,
+  ctx: RepositoryContext,
   args_: Array<string>,
   options_?: execa.Options,
   timeout: number = READ_COMMAND_TIMEOUT_MS,
@@ -80,6 +80,7 @@ export async function runCommand(
         throw new Error('Killed');
       }
     }
+    ctx.logger.error(`Error running ${command} ${args[0]}: ${err?.toString()}`);
     throw err;
   } finally {
     clearTimeout(timeoutId);
@@ -89,7 +90,7 @@ export async function runCommand(
 /**
  * Root of the repository where the .sl folder lives.
  * Throws only if `command` is invalid, so this check can double as validation of the `sl` command */
-export async function findRoot(ctx: ExecutionContext): Promise<AbsolutePath | undefined> {
+export async function findRoot(ctx: RepositoryContext): Promise<AbsolutePath | undefined> {
   try {
     return (await runCommand(ctx, ['root'])).stdout;
   } catch (error) {
@@ -108,7 +109,7 @@ export async function findRoot(ctx: ExecutionContext): Promise<AbsolutePath | un
   }
 }
 
-export async function findDotDir(ctx: ExecutionContext): Promise<AbsolutePath | undefined> {
+export async function findDotDir(ctx: RepositoryContext): Promise<AbsolutePath | undefined> {
   try {
     return (await runCommand(ctx, ['root', '--dotdir'])).stdout;
   } catch (error) {
@@ -124,7 +125,7 @@ export async function findDotDir(ctx: ExecutionContext): Promise<AbsolutePath | 
  * Errors are silenced.
  */
 export async function getConfigs<T extends string>(
-  ctx: ExecutionContext,
+  ctx: RepositoryContext,
   configNames: ReadonlyArray<T>,
 ): Promise<Map<T, string>> {
   if (configOverride !== undefined) {
@@ -141,6 +142,7 @@ export async function getConfigs<T extends string>(
   try {
     // config command does not support multiple configs yet, but supports multiple sections.
     // (such limitation makes sense for non-JSON output, which can be ambigious)
+    // TODO: Remove this once we can validate that OSS users are using a new enough Sapling version.
     const sections = new Set<string>(configNames.flatMap(name => name.split('.').at(0) ?? []));
     const result = await runCommand(ctx, ['config', '-Tjson'].concat([...sections]));
     const configs: [{name: T; value: string}] = JSON.parse(result.stdout);
@@ -156,7 +158,7 @@ export async function getConfigs<T extends string>(
 
 export type ConfigLevel = 'user' | 'system' | 'local';
 export async function setConfig(
-  ctx: ExecutionContext,
+  ctx: RepositoryContext,
   level: ConfigLevel,
   configName: string,
   configValue: string,
@@ -196,7 +198,7 @@ export function getExecParams(
     SL_AUTOMATION: 'true',
     // allow looking up diff numbers even in plain mode.
     // allow constructing the `.git/sl` repo regardless of the identity.
-    SL_AUTOMATION_EXCEPT: 'phrevset,sniff',
+    SL_AUTOMATION_EXCEPT: 'ghrevset,phrevset,sniff',
     // Prevent user-specified merge tools from attempting to
     // open interactive editors.
     HGMERGE: ':merge3',

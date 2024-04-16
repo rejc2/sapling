@@ -1,4 +1,7 @@
 #debugruntest-compatible
+
+#require no-eden
+
 # coding=utf-8
 
 # Copyright (c) Meta Platforms, Inc. and affiliates.
@@ -9,6 +12,7 @@
 
   $ configure modernclient
   $ setconfig devel.segmented-changelog-rev-compat=true
+  $ setconfig experimental.copytrace=on
 
   $ cat >> $HGRCPATH << 'EOF'
   > [extdiff]

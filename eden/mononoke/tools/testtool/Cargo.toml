@@ -13,10 +13,10 @@ blame = { version = "0.1.0", path = "../../derived_data/blame" }
 blobrepo = { version = "0.1.0", path = "../../blobrepo" }
 bonsai_hg_mapping = { version = "0.1.0", path = "../../bonsai_hg_mapping" }
 bookmarks = { version = "0.1.0", path = "../../bookmarks" }
-bytes = { version = "1.1", features = ["serde"] }
+bytes = { version = "1.6.0", features = ["serde"] }
 changeset_info = { version = "0.1.0", path = "../../derived_data/changeset_info" }
 changesets_creation = { version = "0.1.0", path = "../../changesets/changesets_creation" }
-clap = { version = "4.4.12", features = ["derive", "env", "string", "unicode", "wrap_help"] }
+clap = { version = "4.5.2", features = ["derive", "env", "string", "unicode", "wrap_help"] }
 context = { version = "0.1.0", path = "../../server/context" }
 deleted_manifest = { version = "0.1.0", path = "../../derived_data/deleted_manifest" }
 derived_data_manager = { version = "0.1.0", path = "../../derived_data/manager" }
@@ -26,7 +26,7 @@ fbinit = { version = "0.1.2", git = "https://github.com/facebookexperimental/rus
 filenodes_derivation = { version = "0.1.0", path = "../../derived_data/filenodes_derivation" }
 filestore = { version = "0.1.0", path = "../../filestore" }
 fsnodes = { version = "0.1.0", path = "../../derived_data/fsnodes" }
-futures = { version = "0.3.28", features = ["async-await", "compat"] }
+futures = { version = "0.3.30", features = ["async-await", "compat"] }
 mercurial_derivation = { version = "0.1.0", path = "../../derived_data/mercurial_derivation" }
 mononoke_app = { version = "0.1.0", path = "../../cmdlib/mononoke_app" }
 mononoke_types = { version = "0.1.0", path = "../../mononoke_types" }
@@ -39,6 +39,6 @@ skeleton_manifest = { version = "0.1.0", path = "../../derived_data/skeleton_man
 smallvec = { version = "1.6.1", features = ["serde", "specialization", "union"] }
 sorted_vector_map = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 tests_utils = { version = "0.1.0", path = "../../tests/utils" }
-tokio = { version = "1.29.1", features = ["full", "test-util", "tracing"] }
+tokio = { version = "1.36.0", features = ["full", "test-util", "tracing"] }
 topo_sort = { version = "0.1.0", path = "../../common/topo_sort" }
 unodes = { version = "0.1.0", path = "../../derived_data/unodes" }

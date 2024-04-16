@@ -18,6 +18,7 @@ import {DagCommitInfo} from '../dag/dagCommitInfo';
 import {t} from '../i18n';
 import {readAtom} from '../jotaiUtils';
 import {uncommittedChangesWithPreviews} from '../previews';
+import {authorString} from '../serverAPIState';
 import {Operation} from './Operation';
 
 export class CommitOperation extends Operation {
@@ -29,7 +30,7 @@ export class CommitOperation extends Operation {
    * @param filesPathsToCommit if provided, only these file paths will be included in the commit operation. If undefined, ALL uncommitted changes are included. Paths should be relative to repo root.
    */
   constructor(
-    private message: string,
+    public message: string,
     private originalHeadHash: Hash,
     private filesPathsToCommit?: Array<RepoRelativePath>,
   ) {
@@ -115,13 +116,14 @@ export class CommitOperation extends Operation {
     // and update bookmarks accordingly.
     const hash = `OPTIMISTIC_COMMIT_${base}`;
     const description = this.message.slice(title.length);
+    const author = readAtom(authorString);
     const info = DagCommitInfo.fromCommitInfo({
-      author: baseInfo?.author ?? '',
+      author: author ?? baseInfo?.author ?? '',
       description,
       title,
       bookmarks: [],
       remoteBookmarks: [],
-      isHead: true,
+      isDot: true,
       parents: [base],
       hash,
       phase: 'draft',
@@ -132,7 +134,7 @@ export class CommitOperation extends Operation {
 
     return dag.replaceWith([base, hash], (h, _c) => {
       if (h === base) {
-        return baseInfo?.set('isHead', false);
+        return baseInfo?.set('isDot', false);
       } else {
         return info;
       }
@@ -146,7 +148,7 @@ export class PartialCommitOperation extends Operation {
    * uses `debugimportstack` under the hood, to achieve `commit -i` effect.
    */
   constructor(
-    private message: string,
+    public message: string,
     private originalHeadHash: Hash,
     private selection: PartialSelection,
     // We need "selected" or "all" files since `selection` only tracks deselected files.

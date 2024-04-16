@@ -816,6 +816,7 @@ pub trait MegarepoOp {
         write_commit_remapping_state: bool,
         sync_config_version: SyncConfigVersion,
         message: Option<String>,
+        bookmark: String,
     ) -> Result<ChangesetId, MegarepoError> {
         // Now let's create a merge commit that merges all moved changesets
 
@@ -829,6 +830,7 @@ pub trait MegarepoOp {
                     .map(|(source, css)| (source.clone(), css.source))
                     .collect(),
                 sync_config_version.clone(),
+                Some(bookmark),
             ))
         } else {
             None
@@ -905,7 +907,11 @@ pub trait MegarepoOp {
 
         txn.create(&bookmark, cs_id, BookmarkUpdateReason::XRepoSync)?;
 
-        let success = txn.commit().await.map_err(MegarepoError::internal)?;
+        let success = txn
+            .commit()
+            .await
+            .map_err(MegarepoError::internal)?
+            .is_some();
         if !success {
             return Err(MegarepoError::internal(anyhow!(
                 "failed to create a bookmark, possibly because of race condition"
@@ -954,7 +960,11 @@ pub trait MegarepoOp {
             BookmarkUpdateReason::XRepoSync,
         )?;
 
-        let success = txn.commit().await.map_err(MegarepoError::internal)?;
+        let success = txn
+            .commit()
+            .await
+            .map_err(MegarepoError::internal)?
+            .is_some();
         if !success {
             return Err(MegarepoError::internal(anyhow!(
                 "failed to move a bookmark, possibly because of race condition"
@@ -983,7 +993,11 @@ pub trait MegarepoOp {
             }
         }
 
-        let success = txn.commit().await.map_err(MegarepoError::internal)?;
+        let success = txn
+            .commit()
+            .await
+            .map_err(MegarepoError::internal)?
+            .is_some();
         if !success {
             return Err(MegarepoError::internal(anyhow!(
                 "failed to move a bookmark, possibly because of race condition"

@@ -6,6 +6,7 @@
  */
 
 include "fb303/thrift/fb303_core.thrift"
+include "thrift/annotation/thrift.thrift"
 
 typedef binary ChangesetId
 /// The UTF-8 path of the file or directory.
@@ -66,6 +67,9 @@ struct PushrebaseOutcome {
 
   /// The old id where the bookmark was before the pushrebase operation.
   5: optional ChangesetId old_bookmark_value;
+
+  /// The id for the entry in the bookmark update log where the bookmark was written
+  6: optional i64 log_id;
 } (rust.exhaustive)
 
 struct LandChangesetsResponse {
@@ -78,10 +82,11 @@ struct PushrebaseConflicts {
 } (rust.exhaustive)
 
 safe permanent client exception PushrebaseConflictsException {
+  @thrift.ExceptionMessage
   1: string reason;
   /// Always non-empty
   2: list<PushrebaseConflicts> conflicts;
-} (message = "reason", rust.exhaustive)
+} (rust.exhaustive)
 
 struct HookRejection {
   /// The hook that rejected the output
@@ -100,16 +105,18 @@ struct HookOutcomeRejected {
 } (rust.exhaustive)
 
 safe stateful client exception HookRejectionsException {
+  @thrift.ExceptionMessage
   1: string reason;
   /// Always non-empty
   2: list<HookRejection> rejections;
-} (message = "reason", rust.exhaustive)
+} (rust.exhaustive)
 
 safe client exception InternalError {
+  @thrift.ExceptionMessage
   1: string reason;
   2: optional string backtrace;
   3: list<string> source_chain;
-} (message = "reason", rust.exhaustive)
+} (rust.exhaustive)
 
 service LandService extends fb303_core.BaseService {
   /// Land a stack of commits via land_changesets.

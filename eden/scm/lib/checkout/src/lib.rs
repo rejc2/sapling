@@ -22,9 +22,11 @@ use anyhow::bail;
 use anyhow::format_err;
 use anyhow::Error;
 use anyhow::Result;
+use async_runtime::block_on;
 use atexit::AtExit;
 use context::CoreContext;
 use crossbeam::channel;
+use dag::VertexName;
 #[cfg(windows)]
 use fs_err as fs;
 use manifest::FileMetadata;
@@ -41,6 +43,7 @@ use pathmatcher::UnionMatcher;
 use progress_model::ProgressBar;
 use progress_model::Registry;
 use repo::repo::Repo;
+use serde::Deserialize;
 use storemodel::FileStore;
 use tracing::debug;
 use tracing::instrument;
@@ -88,7 +91,8 @@ use status::Status;
 // Affects progress update frequency and thread count for small checkout.
 const VFS_BATCH_SIZE: usize = 128;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CheckoutMode {
     RevertConflicts,
     AbortIfConflicts,
@@ -890,7 +894,8 @@ fn truncate_u64(f: &str, path: &RepoPath, v: u64) -> i32 {
     truncated as i32
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "action", content = "maybe_bookmark")]
 pub enum BookmarkAction {
     // Don't touch active bookmark.
     None,
@@ -898,6 +903,19 @@ pub enum BookmarkAction {
     UnsetActive,
     // Update active bookmark if value is a valid bookmark, else unset active.
     SetActiveIfValid(String),
+}
+
+#[derive(PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportMode {
+    // No informational output.
+    Quiet,
+    // Report all file counts if any are greater than zero.
+    IfChanged,
+    // Always print message.
+    Always,
+    // Only report counts greater than zero.
+    Minimal,
 }
 
 #[instrument(skip_all)]
@@ -908,6 +926,7 @@ pub fn checkout(
     target_commit: HgId,
     bookmark_action: BookmarkAction,
     update_mode: CheckoutMode,
+    report_mode: ReportMode,
 ) -> Result<Option<(usize, usize)>> {
     if update_mode == CheckoutMode::MergeConflicts {
         unimplemented!("Rust checkout doesn't support merging files");
@@ -934,7 +953,22 @@ pub fn checkout(
         ]),
     )?;
 
+    if let Err(err) = prefetch_children(repo, &target_commit) {
+        tracing::warn!(target: "checkout::prefetch", ?err, "unexpected error prefetching lazy children");
+    }
+
     let source_commit = wc.first_parent()?;
+
+    if ctx
+        .config
+        .get_or("merge", "recordupdatedistance", || true)?
+    {
+        match update_distance(repo, &source_commit, &target_commit) {
+            Ok(update_distance) => tracing::info!(target: "update_size", update_distance),
+            Err(err) => tracing::warn!(?err, "error calculating update distance"),
+        }
+    }
+
     let stats = if repo.requirements.contains("eden") {
         #[cfg(feature = "eden")]
         {
@@ -980,15 +1014,44 @@ pub fn checkout(
         }
     };
 
+    if report_mode != ReportMode::Quiet {
+        if let Some((updated, removed)) = &stats {
+            let mut items = vec![
+                (*updated, "updated"),
+                (0, "merged"),
+                (*removed, "removed"),
+                (0, "unresolved"),
+            ];
+
+            if report_mode == ReportMode::Minimal {
+                items.retain(|(c, _)| *c > 0);
+            }
+
+            if report_mode == ReportMode::Always || items.iter().any(|(c, _)| *c > 0) {
+                ctx.logger.info(
+                    items
+                        .into_iter()
+                        .map(|(c, n)| format!("{c} files {n}"))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+            }
+        } else if report_mode == ReportMode::Always {
+            ctx.logger.info("update complete");
+        }
+    }
+
     if new_bookmark != current_bookmark {
-        match (&current_bookmark, &new_bookmark) {
-            // TODO: color bookmark name
-            (Some(old), Some(new)) => ctx
-                .logger
-                .info(format!("(changing active bookmark from {old} to {new})")),
-            (None, Some(new)) => ctx.logger.info(format!("(activating bookmark {new})")),
-            (Some(old), None) => ctx.logger.info(format!("(leaving bookmark {old})")),
-            (None, None) => {}
+        if report_mode != ReportMode::Quiet {
+            match (&current_bookmark, &new_bookmark) {
+                // TODO: color bookmark name
+                (Some(old), Some(new)) => ctx
+                    .logger
+                    .info(format!("(changing active bookmark from {old} to {new})")),
+                (None, Some(new)) => ctx.logger.info(format!("(activating bookmark {new})")),
+                (Some(old), None) => ctx.logger.info(format!("(leaving bookmark {old})")),
+                (None, None) => {}
+            }
         }
 
         wc.set_active_bookmark(new_bookmark)?;
@@ -1005,6 +1068,69 @@ pub fn checkout(
     state_change.mark_success();
 
     Ok(stats)
+}
+
+/// Prefetch lazy children of `node`. This makes it possible to "commit" offline.
+/// See D30004908 for context.
+fn prefetch_children(repo: &Repo, node: &HgId) -> Result<()> {
+    if !repo.store_requirements.contains("lazychangelog") {
+        tracing::debug!(target: "checkout::prefetch", "skip prefetch for non-lazychangelog");
+        return Ok(());
+    }
+
+    let vertex = VertexName::copy_from(node.as_ref());
+
+    let dag = repo.dag_commits()?;
+    let mut dag = dag.write();
+
+    let id = match block_on(dag.vertex_id_with_max_group(&vertex, dag::Group::MASTER))? {
+        None => {
+            tracing::debug!(target: "checkout::prefetch", "skip prefetch because {node} is not in master (lazy) group");
+            return Ok(());
+        }
+        Some(id) => id,
+    };
+
+    let id_dag = dag.id_dag_snapshot()?;
+    let id_children = id_dag.children(id.into())?;
+    let id_children: Vec<dag::Id> = id_children.iter_desc().collect();
+
+    // Prefetch children.
+    let children = block_on(dag.vertex_name_batch(&id_children))?
+        .into_iter()
+        .collect::<dag::Result<Vec<_>>>()?;
+
+    tracing::debug!(target: "checkout::prefetch", "children of {node}: {:?}", children);
+
+    block_on(dag.flush(&[]))?;
+
+    Ok(())
+}
+
+#[instrument(skip(repo))]
+fn update_distance(repo: &Repo, source: &HgId, dest: &HgId) -> Result<usize> {
+    let dag = repo.dag_commits()?;
+    let dag = dag.read();
+
+    let to_nameset = |id: &HgId| -> dag::NameSet {
+        if id.is_null() {
+            dag::NameSet::empty()
+        } else {
+            VertexName::copy_from(id.as_ref()).into()
+        }
+    };
+
+    let source = to_nameset(source);
+    let dest = to_nameset(dest);
+
+    block_on(async {
+        Ok(dag
+            .only(source.clone(), dest.clone())
+            .await?
+            .count()
+            .await?
+            + dag.only(dest, source).await?.count().await?)
+    })
 }
 
 fn file_type(vfs: &VFS, path: &RepoPath) -> FileType {
@@ -1229,6 +1355,8 @@ pub(crate) fn check_conflicts(
             .into_iter()
             .map(|c| c.to_owned()),
     );
+
+    conflicts.sort();
 
     if !conflicts.is_empty() {
         let limit = 5;

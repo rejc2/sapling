@@ -16,6 +16,7 @@ import {
   parseCommitMessageFields,
 } from './CommitInfoView/CommitMessageFields';
 import {Tooltip} from './Tooltip';
+import {Button} from './components/Button';
 import {T, t} from './i18n';
 import {readAtom, writeAtom} from './jotaiUtils';
 import {
@@ -23,11 +24,10 @@ import {
   FoldOperation,
   getFoldRangeCommitHash,
 } from './operations/FoldOperation';
+import {operationBeingPreviewed, useRunPreviewedOperation} from './operationsState';
 import {type Dag, dagWithPreviews} from './previews';
 import {selectedCommits} from './selection';
-import {operationBeingPreviewed, useRunPreviewedOperation} from './serverAPIState';
 import {firstOfIterable} from './utils';
-import {VSCodeButton} from '@vscode/webview-ui-toolkit/react';
 import {atom, useAtomValue} from 'jotai';
 import {useCallback} from 'react';
 import {Icon} from 'shared/Icon';
@@ -95,10 +95,10 @@ export function FoldButton({commit}: {commit?: CommitInfo}) {
   }
   return (
     <Tooltip title={t('Combine selected commits into one commit')}>
-      <VSCodeButton appearance="secondary" onClick={onClick}>
+      <Button onClick={onClick}>
         <Icon icon="fold" slot="start" />
         <T replace={{$count: foldable.length}}>Combine $count commits</T>
-      </VSCodeButton>
+      </Button>
     </Tooltip>
   );
 }
@@ -121,7 +121,7 @@ export function updateFoldedMessageWithEditedMessage(): FoldOperation | undefine
     }
 
     const old = parseCommitMessageFields(schema, existingTitle, existingMessage);
-    const message = editedMessage == null ? old : applyEditedFields(old, editedMessage.fields);
+    const message = editedMessage == null ? old : applyEditedFields(old, editedMessage);
 
     const newMessage = commitMessageFieldsToString(schema, message);
 

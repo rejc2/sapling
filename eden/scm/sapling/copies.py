@@ -35,7 +35,28 @@ def _findlimit(repo, a, b):
 
 
 def _chain(src, dst, a, b):
-    """chain two sets of copies a->b"""
+    """chain two sets of copies a->b
+
+    Assuming we have a commit graph like below::
+
+        dst src
+         | /
+         |/
+        base
+
+    then:
+
+    * `a` is a dict from `base` to `src`
+    * `b` is a dict from `dst` to `base`
+
+    This function returns a dict from `dst` to `src`.
+
+    For example:
+    * a is {"a": "x"}  # src rename a -> x
+    * b is {"y": "a"}  # dst rename a -> y
+
+    then the result will be {"y": "x"}
+    """
     t = a.copy()
     for k, v in pycompat.iteritems(b):
         if v in t:
@@ -147,9 +168,6 @@ def _forwardcopies(a, b, match=None):
 
 
 def _backwardrenames(a, b):
-    if a._repo.ui.config("experimental", "copytrace") == "off":
-        return {}
-
     # Even though we're not taking copies into account, 1:n rename situations
     # can still exist (e.g. hg cp a b; hg mv a c). In those cases we
     # arbitrarily pick one of the renames.
@@ -178,11 +196,6 @@ def _gitfindcopies(repo, oldnode, newnode):
 
 def pathcopies(x, y, match=None):
     """find {dst@y: src@x} copy mapping for directed compare"""
-    from . import eagerepo
-
-    if eagerepo.iseagerepo(x.repo()):
-        return _naivecopies(x, y, match)
-
     # we use git2 Rust library to do the actual work for git repo.
     if git.isgitformat(x.repo()):
         return _gitfindcopies(x.repo(), x.node(), y.node())
@@ -195,32 +208,6 @@ def pathcopies(x, y, match=None):
     if a == y:
         return _backwardrenames(x, y)
     return _chain(x, y, _backwardrenames(x, a), _forwardcopies(a, y, match=match))
-
-
-# Only handles special case of copies between parent and child,
-# optionally w/ wctx as well.
-def _naivecopies(x, y, match=None):
-    wctx = None
-    if y.rev() is None:
-        wctx = y
-        y = y.p1()
-
-    if y.p1() != x or y.p2().node() != node.nullid:
-        return {}
-
-    copies = {}
-    for f in y.files():
-        if match and not match(f):
-            continue
-        if f in y:
-            rename = y[f].renamed()
-            if rename:
-                copies[f] = rename[0]
-
-    if wctx:
-        copies = _chain(x, wctx, copies, _dirstatecopies(wctx.repo().dirstate, match))
-
-    return copies
 
 
 def _computenonoverlap(repo, c1, c2, addedinm1, addedinm2, baselabel=""):
@@ -403,6 +390,9 @@ def _fullcopytracing(repo, c1, c2, base):
     This is pretty slow when a lot of changesets are involved but will track all
     the copies.
     """
+    if git.isgitformat(repo):
+        return {}, {}, {}, {}, {}
+
     # In certain scenarios (e.g. graft, update or rebase), base can be
     # overridden We still need to know a real common ancestor in this case We
     # can't just compute _c1.ancestor(_c2) and compare it to ca, because there

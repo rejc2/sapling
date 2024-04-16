@@ -10,6 +10,7 @@
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
+use anyhow::anyhow;
 use anyhow::Error;
 use anyhow::Result;
 use cxx::SharedPtr;
@@ -21,6 +22,27 @@ use crate::backingstore::BackingStore;
 
 #[cxx::bridge(namespace = sapling)]
 pub(crate) mod ffi {
+    // see https://cxx.rs/shared.html#extern-enums
+    #[namespace = "facebook::eden"]
+    #[repr(u8)]
+    pub enum FetchCause {
+        Unknown,
+        // The request originated from FUSE/NFS/PrjFS
+        Fs,
+        // The request originated from a Thrift endpoint
+        Thrift,
+        // The request originated from a Thrift prefetch endpoint
+        Prefetch,
+    }
+
+    #[namespace = "facebook::eden"]
+    unsafe extern "C++" {
+        include!("eden/fs/store/ObjectFetchContext.h");
+
+        // The above enum
+        type FetchCause;
+    }
+
     pub struct SaplingNativeBackingStoreOptions {
         allow_retries: bool,
     }
@@ -33,6 +55,10 @@ pub(crate) mod ffi {
         LocalOnly,
         /// The fetch is only hits remote servers.
         RemoteOnly,
+        /// The fetch may hit remote servers and should prefetch optional data. For trees,
+        /// this means request optional child metadata. This will not trigger a remote child
+        /// metadata fetch if the tree is already available locally.
+        AllowRemotePrefetch,
     }
 
     #[repr(u8)]
@@ -61,6 +87,9 @@ pub(crate) mod ffi {
 
     pub struct Request {
         node: *const u8,
+        cause: FetchCause,
+        // TODO: mode: FetchMode
+        // TODO: cri: ClientRequestInfo
     }
 
     pub struct Blob {
@@ -167,6 +196,7 @@ impl From<ffi::FetchMode> for FetchMode {
     fn from(fetch_mode: ffi::FetchMode) -> Self {
         match fetch_mode {
             ffi::FetchMode::AllowRemote => FetchMode::AllowRemote,
+            ffi::FetchMode::AllowRemotePrefetch => FetchMode::AllowRemotePrefetch,
             ffi::FetchMode::RemoteOnly => FetchMode::RemoteOnly,
             ffi::FetchMode::LocalOnly => FetchMode::LocalOnly,
             _ => panic!("unknown fetch mode"),
@@ -181,7 +211,8 @@ pub unsafe fn sapling_backingstore_new(
     super::init::backingstore_global_init();
 
     let repo = CStr::from_ptr(repository.as_ptr()).to_str()?;
-    let store = BackingStore::new(repo, options.allow_retries)?;
+    let store =
+        BackingStore::new(repo, options.allow_retries).map_err(|err| anyhow!("{:?}", err))?;
     Ok(Box::new(store))
 }
 

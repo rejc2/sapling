@@ -14,33 +14,30 @@ import {confirmShouldSubmitEnabledAtom} from './ConfirmSubmitStack';
 import {DropdownField, DropdownFields} from './DropdownFields';
 import {useShowKeyboardShortcutsHelp} from './ISLShortcuts';
 import {Kbd} from './Kbd';
+import {Link} from './Link';
 import {RestackBehaviorSetting} from './RestackBehavior';
 import {Subtle} from './Subtle';
 import {Tooltip} from './Tooltip';
 import {codeReviewProvider} from './codeReview/CodeReviewInfo';
 import {showDiffNumberConfig} from './codeReview/DiffBadge';
 import {SubmitAsDraftCheckbox} from './codeReview/DraftCheckbox';
+import {Button} from './components/Button';
+import {Checkbox} from './components/Checkbox';
+import {Dropdown} from './components/Dropdown';
 import {debugToolsEnabledState} from './debug/DebugToolsState';
 import {t, T} from './i18n';
 import {configBackedAtom} from './jotaiUtils';
 import {SetConfigOperation} from './operations/SetConfigOperation';
+import {useRunOperation} from './operationsState';
 import platform from './platform';
 import {renderCompactAtom, useZoomShortcut, zoomUISettingAtom} from './responsive';
-import {repositoryInfo, useRunOperation} from './serverAPIState';
+import {repositoryInfo} from './serverAPIState';
 import {useThemeShortcut, themeState} from './theme';
-import {
-  VSCodeButton,
-  VSCodeCheckbox,
-  VSCodeDropdown,
-  VSCodeLink,
-  VSCodeOption,
-} from '@vscode/webview-ui-toolkit/react';
 import {useAtom, useAtomValue} from 'jotai';
 import {Icon} from 'shared/Icon';
 import {KeyCode, Modifier} from 'shared/KeyboardShortcuts';
-import {tryJsonParse, unwrap} from 'shared/utils';
+import {tryJsonParse, nullthrows} from 'shared/utils';
 
-import './VSCodeDropdown.css';
 import './SettingsTooltip.css';
 
 export function SettingsGearButton() {
@@ -55,9 +52,9 @@ export function SettingsGearButton() {
       )}
       group="topbar"
       placement="bottom">
-      <VSCodeButton appearance="icon" data-testid="settings-gear-button">
+      <Button icon data-testid="settings-gear-button">
         <Icon icon="gear" />
-      </VSCodeButton>
+      </Button>
     </Tooltip>
   );
 }
@@ -75,8 +72,9 @@ function SettingsDropdown({
   const [showDiffNumber, setShowDiffNumber] = useAtom(showDiffNumberConfig);
   return (
     <DropdownFields title={<T>Settings</T>} icon="gear" data-testid="settings-dropdown">
-      <VSCodeButton
-        appearance="icon"
+      <Button
+        style={{justifyContent: 'center', gap: 0}}
+        icon
         onClick={() => {
           dismiss();
           showShortcutsHelp();
@@ -87,23 +85,19 @@ function SettingsDropdown({
           }}>
           View Keyboard Shortcuts - $shortcut
         </T>
-      </VSCodeButton>
+      </Button>
       {platform.theme != null ? null : (
         <Setting title={<T>Theme</T>}>
-          <VSCodeDropdown
+          <Dropdown
+            options={
+              [
+                {value: 'light', name: 'Light'},
+                {value: 'dark', name: 'Dark'},
+              ] as Array<{value: ThemeColor; name: string}>
+            }
             value={theme}
-            onChange={event =>
-              setTheme(
-                (event as React.FormEvent<HTMLSelectElement>).currentTarget.value as ThemeColor,
-              )
-            }>
-            <VSCodeOption value="dark">
-              <T>Dark</T>
-            </VSCodeOption>
-            <VSCodeOption value="light">
-              <T>Light</T>
-            </VSCodeOption>
-          </VSCodeDropdown>
+            onChange={event => setTheme(event.currentTarget.value as ThemeColor)}
+          />
           <div style={{marginTop: 'var(--pad)'}}>
             <Subtle>
               <T>Toggle: </T>
@@ -126,9 +120,7 @@ function SettingsDropdown({
       {/* <Setting
         title={<T>Language</T>}
         description={<T>Locale for translations used in the UI. Currently only en supported.</T>}>
-        <VSCodeDropdown value="en" disabled>
-          <VSCodeOption value="en">en</VSCodeOption>
-        </VSCodeDropdown>
+        <Dropdown value="en" options=['en'] />
       </Setting> */}
       {repoInfo?.type !== 'success' ? (
         <Icon icon="loading" />
@@ -138,15 +130,20 @@ function SettingsDropdown({
           description={
             <>
               <T>Which command to use to submit code for code review on GitHub.</T>{' '}
-              <VSCodeLink
-                href="https://sapling-scm.com/docs/git/intro#pull-requests"
-                target="_blank">
-                <T>Learn More.</T>
-              </VSCodeLink>
+              <Link href="https://sapling-scm.com/docs/git/intro#pull-requests">
+                <T>Learn More</T>
+              </Link>
             </>
           }>
-          <VSCodeDropdown
+          <Dropdown
             value={repoInfo.preferredSubmitCommand ?? 'not set'}
+            options={(repoInfo.preferredSubmitCommand == null
+              ? [{value: 'not set', name: '(not set)'}]
+              : []
+            ).concat([
+              {value: 'ghstack', name: 'sl ghstack'},
+              {value: 'pr', name: 'sl pr'},
+            ])}
             onChange={event => {
               const value = (event as React.FormEvent<HTMLSelectElement>).currentTarget.value as
                 | PreferredSubmitCommand
@@ -158,25 +155,20 @@ function SettingsDropdown({
               runOperation(
                 new SetConfigOperation('local', 'github.preferred_submit_command', value),
               );
-              setRepoInfo(info => ({...unwrap(info), preferredSubmitCommand: value}));
-            }}>
-            {repoInfo.preferredSubmitCommand == null ? (
-              <VSCodeOption value={'not set'}>(not set)</VSCodeOption>
-            ) : null}
-            <VSCodeOption value="ghstack">sl ghstack</VSCodeOption>
-            <VSCodeOption value="pr">sl pr</VSCodeOption>
-          </VSCodeDropdown>
+              setRepoInfo(info => ({...nullthrows(info), preferredSubmitCommand: value}));
+            }}
+          />
         </Setting>
       ) : null}
       <Setting title={<T>Code Review</T>}>
         <div className="multiple-settings">
-          <VSCodeCheckbox
+          <Checkbox
             checked={showDiffNumber}
-            onChange={e => {
-              setShowDiffNumber((e.target as HTMLInputElement).checked);
+            onChange={checked => {
+              setShowDiffNumber(checked);
             }}>
             <T>Show copyable Diff / Pull Request numbers inline for each commit</T>
-          </VSCodeCheckbox>
+          </Checkbox>
           <ConfirmSubmitStackSetting />
           <SubmitAsDraftCheckbox forceShow />
         </div>
@@ -204,13 +196,13 @@ function ConfirmSubmitStackSetting() {
           'If false, no confirmation is shown and it will submit as draft if you previously ' +
           'checked the submit as draft checkbox.',
       )}>
-      <VSCodeCheckbox
+      <Checkbox
         checked={value}
-        onChange={e => {
-          setValue((e.target as HTMLInputElement).checked);
+        onChange={checked => {
+          setValue(checked);
         }}>
         <T>Show confirmation when submitting a stack</T>
-      </VSCodeCheckbox>
+      </Checkbox>
     </Tooltip>
   );
 }
@@ -223,13 +215,13 @@ function RenderCompactSetting() {
         'Render commits in the tree more compactly, by reducing spacing and not wrapping Diff info to multiple lines. ' +
           'May require more horizontal scrolling.',
       )}>
-      <VSCodeCheckbox
+      <Checkbox
         checked={value}
-        onChange={e => {
-          setValue((e.target as HTMLInputElement).checked);
+        onChange={checked => {
+          setValue(checked);
         }}>
         <T>Compact Mode</T>
-      </VSCodeCheckbox>
+      </Checkbox>
     </Tooltip>
   );
 }
@@ -283,54 +275,51 @@ function ZoomUISetting() {
   return (
     <div className="zoom-setting">
       <Tooltip title={t('Decrease UI Zoom')}>
-        <VSCodeButton
-          className="zoom-out"
-          appearance="icon"
+        <Button
+          icon
           onClick={() => {
             setZoom(roundToPercent(zoom - 0.1));
           }}>
           <Icon icon="zoom-out" />
-        </VSCodeButton>
+        </Button>
       </Tooltip>
       <span>{`${Math.round(100 * zoom)}%`}</span>
       <Tooltip title={t('Increase UI Zoom')}>
-        <VSCodeButton
-          className="zoom-in"
-          appearance="icon"
+        <Button
+          icon
           onClick={() => {
             setZoom(roundToPercent(zoom + 0.1));
           }}>
           <Icon icon="zoom-in" />
-        </VSCodeButton>
+        </Button>
       </Tooltip>
       <div style={{width: '20px'}} />
       <label>
         <T>Presets:</T>
       </label>
-      <VSCodeButton
-        className="zoom-80"
-        appearance="icon"
+      <Button
+        style={{fontSize: '80%'}}
+        icon
         onClick={() => {
           setZoom(0.8);
         }}>
         <T>Small</T>
-      </VSCodeButton>
-      <VSCodeButton
-        className="zoom-100"
-        appearance="icon"
+      </Button>
+      <Button
+        icon
         onClick={() => {
           setZoom(1.0);
         }}>
         <T>Normal</T>
-      </VSCodeButton>
-      <VSCodeButton
-        className="zoom-120"
-        appearance="icon"
+      </Button>
+      <Button
+        style={{fontSize: '120%'}}
+        icon
         onClick={() => {
           setZoom(1.2);
         }}>
         <T>Large</T>
-      </VSCodeButton>
+      </Button>
     </div>
   );
 }
@@ -340,13 +329,13 @@ function DebugToolsField() {
 
   return (
     <DropdownField title={t('Debug Tools')}>
-      <VSCodeCheckbox
+      <Checkbox
         checked={isDebug}
-        onChange={e => {
-          setIsDebug((e.target as HTMLInputElement).checked);
+        onChange={checked => {
+          setIsDebug(checked);
         }}>
         <T>Enable Debug Tools</T>
-      </VSCodeCheckbox>
+      </Checkbox>
     </DropdownField>
   );
 }

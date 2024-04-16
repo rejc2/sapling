@@ -1,4 +1,5 @@
-#require fsmonitor
+#debugruntest-compatible
+#require fsmonitor no-eden
 
   $ configure modernclient
   $ newclientrepo repo

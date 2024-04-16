@@ -19,8 +19,7 @@ import {
   expectMessageNOTSentToServer,
 } from '../testUtils';
 import {leftPad} from '../utils';
-import {fireEvent, render, screen, waitFor} from '@testing-library/react';
-import {act} from 'react-dom/test-utils';
+import {fireEvent, render, screen, waitFor, act} from '@testing-library/react';
 
 function makeFiles(n: number): Array<ChangedFile> {
   return new Array(n)
@@ -41,7 +40,7 @@ describe('ChangedFilesWithFetching', () => {
       });
       simulateCommits({
         value: [
-          COMMIT('1', 'some public base', '0', {phase: 'public', isHead: true}),
+          COMMIT('1', 'some public base', '0', {phase: 'public', isDot: true}),
           COMMIT('a', 'My Commit', '1', {
             totalFileCount: 2,
             filesSample: [

@@ -5,16 +5,21 @@
  * GNU General Public License version 2.
  */
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use dag::DagAlgorithm;
+use dag::Vertex;
 use hg_metrics::increment_counter;
+use manifest::DiffType;
 use manifest::Manifest;
 use manifest_tree::TreeManifest;
 use manifest_tree::TreeStore;
 use pathhistory::RenameTracer;
+use pathmatcher::AlwaysMatcher;
+use pathmatcher::Matcher;
 use storemodel::ReadRootTreeIds;
 use types::HgId;
 use types::RepoPath;
@@ -57,7 +62,7 @@ impl DagCopyTrace {
         Ok(dag_copy_trace)
     }
 
-    async fn vertex_to_tree_manifest(&self, commit: &dag::Vertex) -> Result<TreeManifest> {
+    async fn vertex_to_tree_manifest(&self, commit: &Vertex) -> Result<TreeManifest> {
         let commit_id = HgId::from_slice(commit.as_ref())?;
         let commit_to_tree_id = self
             .root_tree_reader
@@ -72,10 +77,10 @@ impl DagCopyTrace {
 
     async fn trace_rename_commit(
         &self,
-        src: dag::Vertex,
-        dst: dag::Vertex,
+        src: Vertex,
+        dst: Vertex,
         path: RepoPathBuf,
-    ) -> Result<Option<dag::Vertex>> {
+    ) -> Result<Option<Vertex>> {
         let set = self.dag.range(src.into(), dst.into()).await?;
         let mut rename_tracer = RenameTracer::new(
             set,
@@ -88,12 +93,12 @@ impl DagCopyTrace {
         Ok(rename_commit)
     }
 
-    async fn find_renames_in_direction(
+    async fn find_rename_in_direction(
         &self,
-        commit: dag::Vertex,
+        commit: Vertex,
         path: &RepoPath,
         direction: SearchDirection,
-    ) -> Result<(Option<RepoPathBuf>, dag::Vertex)> {
+    ) -> Result<(Option<RepoPathBuf>, Vertex)> {
         let parents = self.dag.parent_names(commit.clone()).await?;
         if parents.is_empty() {
             return Err(CopyTraceError::NoParents(commit).into());
@@ -121,11 +126,7 @@ impl DagCopyTrace {
         Ok((rename, next_commit))
     }
 
-    async fn check_path(
-        &self,
-        target_commit: &dag::Vertex,
-        path: RepoPathBuf,
-    ) -> Result<TraceResult> {
+    async fn check_path(&self, target_commit: &Vertex, path: RepoPathBuf) -> Result<TraceResult> {
         let tree = self.vertex_to_tree_manifest(target_commit).await?;
         if tree.get(&path)?.is_some() {
             Ok(TraceResult::Renamed(path))
@@ -139,8 +140,8 @@ impl DagCopyTrace {
 impl CopyTrace for DagCopyTrace {
     async fn trace_rename(
         &self,
-        src: dag::Vertex,
-        dst: dag::Vertex,
+        src: Vertex,
+        dst: Vertex,
         src_path: RepoPathBuf,
     ) -> Result<TraceResult> {
         tracing::debug!(?src, ?dst, ?src_path, "trace_reanme");
@@ -182,8 +183,8 @@ impl CopyTrace for DagCopyTrace {
 
     async fn trace_rename_backward(
         &self,
-        src: dag::Vertex,
-        dst: dag::Vertex,
+        src: Vertex,
+        dst: Vertex,
         dst_path: RepoPathBuf,
     ) -> Result<TraceResult> {
         tracing::trace!(?src, ?dst, ?dst_path, "trace_rename_backward");
@@ -204,7 +205,7 @@ impl CopyTrace for DagCopyTrace {
                 return Ok(TraceResult::Renamed(curr_path));
             }
             let (next_path, next_commit) = self
-                .find_renames_in_direction(
+                .find_rename_in_direction(
                     rename_commit.clone(),
                     curr_path.as_repo_path(),
                     SearchDirection::Backward,
@@ -222,8 +223,8 @@ impl CopyTrace for DagCopyTrace {
 
     async fn trace_rename_forward(
         &self,
-        src: dag::Vertex,
-        dst: dag::Vertex,
+        src: Vertex,
+        dst: Vertex,
         src_path: RepoPathBuf,
     ) -> Result<TraceResult> {
         tracing::trace!(?src, ?dst, ?src_path, "trace_rename_forward");
@@ -244,7 +245,7 @@ impl CopyTrace for DagCopyTrace {
                 return Ok(TraceResult::Renamed(curr_path));
             }
             let (next_path, next_commit) = self
-                .find_renames_in_direction(
+                .find_rename_in_direction(
                     rename_commit.clone(),
                     curr_path.as_repo_path(),
                     SearchDirection::Forward,
@@ -259,4 +260,46 @@ impl CopyTrace for DagCopyTrace {
             }
         }
     }
+
+    /// find {x@dst: y@src} copy mapping for directed compare
+    async fn path_copies(
+        &self,
+        src: Vertex,
+        dst: Vertex,
+        matcher: Option<Arc<dyn Matcher + Send + Sync>>,
+    ) -> Result<HashMap<RepoPathBuf, RepoPathBuf>> {
+        // todo(zhaolong): optimize dst.p1() == src case
+        let msrc = self.vertex_to_tree_manifest(&src).await?;
+        let mdst = self.vertex_to_tree_manifest(&dst).await?;
+        let missing = compute_missing_files(&msrc, &mdst, matcher)?;
+
+        let mut result = HashMap::new();
+        for dst_path in missing {
+            let src_path = self
+                .trace_rename(dst.clone(), src.clone(), dst_path.clone())
+                .await?;
+            if let TraceResult::Renamed(src_path) = src_path {
+                result.insert(dst_path, src_path);
+            }
+        }
+
+        Ok(result)
+    }
+}
+
+fn compute_missing_files(
+    msrc: &TreeManifest,
+    mdst: &TreeManifest,
+    matcher: Option<Arc<dyn Matcher + Send + Sync>>,
+) -> Result<Vec<RepoPathBuf>> {
+    let mut missing = Vec::new();
+    let matcher = matcher.unwrap_or_else(|| Arc::new(AlwaysMatcher::new()));
+    let diff_entries = mdst.diff(msrc, &matcher)?;
+    for entry in diff_entries {
+        let entry = entry?;
+        if let DiffType::LeftOnly(_) = entry.diff_type {
+            missing.push(entry.path);
+        }
+    }
+    Ok(missing)
 }

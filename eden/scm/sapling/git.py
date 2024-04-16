@@ -36,6 +36,9 @@ GIT_STORE_REQUIREMENT = "git-store"
 # Should be set if git-store is set.
 GIT_FORMAT_REQUIREMENT = "git"
 
+# Whether to be compatibile with `.git/`.
+DOTGIT_REQUIREMENT = "dotgit"
+
 
 class GitCommandError(error.Abort):
     def __init__(self, git_command, git_exitcode, git_output, **kwargs):
@@ -83,7 +86,7 @@ def isgitpeer(repo):
 def createrepo(ui, url, destpath):
     from . import hg
 
-    repo_config = "%include builtin:git.rc\n"
+    repo_config = ""
     if url:
         repo_config += "\n[paths]\ndefault = %s\n" % url
 
@@ -132,7 +135,7 @@ def clone(ui, url, destpath=None, update=True, pullnames=None):
             ret = initgitbare(ui, repo.svfs.join("git"))
             if ret != 0:
                 raise error.Abort(_("git clone was not successful"))
-            initgit(repo, "git", url)
+            repo = initgit(repo, "git", url)
             if url:
                 if pullnames is None:
                     ls_remote_args = ["ls-remote", "--symref", url, "HEAD"]
@@ -257,8 +260,12 @@ def initgit(repo, gitdir, giturl=None):
         repo.storerequirements.add(GIT_FORMAT_REQUIREMENT)
         repo.storerequirements.add(GIT_STORE_REQUIREMENT)
         repo._writestorerequirements()
-        repo.invalidatechangelog()
-        visibility.add(repo, repo.changelog.dageval(lambda: heads(all())))
+    # recreate the repo to pick up key changes
+    from . import hg
+
+    repo = hg.repository(repo.baseui, repo.root).local()
+    visibility.add(repo, repo.changelog.dageval(lambda: heads(all())))
+    return repo
 
 
 def maybegiturl(url):
@@ -322,7 +329,9 @@ def initgitbare(ui, destpath):
 @cached
 def readgitdir(repo):
     """Return the path of the GIT_DIR, if the repo is backed by git"""
-    if isgitstore(repo):
+    if DOTGIT_REQUIREMENT in repo.requirements:
+        return repo.wvfs.join(".git")
+    elif isgitstore(repo):
         path = repo.svfs.readutf8(GIT_DIR_FILE)
         if os.path.isabs(path):
             return path
@@ -851,18 +860,25 @@ class Submodule:
     def pullnode(self, repo, node):
         """fetch a commit on demand, prepare for checkout"""
         if node not in repo:
-            repo.ui.status(_("pulling submodule %s\n") % self.nestedpath)
-            # Write a remote bookmark to mark node public
-            with repo.ui.configoverride({("ui", "quiet"): "true"}):
-                refspec = "+%s:refs/remotes/parent/%s" % (
-                    hex(node),
-                    # Avoids conflicts like gflags/ and gflags/doc sharing a
-                    # same backing repo. (Git does not allow one reference
-                    # "gflags" to be a prefix of another reference
-                    # "gflags/doc").
-                    self.nestedpath.replace("_", "__").replace("/", "_"),
-                )
-                pullrefspecs(repo, self.url, [refspec])
+            self._pullraw(repo, hex(node))
+
+    def pullhead(self, repo):
+        self._pullraw(repo, "HEAD")
+
+    def _pullraw(self, repo, refspec_lhs):
+        repo.ui.status(_("pulling submodule %s\n") % self.nestedpath)
+        # Write a remote bookmark to mark node public
+        quiet = repo.ui.configbool("experimental", "submodule-pull-quiet", True)
+        with repo.ui.configoverride({("ui", "quiet"): str(quiet)}):
+            refspec = "+%s:refs/remotes/parent/%s" % (
+                refspec_lhs,
+                # Avoids conflicts like gflags/ and gflags/doc sharing a
+                # same backing repo. (Git does not allow one reference
+                # "gflags" to be a prefix of another reference
+                # "gflags/doc").
+                self.nestedpath.replace("_", "__").replace("/", "_"),
+            )
+            pullrefspecs(repo, self.url, [refspec])
 
     def checkout(self, node, force=False):
         """checkout a commit in working copy"""
@@ -872,13 +888,25 @@ class Submodule:
         if not force and self.workingparentnode() == node:
             return
 
-        repo = self.backingrepo
+        repo = self.workingcopyrepo
+
         self.pullnode(repo, node)
         # Skip if the commit is already checked out, unless force is set.
         if not force and repo["."].node() == node:
             return
 
-        repo = self.workingcopyrepo
+        if node not in repo:
+            # `node` does not exist after pull. Try to pull "HEAD" as a mitigation.
+            # NOTE: See `man gitmodules`. If "branch" is specified, then this
+            # should probably pull the specified branch instead.
+            self.pullhead(repo)
+            # Track whether pullhead fixed the issue.
+            fixed = node in repo
+            repo.ui.log(
+                "features",
+                feature="submodule-pullhead",
+                message=f"fixed: {fixed} node: {hex(node)} submod: {repr(self)}",
+            )
 
         # Run checkout
         from . import hg

@@ -99,7 +99,7 @@ def _generate_manifest_impl(ctx):
     out = ctx.actions.declare_output(ctx.attrs.filename)
     ctx.actions.run(
         [ctx.attrs.generator[native.RunInfo], out.as_output()] + list(ctx.attrs.env.keys()),
-        env = {k: native.cmd_args(v).ignore_artifacts() for (k, v) in ctx.attrs.env.items()},
+        env = {k: native.cmd_args(v, ignore_artifacts = True) for (k, v) in ctx.attrs.env.items()},
         category = "manifest",
         identifier = ctx.attrs.filename,
     )
@@ -253,6 +253,8 @@ def _dott_test(name, dott_files, deps, use_mysql = False, disable_all_network_ac
             "scm/mononoke/mysql/xdb.mononoke_mutation",
             "--mysql-schema",
             "scm/mononoke/mysql/xdb.mononoke_blobstore_wal_queue",
+            "--mysql-schema",
+            "scm/commitcloud/xdb.commit_cloud_legacy_tests",
         ])
 
     env = {

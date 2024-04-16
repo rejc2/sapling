@@ -4,6 +4,8 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2.
 
+# pyre-unsafe
+
 import abc
 import configparser
 import itertools
@@ -120,6 +122,7 @@ class EdenHgTestCase(testcase.EdenTestCase, metaclass=abc.ABCMeta):
             init_configs = ["experimental.windows-symlinks=True"]
         else:
             init_configs = []
+        init_configs.append("format.use-segmented-changelog=true")
         hgrc = self.get_hgrc()
         repo = self.create_hg_repo("main", hgrc=hgrc, init_configs=init_configs)
         self.populate_backing_repo(repo)

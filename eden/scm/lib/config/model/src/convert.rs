@@ -5,6 +5,7 @@
  * GNU General Public License version 2.
  */
 
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -119,6 +120,12 @@ impl FromConfigValue for String {
     }
 }
 
+impl FromConfigValue for Cow<'_, str> {
+    fn try_from_str(s: &str) -> Result<Self> {
+        Ok(Cow::Owned(s.to_string()))
+    }
+}
+
 /// Byte count specified with a unit. For example: `1.5 MB`.
 #[derive(Copy, Clone, Default)]
 pub struct ByteCount(u64);
@@ -191,6 +198,12 @@ impl<T: FromConfigValue> FromConfigValue for Vec<T> {
     fn try_from_str(s: &str) -> Result<Self> {
         let items = parse_list(s);
         items.into_iter().map(|s| T::try_from_str(&s)).collect()
+    }
+}
+
+impl FromConfigValue for Vec<Text> {
+    fn try_from_str(s: &str) -> Result<Self> {
+        Ok(parse_list(s))
     }
 }
 

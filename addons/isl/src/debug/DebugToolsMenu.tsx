@@ -9,7 +9,6 @@ import type {Heartbeat} from '../heartbeat';
 import type {ReactNode} from 'react';
 import type {ExclusiveOr} from 'shared/typeUtils';
 
-import {holdingAltAtom} from '../ChangedFile';
 import {debugLogMessageTraffic} from '../ClientToServerAPI';
 import {Row} from '../ComponentUtils';
 import {DropdownField, DropdownFields} from '../DropdownFields';
@@ -18,11 +17,14 @@ import messageBus from '../MessageBus';
 import {Subtle} from '../Subtle';
 import {Tooltip} from '../Tooltip';
 import {enableReactTools, enableReduxTools} from '../atoms/debugToolAtoms';
+import {holdingCtrlAtom} from '../atoms/keyboardAtoms';
+import {Badge} from '../components/Badge';
 import {DagCommitInfo} from '../dag/dagCommitInfo';
 import {useHeartbeat} from '../heartbeat';
 import {t, T} from '../i18n';
-import {atomWithOnChange, readAtom} from '../jotaiUtils';
+import {atomWithOnChange} from '../jotaiUtils';
 import {NopOperation} from '../operations/NopOperation';
+import {useRunOperation} from '../operationsState';
 import platform from '../platform';
 import {dagWithPreviews} from '../previews';
 import {RelativeDate} from '../relativeDate';
@@ -31,13 +33,14 @@ import {
   latestUncommittedChangesData,
   mergeConflicts,
   repositoryInfo,
-  useRunOperation,
 } from '../serverAPIState';
 import {useShowToast} from '../toast';
+import {colors} from '../tokens.stylex';
 import {isDev} from '../utils';
 import {ComponentExplorerButton} from './ComponentExplorer';
 import {readInterestingAtoms, serializeAtomsState} from './getInterestingAtoms';
-import {VSCodeBadge, VSCodeButton, VSCodeCheckbox} from '@vscode/webview-ui-toolkit/react';
+import * as stylex from '@stylexjs/stylex';
+import {VSCodeButton, VSCodeCheckbox} from '@vscode/webview-ui-toolkit/react';
 import {atom, useAtom, useAtomValue} from 'jotai';
 import {useState, useCallback, useEffect} from 'react';
 
@@ -84,14 +87,14 @@ export default function DebugToolsMenu({dismiss}: {dismiss: () => unknown}) {
 function InternalState() {
   const [reduxTools, setReduxTools] = useAtom(enableReduxTools);
   const [reactTools, setReactTools] = useAtom(enableReactTools);
+  const needSerialize = useAtomValue(holdingCtrlAtom);
 
   const showToast = useShowToast();
   const generate = () => {
     // No need for useAtomValue - no need to re-render or recalculate this function.
-    const needSerialize = readAtom(holdingAltAtom);
     const atomsState = readInterestingAtoms();
     const value = needSerialize ? serializeAtomsState(atomsState) : atomsState;
-    console.log('jotai state:', value);
+    console.log(`jotai state (${needSerialize ? 'JSON' : 'objects'}):`, value);
     showToast.show(`logged jotai state to console!${needSerialize ? ' (serialized)' : ''}`);
   };
 
@@ -101,10 +104,11 @@ function InternalState() {
         <Tooltip
           placement="bottom"
           title={t(
-            'Capture a snapshot of selected Jotai atom states, log it to the dev tools console.',
+            'Capture a snapshot of selected Jotai atom states, log it to the dev tools console.\n\n' +
+              'Hold Ctrl to use serailzied JSON instead of Javascript objects.',
           )}>
           <VSCodeButton onClick={generate} appearance="secondary">
-            <T>Take Snapshot</T>
+            {needSerialize ? <T>Take Snapshot (JSON)</T> : <T>Take Snapshot (objects)</T>}
           </VSCodeButton>
         </Tooltip>
         <Tooltip
@@ -215,17 +219,38 @@ function DebugPerfInfo() {
   );
 }
 
+const styles = stylex.create({
+  slow: {
+    color: colors.signalFg,
+    backgroundColor: colors.signalBadBg,
+  },
+  ok: {
+    color: colors.signalFg,
+    backgroundColor: colors.signalMediumBg,
+  },
+  fast: {
+    color: colors.signalFg,
+    backgroundColor: colors.signalGoodBg,
+  },
+});
+
 function FetchDurationInfo(
   props: {name: ReactNode} & ExclusiveOr<{start?: number; end?: number}, {duration: number}>,
 ) {
   const {name} = props;
   const {end, start, duration} = props;
   const deltaMs = duration != null ? duration : end == null || start == null ? null : end - start;
-  const assessment =
-    deltaMs == null ? 'none' : deltaMs < 1000 ? 'fast' : deltaMs < 3000 ? 'ok' : 'slow';
+  const xstyle =
+    deltaMs == null
+      ? undefined
+      : deltaMs < 1000
+      ? styles.fast
+      : deltaMs < 3000
+      ? styles.ok
+      : styles.slow;
   return (
-    <div className={`fetch-duration-info fetch-duration-${assessment}`}>
-      {name} <VSCodeBadge>{deltaMs == null ? 'N/A' : `${deltaMs}ms`}</VSCodeBadge>
+    <div className={`fetch-duration-info`}>
+      {name} <Badge xstyle={xstyle}>{deltaMs == null ? 'N/A' : `${deltaMs}ms`}</Badge>
       {end == null ? null : (
         <Subtle>
           <Tooltip title={new Date(end).toLocaleString()} placement="right">
