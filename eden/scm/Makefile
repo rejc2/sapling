@@ -64,6 +64,13 @@ JOBS := $(shell ps T | sed -n -Ee 's%.*$(MAKE_PID).*$(MAKE).* (-j|--jobs=) *([0-
 # Mac Big Sur doesn't find the standard library without this.
 export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
 
+# Several crates use nightly-only features (e.g. once_cell_try), so select the
+# toolchain here instead of relying on a per-shell rustup override. Honors
+# RUSTUP_TOOLCHAIN if already set; pin a known-good nightly with e.g.
+# % make RUSTUP_TOOLCHAIN=nightly-2026-07-31 local
+RUSTUP_TOOLCHAIN ?= nightly
+export RUSTUP_TOOLCHAIN
+
 help:
 	@echo 'Commonly used make targets:'
 	@echo '  local        - build for inplace usage'
