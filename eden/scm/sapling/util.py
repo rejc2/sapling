@@ -487,14 +487,27 @@ def version():
     return bindings.version.VERSION
 
 
+_dateinversion = remod.compile(
+    r"(?<!\d)(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})(?!\d)"
+)
+
+
 def versionagedays() -> int:
     """Returns approximate age in days of the current version, or 0 if not available."""
     try:
         v = version()
-        parts = remod.split("_", v)
-        approxbuilddate = datetime.datetime.strptime(parts[1], "%Y%m%d")
-        now = datetime.datetime.now()
-        return (now - approxbuilddate).days
+        # Version strings embed the build date in different positions
+        # depending on how the binary was built (ex. "4.4.2_20250528_..."
+        # for official builds vs "20260807_041618_..." for local dev
+        # builds), so scan for the first substring that looks like a
+        # YYYYMMDD date instead of assuming a fixed field position.
+        for m in _dateinversion.finditer(v):
+            year, month, day = int(m["year"]), int(m["month"]), int(m["day"])
+            if year >= 2000 and 1 <= month <= 12 and 1 <= day <= 31:
+                approxbuilddate = datetime.datetime.strptime(m.group(), "%Y%m%d")
+                now = datetime.datetime.now()
+                return (now - approxbuilddate).days
+        return 0
     except Exception:
         return 0
 
