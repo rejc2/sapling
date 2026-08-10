@@ -384,6 +384,7 @@ async def rewrite_pull_request_body(
         index,
         repository,
         reviewstack=ui.configbool("github", "pull-request-include-reviewstack"),
+        parent_prs_only=ui.configbool("github", "pull-request-parent-prs-only"),
     )
 
     if pr.state != PullRequestState.OPEN:
