@@ -142,6 +142,7 @@ async def get_partitions(
     stack_base_branch = None
 
     feature_branch_pattern = ui.config("github", "pr.feature-branch-pattern")
+    feature_branch_matcher = None
     if feature_branch_pattern:
         feature_branch_matcher = util.stringmatcher(feature_branch_pattern)[-1]
 
