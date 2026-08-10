@@ -143,6 +143,7 @@ export type TrackEventName =
   | 'LookupAllCommitChangedFilesCommand'
   | 'AuthoredDiffsPresentCheck'
   | 'AuthoredDiffsPull'
+  | 'LookupFileCopiesCommand'
   | 'GetShelvesCommand'
   | 'GetConflictsCommand'
   | 'BlameCommand'
