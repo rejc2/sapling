@@ -17,9 +17,25 @@
     font-family: var(--font-family);
     font-size: 11px;
     line-height: 16px;
-    text-overflow: ellipsis;
     max-width: 150px;
+  }
+
+  .flex {
+    display: inline-flex;
+    gap: var(--halfpad);
+    align-items: center;
+    justify-content: center;
+  }
+
+  .icon {
+    display: block;
+    flex-shrink: 0;
+  }
+
+  .text {
+    text-overflow: ellipsis;
     white-space: nowrap;
     overflow: hidden;
+    min-width: 0;
   }
 }

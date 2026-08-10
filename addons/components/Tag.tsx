@@ -9,11 +9,31 @@ import type {ReactNode} from 'react';
 import type {ReactProps} from './utils';
 
 import {cn} from 'shared/cn';
+import {Icon} from './Icon';
 import css from './Tag.module.css';
 
 export function Tag({
   className,
+  icon = null,
+  children,
   ...rest
-}: {children: ReactNode; className?: string} & ReactProps<HTMLSpanElement>) {
-  return <span className={cn(css.tag, className)} {...rest} />;
+}: {
+  children: ReactNode;
+  icon?: null | React.ComponentProps<typeof Icon>['icon'];
+  className?: string;
+} & ReactProps<HTMLSpanElement>) {
+  if (icon != null) {
+    return (
+      <span className={(css.tag, css.flex, className)} {...rest}>
+        <Icon size="S" icon={icon} className={css.icon} />
+        <span className={css.text}>{children}</span>
+      </span>
+    );
+  } else {
+    return (
+      <span className={cn(css.tag, css.text, className)} {...rest}>
+        {children}
+      </span>
+    );
+  }
 }
