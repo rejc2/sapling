@@ -741,11 +741,14 @@ export type Diagnostic = {
 };
 
 export type DiagnosticAllowlistValue =
-  {block: Set<string>; allow?: undefined} | {allow: Set<string>; block?: undefined};
+  | {block: Set<string>; allow?: undefined}
+  | {allow: Set<string>; block?: undefined};
 export type DiagnosticAllowlist = Map<'warning' | 'error', Map<string, DiagnosticAllowlistValue>>;
 
 export type CodeReviewScope =
-  'uncommitted changes' | 'current commit' | 'current commit and uncommitted changes';
+  | 'uncommitted changes'
+  | 'current commit'
+  | 'current commit and uncommitted changes';
 
 /* protocol */
 
@@ -763,7 +766,13 @@ export type PlatformSpecificClientToServerMessages =
   | {type: 'platform/openContainingFolder'; path: RepoRelativePath}
   | {type: 'platform/revealInFileExplorer'; path: RepoRelativePath}
   | {type: 'platform/revealInExplorerView'; path: RepoRelativePath}
-  | {type: 'platform/openDiff'; path: RepoRelativePath; comparison: Comparison}
+  | {
+      type: 'platform/openDiff';
+      path: RepoRelativePath;
+      comparison: Comparison;
+      /** For renamed/copied files, the original file path to use for the "before" side */
+      oldPath?: RepoRelativePath;
+    }
   | {type: 'platform/openFileAtRevset'; path: RepoRelativePath; revset: string}
   | {type: 'platform/openExternal'; url: string}
   | {type: 'platform/openInNewWindow'; path: AbsolutePath}
@@ -892,10 +901,12 @@ export type PlatformSpecificServerToClientMessages =
     };
 
 export type CodeReviewProviderSpecificClientToServerMessages =
-  never | InternalTypes['PhabricatorClientToServerMessages'];
+  | never
+  | InternalTypes['PhabricatorClientToServerMessages'];
 
 export type CodeReviewProviderSpecificServerToClientMessages =
-  never | InternalTypes['PhabricatorServerToClientMessages'];
+  | never
+  | InternalTypes['PhabricatorServerToClientMessages'];
 
 export type PageVisibility = 'focused' | 'visible' | 'hidden';
 

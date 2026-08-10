@@ -68,9 +68,9 @@ export const clickToOpenDiffViewAtom = configBackedAtom<boolean>(
   false,
 );
 
-function openDiffView(path: string, comparison: Comparison) {
+function openDiffView(path: string, comparison: Comparison, oldPath?: string) {
   if (platform.openDiff != null) {
-    platform.openDiff(path, comparison);
+    platform.openDiff(path, comparison, oldPath);
   } else {
     showComparison(comparison, path);
   }
@@ -105,9 +105,9 @@ function useOpenFileOrDiff(file: UIChangedFile, comparison?: Comparison) {
 
   const openDiff = useCallback(() => {
     if (comparison != null) {
-      openDiffView(file.path, comparison);
+      openDiffView(file.path, comparison, file.renamedFrom ?? file.copiedFrom);
     }
-  }, [comparison, file.path]);
+  }, [comparison, file.copiedFrom, file.path, file.renamedFrom]);
 
   const openFileOrDiff = useCallback(() => {
     if (
@@ -180,7 +180,7 @@ export function File({
           replace: {$comparison: labelForComparison(comparison)},
         }),
         onClick: () => {
-          openDiffView(file.path, comparison);
+          openDiffView(file.path, comparison, file.renamedFrom ?? file.copiedFrom);
         },
       });
     }

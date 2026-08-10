@@ -36,7 +36,13 @@ export interface Platform {
   openContainingFolder?(path: RepoRelativePath): void;
   revealInFileExplorer?(path: RepoRelativePath): void;
   revealInExplorerView?(path: RepoRelativePath): void;
-  openDiff?(path: RepoRelativePath, comparison: Comparison): void;
+  /**
+   * Open a diff view for a file.
+   * @param path The current file path
+   * @param comparison The comparison to show
+   * @param oldPath For renamed/copied files, the original file path to use for the "before" side
+   */
+  openDiff?(path: RepoRelativePath, comparison: Comparison, oldPath?: RepoRelativePath): void;
   openFileAtRevset?(path: RepoRelativePath, revset: string): void;
   openExternalLink(url: string): void;
   clipboardCopy(text: string, html?: string): void;
