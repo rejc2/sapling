@@ -68,10 +68,12 @@ export function processChangedFiles(
       })
       // Hide files that were renamed. This comes after the map since we need to use the index to refer to minimalDisambiguousPaths
       .filter(file => !(file.status === 'R' && copySources.has(file.path)))
-      .sort((a, b) =>
-        a.visualStatus === b.visualStatus
-          ? a.path.localeCompare(b.path)
-          : sortKeyForStatus[a.visualStatus] - sortKeyForStatus[b.visualStatus],
+      .sort(
+        (a, b) => a.path.localeCompare(b.path),
+        // .sort((a, b) =>
+        //   a.visualStatus === b.visualStatus
+        //     ? a.path.localeCompare(b.path)
+        //     : sortKeyForStatus[a.visualStatus] - sortKeyForStatus[b.visualStatus],
       )
   );
 }
