@@ -10,6 +10,7 @@ export enum ComparisonType {
   HeadChanges = 'Head',
   StackChanges = 'Stack',
   Committed = 'Commit',
+  MultipleCommits = 'MultipleCommits',
   SinceLastCodeReviewSubmit = 'SinceLastCodeReviewSubmit',
   CommitRange = 'CommitRange',
 }
@@ -18,6 +19,10 @@ export type Comparison =
   | {
       type: ComparisonType.Committed;
       hash: string;
+    }
+  | {
+      type: ComparisonType.MultipleCommits;
+      hashRange: [string, string];
     }
   | {
       /**
@@ -56,6 +61,7 @@ export function comparisonIsAgainstHead(comparison: Comparison): boolean {
     case ComparisonType.SinceLastCodeReviewSubmit:
       return false;
     case ComparisonType.Committed:
+    case ComparisonType.MultipleCommits:
       return false;
     case ComparisonType.CommitRange:
       return false;
@@ -72,6 +78,8 @@ export function comparisonStringKey(comparison: Comparison): string {
     case ComparisonType.SinceLastCodeReviewSubmit:
     case ComparisonType.Committed:
       return `${comparison.type}:${comparison.hash}`;
+    case ComparisonType.MultipleCommits:
+      return `${comparison.type}:${comparison.hashRange.join(':')}`;
     case ComparisonType.CommitRange:
       return `${comparison.type}:${comparison.hashFrom}:${comparison.hashTo}`;
   }
@@ -90,6 +98,8 @@ export function revsetArgsForComparison(comparison: Comparison): Array<string> {
       return ['--rev', comparison.hash, '--since-last-submit'];
     case ComparisonType.Committed:
       return ['--change', comparison.hash];
+    case ComparisonType.MultipleCommits:
+      return ['--rev', `${comparison.hashRange[0]}^:${comparison.hashRange[1]}`];
     case ComparisonType.CommitRange:
       return ['--rev', `${comparison.hashFrom}^::${comparison.hashTo}`];
   }
@@ -106,6 +116,8 @@ export function revsetForComparison(comparison: Comparison): string {
       return 'ancestor(.,interestingmaster())';
     case ComparisonType.Committed:
       return comparison.hash;
+    case ComparisonType.MultipleCommits:
+      return `${comparison.hashRange[1]}`;
     case ComparisonType.SinceLastCodeReviewSubmit:
       return comparison.hash;
     case ComparisonType.CommitRange:
@@ -124,6 +136,8 @@ export function beforeRevsetForComparison(comparison: Comparison): string {
       return 'ancestor(.,interestingmaster())'; // in the public base itself
     case ComparisonType.Committed:
       return comparison.hash + '^'; // before this commit
+    case ComparisonType.MultipleCommits:
+      return `${comparison.hashRange[0]}^`; // before the first commit
     case ComparisonType.SinceLastCodeReviewSubmit:
       return comparison.hash + '^';
     case ComparisonType.CommitRange:
@@ -142,6 +156,8 @@ export function currRevsetForComparison(comparison: Comparison): string {
       return 'wdir()';
     case ComparisonType.Committed:
       return comparison.hash;
+    case ComparisonType.MultipleCommits:
+      return comparison.hashRange[1];
     case ComparisonType.SinceLastCodeReviewSubmit:
       return comparison.hash;
     case ComparisonType.CommitRange:
@@ -163,6 +179,8 @@ export function labelForComparison(comparison: Comparison): string {
       return 'Stack Changes';
     case ComparisonType.Committed:
       return `In ${comparison.hash.slice(0, 12)}`;
+    case ComparisonType.MultipleCommits:
+      return `In ${comparison.hashRange[0].slice(0, 8)}::${comparison.hashRange[1].slice(0, 8)}`;
     case ComparisonType.SinceLastCodeReviewSubmit:
       return `Since last submit of ${comparison.hash.slice(0, 12)}`;
     case ComparisonType.CommitRange:
