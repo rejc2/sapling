@@ -6,6 +6,7 @@
  */
 
 import * as crypto from 'crypto';
+import * as fs from 'fs';
 import * as vscode from 'vscode';
 
 export const devPort = 3015;
@@ -211,7 +212,18 @@ export function assignWebviewHtml({
     return;
   }
 
-  const scriptUri = entryPointFile;
+  const cacheBust = (relativeFile: string) => {
+    try {
+      const {mtimeMs} = fs.statSync(
+        vscode.Uri.joinPath(context.extensionUri, extensionRelativeBase, relativeFile).fsPath,
+      );
+      return `?v=${mtimeMs}`;
+    } catch {
+      return '';
+    }
+  };
+
+  const scriptUri = entryPointFile + cacheBust(entryPointFile);
 
   // Use a nonce to only allow specific scripts to be run
   const nonce = getNonce();
@@ -238,7 +250,7 @@ export function assignWebviewHtml({
 		<title>${title}</title>
 		<style>@layer base, components;</style>
 
-		<link href="${cssEntryPointFile}" rel="stylesheet">
+		<link href="${cssEntryPointFile}${cacheBust(cssEntryPointFile)}" rel="stylesheet">
     <style>
         ${getVSCodeCompatibilityStyles()}
         ${extraStyles}
